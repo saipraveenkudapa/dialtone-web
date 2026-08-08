@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { Corners } from "@/components/Corners";
 import { LiveCallStrip } from "@/components/LiveCallStrip";
-import { CALLS, LOCATION, OUTCOME_TAG, SOLD_OUT, STATS } from "@/lib/demo";
+import { SoldOutPanel } from "@/components/SoldOutPanel";
+import { CALLS, LOCATION, OUTCOME_TAG, STATS } from "@/lib/demo";
 
 function todayLong() {
   return new Intl.DateTimeFormat("en-US", {
@@ -82,26 +83,7 @@ export default function TodayPage() {
           </table>
         </section>
 
-        <section className="panel">
-          <h4>Sold out right now</h4>
-          {SOLD_OUT.length === 0 ? (
-            <p className="text-muted empty-note">
-              Nothing is flagged. The agent is offering the whole menu.
-            </p>
-          ) : (
-            <div className="soldout-list">
-              {SOLD_OUT.map((s) => (
-                <div key={s.id} className="soldout-row">
-                  <span>{s.name}</span>
-                  <span className="until">{s.until}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <Link href="/dashboard/menu/live" className="btn btn-ghost">
-            Edit on the manager screen
-          </Link>
-        </section>
+        <SoldOutPanel />
       </div>
     </>
   );

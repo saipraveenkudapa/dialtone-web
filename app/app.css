@@ -246,6 +246,163 @@ a:hover { color: var(--color-accent); }
 }
 .empty-note { font-size: 13px; padding: var(--space-3) 0; }
 
+/* ── manager screen ────────────────────────────────────────────────── */
+
+/* On a desktop this renders inside a phone frame beside the rationale, as
+   in the mockup. On a phone the frame drops away and the list fills the
+   screen — this is the surface the floor staff actually use. */
+.manager-wrap {
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.manager-intro {
+  max-width: 330px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.manager-intro h1 { margin: 0; font-size: 34px; }
+.manager-intro p { font-size: 14px; margin: 0; }
+.manager-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  border-top: 1px solid var(--color-divider);
+  padding-top: 12px;
+}
+.manager-sync { font-size: 12px; }
+
+.phone {
+  width: 390px;
+  flex: none;
+  background: var(--color-bg);
+}
+.phone-status {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--color-divider);
+}
+.phone-search {
+  padding: 14px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 1px solid var(--color-divider);
+}
+/* 16px keeps iOS from zooming the viewport on focus. */
+.phone-search .input { min-height: 48px; font-size: 16px; }
+.phone-counts { display: flex; gap: 8px; }
+.tag-out { background: var(--color-accent-900); color: var(--color-bg); }
+
+.lv-scroll {
+  height: 560px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.lv-scroll::-webkit-scrollbar { width: 0; }
+
+.lv-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  background: var(--color-accent-900);
+  color: var(--color-bg);
+  padding: 7px 16px;
+  font-family: var(--font-heading);
+  font-size: 14px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.lv-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
+}
+.lv-row:active { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
+.lv-name { flex: 1; min-width: 0; }
+.lv-name .name { font-size: 15px; }
+.lv-name .name.out {
+  text-decoration: line-through;
+  opacity: 0.45;
+}
+.lv-name .meta { font-size: 13px; opacity: 0.55; }
+
+/* The one control that matters. Big, flat, no hover requirement, no
+   confirm step — a tap is the whole interaction. */
+.lv-toggle {
+  flex: none;
+  min-width: 104px;
+  min-height: 56px;
+  padding: 0 14px;
+  cursor: pointer;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 14px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-divider);
+  border-radius: 0;
+  touch-action: manipulation;
+}
+.lv-toggle.is-out {
+  background: var(--color-accent-900);
+  border-color: var(--color-accent-900);
+  color: var(--color-bg);
+}
+.lv-toggle:active { transform: translateY(1px); }
+
+.lv-until {
+  display: flex;
+  gap: 8px;
+  padding: 0 14px 12px;
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+.lv-until-opt {
+  flex: 1;
+  min-height: 48px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-divider);
+  touch-action: manipulation;
+}
+.lv-until-opt.is-on {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.lv-empty { padding: 40px 20px; text-align: center; }
+.lv-empty p { font-size: 14px; margin: 0; }
+
+/* Phone: no frame, no rationale copy, list fills the viewport. */
+@media (max-width: 700px) {
+  .manager-intro { display: none; }
+  .manager-wrap { gap: 0; }
+  .phone {
+    width: 100%;
+    border: 0;
+    box-shadow: none;
+  }
+  .phone > .corner { display: none; }
+  .lv-scroll { height: auto; }
+}
+
 /* Narrow screens: the shell stacks and the sidebar becomes a top bar with a
    horizontally scrolling nav. Never hidden — the floor staff arrive here on
    a phone and still need to reach the manager screen. */
