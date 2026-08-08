@@ -51,7 +51,9 @@ insert into locations (
   'a10c0000-0000-0000-0000-00000000000a',
   'aaaaaaaa-0000-0000-0000-000000000001',
   'Nonna Rosa', 'America/Los_Angeles', '1412 Telegraph Ave, Oakland, CA',
-  '(510) 555-0142', '+15105550177', '(510) 555-0142',
+  -- business_phone is display text; fallback_human_number is dialled by
+  -- Twilio and must be E.164.
+  '(510) 555-0142', '+15105550177', '+15105550142',
   -- No mention of AI: not required for inbound today. When the rule
   -- lands, this line changes and nothing else does.
   'Hi, thanks for calling Nonna Rosa.',

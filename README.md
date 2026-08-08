@@ -31,6 +31,45 @@ reads a cookie the client could forge.
 Every query in the app runs with the anon key through RLS. The
 service-role key is not used in the read path at all.
 
+## Twilio webhooks
+
+Inbound only. This service never originates a call.
+
+| Route | Twilio setting |
+|---|---|
+| `POST /api/twilio/voice` | the number's "A call comes in" webhook |
+| `POST /api/twilio/status` | set automatically as the `<Dial action>` |
+| `POST /api/twilio/recording` | set automatically as the recording callback |
+
+Every route verifies `X-Twilio-Signature` before doing anything, and
+returns 403 otherwise. Without that check, anyone who found the URL could
+invent calls or make us dial a number of their choosing. Twilio signs the
+**public** URL it called, so `TWILIO_WEBHOOK_BASE_URL` must match the
+tunnel or domain exactly -- a mismatch shows up as every request 403ing.
+
+What a call does today, before the voice agent exists: greet the caller,
+announce recording if it is enabled, log the call, and forward to the
+human line. Kill switch on (or the location not live) skips all of it and
+forwards immediately. That is already the promise -- the call is answered
+and shows up in the dashboard instead of being missed.
+
+Phone number formats: `twilio_number` and `fallback_human_number` are
+E.164 (`+15105550142`) because Twilio matches and dials them.
+`business_phone` is display text only.
+
+Recordings are downloaded from Twilio into the private `call-recordings`
+bucket, keyed `<location_id>/<call_id>.mp3`, and played back through
+short-lived signed URLs. Twilio's own recording URL needs account
+credentials to fetch, so keeping audio there would mean shipping those to
+the browser.
+
+Local testing without a phone: `scripts/twilio-post.mjs` signs a request
+the way Twilio does.
+
+```bash
+node scripts/twilio-post.mjs /api/twilio/voice '{"CallSid":"CAtest","From":"+15105550119","To":"+15105550177"}'
+```
+
 ## Database
 
 This repo owns the schema. The Python agent reads it and never migrates.
