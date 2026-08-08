@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dialtone — web app
 
-## Getting Started
+The restaurant-facing app for an AI phone agent service. Owners sign up,
+upload a menu, set up call forwarding, and watch every call the agent
+answers. Managers flag items sold out mid-service from a phone.
 
-First, run the development server:
+The voice agent itself is a separate Python service. It shares this
+database and nothing else.
+
+## Design
+
+`design/Dialtone.html` is the approved mockup and `app/industry.css` is
+its design system, extracted verbatim. Build screens to match it. Rules
+for extending it are in [AGENTS.md](./AGENTS.md).
+
+## Local setup
 
 ```bash
+npm install
+cp .env.example .env.local   # fill in Supabase, Twilio, Stripe
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Database
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+This repo owns the schema. The Python agent reads it and never migrates.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+supabase start        # needs Docker
+supabase db reset     # runs migrations, then supabase/seed.sql
+supabase test db      # runs the RLS policy tests
+```
 
-## Learn More
+| File | What it is |
+|---|---|
+| `supabase/migrations/*_schema.sql` | Tables, enums, indexes, triggers |
+| `supabase/migrations/*_rls.sql` | Row Level Security and the agent's role |
+| `supabase/tests/rls_test.sql` | Tenant-isolation tests (pgTAP) |
+| `supabase/seed.sql` | The Nonna Rosa demo from the mockup |
 
-To learn more about Next.js, take a look at the following resources:
+### Who can reach what
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **authenticated** — a signed-in owner or manager. Sees only rows for
+  organizations they belong to.
+- **agent_service** — the voice agent. Each call gets a short-lived token
+  carrying `location_id`; every agent policy is scoped to that claim, so a
+  token minted for one restaurant cannot read another's menu or write a
+  call against it. It has no `SELECT` on `calls`, so a leaked agent token
+  cannot pull call history back out.
+- **service_role** — bypasses RLS. Server-side only, in this app. Never
+  goes to the agent, never reaches the browser.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Rules the schema enforces
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Money is integer cents. Timestamps are `timestamptz`; the UI renders
+  them in the location's timezone.
+- `menu_items.location_id` is derived from its category by trigger, so a
+  caller cannot smuggle an item into another tenant's menu.
+- No column anywhere stores a card number. Payment is an SMS link, which
+  keeps this database out of PCI scope. Don't add one.
+- Uploaded menus land in `menu_imports` and stay there until a human
+  confirms every line. A wrong price comes out of the owner's pocket.
