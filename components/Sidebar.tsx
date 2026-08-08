@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAgentStatus } from "./AgentStatus";
-import { LOCATION } from "@/lib/demo";
+import { signOut } from "@/app/login/actions";
 
 const NAV = [
   { href: "/dashboard", label: "Today" },
   { href: "/dashboard/calls", label: "Calls" },
-  { href: "/dashboard/orders", label: "Orders", badge: "4" },
+  { href: "/dashboard/orders", label: "Orders" },
   { href: "/dashboard/menu", label: "Menu" },
   { href: "/dashboard/menu/live", label: "Manager screen" },
   { href: "/dashboard/settings", label: "Settings" },
@@ -16,15 +16,13 @@ const NAV = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { killOn, toggleKill } = useAgentStatus();
+  const { killOn, toggleKill, location, pending, error } = useAgentStatus();
 
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
         <div className="sidebar-brand">Dialtone</div>
-        <div className="sidebar-location">
-          {LOCATION.name} · {LOCATION.city}
-        </div>
+        <div className="sidebar-location">{location.name}</div>
       </div>
 
       <nav className="side-nav">
@@ -37,9 +35,6 @@ export function Sidebar() {
           >
             <span className="mark" />
             <span className="label">{tab.label}</span>
-            {tab.badge ? (
-              <span className="tag tag-accent badge">{tab.badge}</span>
-            ) : null}
           </Link>
         ))}
       </nav>
@@ -53,10 +48,17 @@ export function Sidebar() {
         <button
           type="button"
           onClick={toggleKill}
+          disabled={pending}
           className={`btn ${killOn ? "btn-restore" : "btn-danger"}`}
         >
           {killOn ? "Turn the agent back on" : "Kill switch"}
         </button>
+        {error ? <p className="auth-error">{error}</p> : null}
+        <form action={signOut}>
+          <button type="submit" className="btn btn-ghost sidebar-signout">
+            Sign out
+          </button>
+        </form>
       </div>
     </aside>
   );

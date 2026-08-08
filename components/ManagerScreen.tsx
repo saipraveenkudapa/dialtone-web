@@ -3,12 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Corners } from "./Corners";
 import { useMenu } from "./MenuStore";
+import { useAgentStatus } from "./AgentStatus";
 import { UNTIL_LABEL, type SoldOutUntil } from "@/lib/menu";
-import { LOCATION } from "@/lib/demo";
+import { money } from "@/lib/format";
 
-const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
-
-function Clock() {
+function Clock({ timezone }: { timezone: string }) {
   const [now, setNow] = useState<string>("");
   useEffect(() => {
     const tick = () =>
@@ -16,19 +15,20 @@ function Clock() {
         new Intl.DateTimeFormat("en-US", {
           hour: "numeric",
           minute: "2-digit",
-          timeZone: LOCATION.timezone,
+          timeZone: timezone,
         }).format(new Date()),
       );
     tick();
     const t = setInterval(tick, 10_000);
     return () => clearInterval(t);
-  }, []);
+  }, [timezone]);
   // Empty until mounted so the server and client markup agree.
   return <span suppressHydrationWarning>{now}</span>;
 }
 
-function SyncNote() {
-  const { lastChangeAt } = useMenu();
+function SyncNote({ timezone }: { timezone: string }) {
+  const { lastChangeAt, error } = useMenu();
+  if (error) return <span className="auth-error">{error}</span>;
   if (!lastChangeAt) {
     return (
       <span className="text-muted">
@@ -43,7 +43,7 @@ function SyncNote() {
         hour: "numeric",
         minute: "2-digit",
         second: "2-digit",
-        timeZone: LOCATION.timezone,
+        timeZone: timezone,
       }).format(lastChangeAt)}{" "}
       · live on the next call
     </span>
@@ -53,6 +53,7 @@ function SyncNote() {
 export function ManagerScreen() {
   const { categories, itemCount, soldOut, toggleSoldOut, setSoldOutUntil } =
     useMenu();
+  const { location } = useAgentStatus();
   const [query, setQuery] = useState("");
 
   const groups = useMemo(() => {
@@ -84,7 +85,7 @@ export function ManagerScreen() {
           </div>
         </div>
         <div className="manager-sync">
-          <SyncNote />
+          <SyncNote timezone={location.timezone} />
         </div>
       </div>
 
@@ -92,8 +93,8 @@ export function ManagerScreen() {
         <Corners />
 
         <div className="phone-status num">
-          <Clock />
-          <span className="text-muted">{LOCATION.name}</span>
+          <Clock timezone={location.timezone} />
+          <span className="text-muted">{location.name}</span>
         </div>
 
         <div className="phone-search">
@@ -118,15 +119,15 @@ export function ManagerScreen() {
             <section key={g.id}>
               <h2 className="lv-group">{g.name}</h2>
               {g.items.map((it) => {
-                const out = it.soldOutUntil !== null;
+                const out = it.sold_out_until !== null;
                 return (
                   <div key={it.id}>
                     <div className="lv-row">
                       <div className="lv-name">
                         <div className={out ? "name out" : "name"}>{it.name}</div>
                         <div className="meta num">
-                          {money(it.priceCents)}
-                          {out ? ` · ${UNTIL_LABEL[it.soldOutUntil!]}` : ""}
+                          {money(it.price_cents)}
+                          {out ? ` · ${UNTIL_LABEL[it.sold_out_until!]}` : ""}
                         </div>
                       </div>
                       <button
@@ -146,9 +147,9 @@ export function ManagerScreen() {
                             key={u}
                             type="button"
                             className={
-                              it.soldOutUntil === u ? "lv-until-opt is-on" : "lv-until-opt"
+                              it.sold_out_until === u ? "lv-until-opt is-on" : "lv-until-opt"
                             }
-                            aria-pressed={it.soldOutUntil === u}
+                            aria-pressed={it.sold_out_until === u}
                             onClick={() => setSoldOutUntil(it.id, u)}
                           >
                             {UNTIL_LABEL[u]}

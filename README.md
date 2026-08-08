@@ -21,6 +21,16 @@ cp .env.example .env.local   # fill in Supabase, Twilio, Stripe
 npm run dev
 ```
 
+## Auth
+
+Supabase Auth, email + password or magic link. `middleware.ts` refreshes
+the session on every request and redirects anonymous visitors away from
+`/dashboard`. It calls `getUser()`, not `getSession()` — the latter only
+reads a cookie the client could forge.
+
+Every query in the app runs with the anon key through RLS. The
+service-role key is not used in the read path at all.
+
 ## Database
 
 This repo owns the schema. The Python agent reads it and never migrates.

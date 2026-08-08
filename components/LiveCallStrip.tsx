@@ -2,24 +2,72 @@
 
 import { useEffect, useState } from "react";
 import { Corners } from "./Corners";
-import { useAgentStatus } from "./AgentStatus";
-import { LIVE_CALL } from "@/lib/demo";
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import { supabaseBrowser } from "@/lib/supabase/client";
+import { mmss } from "@/lib/format";
+import type { CallRow } from "@/lib/supabase/types";
 
-const mmss = (s: number) =>
-  `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const isLive = (c: CallRow) => c.status === "ringing" || c.status === "in_progress";
 
-export function LiveCallStrip() {
-  const { killOn } = useAgentStatus();
-  const [elapsed, setElapsed] = useState(LIVE_CALL.startedSecondsAgo);
+export function LiveCallStrip({
+  locationId,
+  initialCall,
+}: {
+  locationId: string;
+  initialCall: CallRow | null;
+}) {
+  const [call, setCall] = useState<CallRow | null>(initialCall);
+  const [elapsed, setElapsed] = useState(0);
+
+  const [seenInitial, setSeenInitial] = useState(initialCall);
+  if (seenInitial !== initialCall) {
+    setSeenInitial(initialCall);
+    setCall(initialCall);
+  }
+
+  // A call starting or ending must appear here on its own — nobody is
+  // going to refresh the dashboard mid-service.
+  useEffect(() => {
+    const supabase = supabaseBrowser();
+    const channel = supabase
+      .channel(`calls:${locationId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "calls",
+          filter: `location_id=eq.${locationId}`,
+        },
+        (payload: RealtimePostgresChangesPayload<CallRow>) => {
+          const row = "new" in payload ? (payload.new as CallRow) : undefined;
+          if (!row) return;
+          setCall((current) => {
+            if (isLive(row)) return row;
+            // The call we were showing just ended.
+            return current && current.id === row.id ? null : current;
+          });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [locationId]);
 
   useEffect(() => {
-    if (killOn) return;
-    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    if (!call) return;
+    const startedAt = new Date(call.started_at).getTime();
+    const tick = () => setElapsed(Math.max(0, Math.round((Date.now() - startedAt) / 1000)));
+    tick();
+    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, [killOn]);
+  }, [call]);
 
-  // No agent, no live call. Realtime will drive this once calls are wired up.
-  if (killOn) return null;
+  if (!call) return null;
+
+  const where = [call.from_city, call.from_state].filter(Boolean).join(", ");
 
   return (
     <div className="blueprint live-strip">
@@ -27,9 +75,13 @@ export function LiveCallStrip() {
       <span className="blip" />
       <strong>On a call now</strong>
       <span className="detail">
-        {LIVE_CALL.from} · {LIVE_CALL.city} · {LIVE_CALL.doing}
+        {call.from_number ?? "Unknown caller"}
+        {where ? ` · ${where}` : ""}
+        {call.status === "ringing" ? " · ringing" : " · in progress"}
       </span>
-      <span className="elapsed">{mmss(elapsed)}</span>
+      <span className="elapsed" suppressHydrationWarning>
+        {mmss(elapsed)}
+      </span>
     </div>
   );
 }

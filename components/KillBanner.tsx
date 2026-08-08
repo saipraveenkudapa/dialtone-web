@@ -1,10 +1,9 @@
 "use client";
 
 import { useAgentStatus } from "./AgentStatus";
-import { LOCATION } from "@/lib/demo";
 
 export function KillBanner() {
-  const { killOn, toggleKill } = useAgentStatus();
+  const { killOn, toggleKill, location, pending } = useAgentStatus();
   if (!killOn) return null;
 
   return (
@@ -12,10 +11,11 @@ export function KillBanner() {
       <span className="blip" />
       <strong>KILL SWITCH ON</strong>
       <span className="detail">
-        Every call is ringing straight through to {LOCATION.fallbackHumanNumber}.
-        The agent is not answering.
+        Every call is ringing straight through to{" "}
+        {location.fallback_human_number ?? "your fallback number"}. The agent is
+        not answering.
       </span>
-      <button type="button" className="btn" onClick={toggleKill}>
+      <button type="button" className="btn" onClick={toggleKill} disabled={pending}>
         Turn the agent back on
       </button>
     </div>
