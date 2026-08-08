@@ -359,9 +359,16 @@ create trigger menu_items_touch
 
 -- menu_items.location_id is denormalised; derive it from the category so
 -- it can never drift out of agreement with the category's location.
+-- SECURITY DEFINER because the lookup is otherwise filtered by RLS
+-- itself: inserting into another tenant's category then failed with
+-- "category not found" instead of a permission error. Reading a
+-- location_id here is safe -- the insert it feeds is still fully
+-- RLS-checked by the menu_items WITH CHECK policy.
 create or replace function app.sync_menu_item_location()
 returns trigger
 language plpgsql
+security definer
+set search_path = public
 as $$
 begin
   select c.location_id into new.location_id
@@ -369,7 +376,8 @@ begin
   where c.id = new.category_id;
 
   if new.location_id is null then
-    raise exception 'menu_categories row % not found', new.category_id;
+    raise exception 'menu_categories row % not found', new.category_id
+      using errcode = 'foreign_key_violation';
   end if;
 
   return new;

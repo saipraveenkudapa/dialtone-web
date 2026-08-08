@@ -38,14 +38,20 @@ This repo owns the schema. The Python agent reads it and never migrates.
 ```bash
 supabase start        # needs Docker
 supabase db reset     # runs migrations, then supabase/seed.sql
-supabase test db      # runs the RLS policy tests
+psql "$DATABASE_URL" -f supabase/tests/rls_test.sql   # every row must say PASS
 ```
+
+The hosted project is `tkecwvxwzpblwajfpron` (region us-west-1). Its
+migrations, seed and policy tests have all been applied and run there.
+Demo login: `owner@nonnarosa.test`. The password is in the seed file and
+is development-only -- change or delete that user before any real data
+lands in the project.
 
 | File | What it is |
 |---|---|
 | `supabase/migrations/*_schema.sql` | Tables, enums, indexes, triggers |
 | `supabase/migrations/*_rls.sql` | Row Level Security and the agent's role |
-| `supabase/tests/rls_test.sql` | Tenant-isolation tests (pgTAP) |
+| `supabase/tests/rls_test.sql` | Tenant-isolation tests (plain SQL) |
 | `supabase/seed.sql` | The Nonna Rosa demo from the mockup |
 
 ### Who can reach what
@@ -59,6 +65,15 @@ supabase test db      # runs the RLS policy tests
   cannot pull call history back out.
 - **service_role** — bypasses RLS. Server-side only, in this app. Never
   goes to the agent, never reaches the browser.
+
+### Realtime
+
+`menu_items`, `locations` and `calls` are in the `supabase_realtime`
+publication; a table outside it broadcasts nothing while the channel
+still reports SUBSCRIBED. Realtime applies the subscriber's RLS to every
+change, so the client must hand the socket the user's token before
+subscribing (`lib/supabase/realtime.ts`) or it authenticates as `anon`
+and receives nothing.
 
 ### Rules the schema enforces
 

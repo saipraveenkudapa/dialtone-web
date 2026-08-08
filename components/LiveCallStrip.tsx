@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Corners } from "./Corners";
 import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { primeRealtimeAuth } from "@/lib/supabase/realtime";
 import { mmss } from "@/lib/format";
 import type { CallRow } from "@/lib/supabase/types";
 
@@ -29,7 +30,14 @@ export function LiveCallStrip({
   // going to refresh the dashboard mid-service.
   useEffect(() => {
     const supabase = supabaseBrowser();
-    const channel = supabase
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    void (async () => {
+      await primeRealtimeAuth(supabase);
+      if (cancelled) return;
+
+      channel = supabase
       .channel(`calls:${locationId}`)
       .on(
         "postgres_changes",
@@ -50,9 +58,11 @@ export function LiveCallStrip({
         },
       )
       .subscribe();
+    })();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, [locationId]);
 

@@ -1,9 +1,39 @@
 -- Local development seed: the Nonna Rosa demo from the mockup.
 -- Runs on `supabase db reset`. Never loaded in production.
 
-insert into auth.users (id, email)
-values ('11111111-1111-1111-1111-111111111111', 'owner@nonnarosa.test')
-on conflict do nothing;
+-- GoTrue scans these token columns into non-nullable strings, so a
+-- hand-inserted user with NULLs there fails every login with "Database
+-- error querying schema". They must be '' rather than NULL.
+insert into auth.users (
+  instance_id, id, aud, role, email,
+  encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data,
+  confirmation_token, recovery_token, email_change,
+  email_change_token_new, email_change_token_current,
+  phone_change, phone_change_token, reauthentication_token,
+  created_at, updated_at
+) values (
+  '00000000-0000-0000-0000-000000000000',
+  '11111111-1111-1111-1111-111111111111',
+  'authenticated', 'authenticated', 'owner@nonnarosa.test',
+  extensions.crypt('DialtoneDemo2026!', extensions.gen_salt('bf')),
+  now(),
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{}'::jsonb,
+  '', '', '', '', '', '', '', '',
+  now(), now()
+) on conflict do nothing;
+
+insert into auth.identities (
+  id, user_id, provider_id, identity_data, provider,
+  last_sign_in_at, created_at, updated_at
+) values (
+  gen_random_uuid(),
+  '11111111-1111-1111-1111-111111111111',
+  '11111111-1111-1111-1111-111111111111',
+  '{"sub":"11111111-1111-1111-1111-111111111111","email":"owner@nonnarosa.test","email_verified":true,"phone_verified":false}'::jsonb,
+  'email', now(), now(), now()
+) on conflict do nothing;
 
 insert into organizations (id, name, plan)
 values ('aaaaaaaa-0000-0000-0000-000000000001', 'Nonna Rosa', 'starter');

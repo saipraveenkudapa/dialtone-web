@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { RealtimePostgresUpdatePayload } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { primeRealtimeAuth } from "@/lib/supabase/realtime";
 import type { MenuCategoryWithItems } from "@/lib/data";
 import type { MenuItemRow, SoldOutUntil } from "@/lib/supabase/types";
 
@@ -86,7 +87,14 @@ export function MenuProvider({
   // people during a rush will fight over the same item.
   useEffect(() => {
     const supabase = supabaseBrowser();
-    const channel = supabase
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    void (async () => {
+      await primeRealtimeAuth(supabase);
+      if (cancelled) return;
+
+      channel = supabase
       .channel(`menu_items:${locationId}`)
       .on(
         "postgres_changes",
@@ -106,10 +114,20 @@ export function MenuProvider({
           );
         },
       )
-      .subscribe();
+      .subscribe((status: string) => {
+        // A silently dead channel is the worst failure here: the screen
+        // would look fine while showing another manager a stale menu.
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.warn("[dialtone] menu realtime channel:", status);
+          setError("Live sync is down. Reload to see other staff's changes.");
+        }
+        if (status === "SUBSCRIBED") setError(null);
+      });
+    })();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, [locationId]);
 

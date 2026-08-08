@@ -59,6 +59,7 @@ $$;
 revoke all on function app.is_org_member(uuid) from public;
 revoke all on function app.is_org_owner(uuid) from public;
 revoke all on function app.can_access_location(uuid) from public;
+grant usage on schema app to authenticated;
 grant execute on function app.is_org_member(uuid) to authenticated;
 grant execute on function app.is_org_owner(uuid) to authenticated;
 grant execute on function app.can_access_location(uuid) to authenticated;
@@ -78,6 +79,7 @@ $$;
 -- the service_role key.
 grant agent_service to authenticator;
 grant usage on schema public to agent_service;
+grant usage on schema app to agent_service;
 
 -- The agent is one shared process serving every restaurant, so the role
 -- alone is not a tenant boundary. Each call gets its own short-lived

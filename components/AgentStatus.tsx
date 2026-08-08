@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { RealtimePostgresUpdatePayload } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { primeRealtimeAuth } from "@/lib/supabase/realtime";
 import type { LocationRow } from "@/lib/supabase/types";
 
 type AgentStatus = {
@@ -67,7 +68,14 @@ export function AgentStatusProvider({
   // Another manager (or the settings page) may flip this.
   useEffect(() => {
     const supabase = supabaseBrowser();
-    const channel = supabase
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    void (async () => {
+      await primeRealtimeAuth(supabase);
+      if (cancelled) return;
+
+      channel = supabase
       .channel(`location:${location.id}`)
       .on(
         "postgres_changes",
@@ -81,9 +89,11 @@ export function AgentStatusProvider({
           setKillOn(payload.new.kill_switch_on),
       )
       .subscribe();
+    })();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, [location.id]);
 
