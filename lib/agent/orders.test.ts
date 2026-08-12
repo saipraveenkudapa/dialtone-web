@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchItem, normaliseQuantity, priceOrder, type PricedItem } from "./orders";
+import { buildOrderLines, matchItem, normaliseQuantity, priceOrder, type PricedItem } from "./orders";
 
 const items: PricedItem[] = [
   { id: "i1", name: "Bucatini Amatriciana", price_cents: 2400, sold_out_until: null },
@@ -172,5 +172,71 @@ describe("normaliseQuantity", () => {
     expect(normaliseQuantity(undefined)).toBeNull();
     expect(normaliseQuantity(null)).toBeNull();
     expect(normaliseQuantity({})).toBeNull();
+  });
+});
+
+describe("buildOrderLines", () => {
+  it("builds a priced line for each requested item, defaulting quantity to one", () => {
+    const result = buildOrderLines(items, [{ name: "lasagne verdi" }, { name: "bucatini", quantity: 2 }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.lines).toEqual([
+      { item: items[1], quantity: 1 },
+      { item: items[0], quantity: 2 },
+    ]);
+  });
+
+  it("accepts a numeric-string quantity the way a loosely-typed payload might send it", () => {
+    const result = buildOrderLines(items, [{ name: "bucatini", quantity: "3" }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.lines).toEqual([{ item: items[0], quantity: 3 }]);
+  });
+
+  it("reports unknown_item for something not on the menu, rather than throwing", () => {
+    const result = buildOrderLines(items, [{ name: "chicken tikka" }]);
+    expect(result).toEqual({ ok: false, reason: "unknown_item", item: "chicken tikka" });
+  });
+
+  it("reports sold_out for an item flagged out, even though get_menu already said so once", () => {
+    const result = buildOrderLines(items, [{ name: "squid ink tonnarelli" }]);
+    expect(result).toEqual({ ok: false, reason: "sold_out", item: "Squid Ink Tonnarelli" });
+  });
+
+  it("reports bad_quantity for a quantity that cannot be understood, rather than crashing on NaN", () => {
+    const result = buildOrderLines(items, [{ name: "bucatini", quantity: "two" }]);
+    expect(result).toEqual({ ok: false, reason: "bad_quantity", item: "bucatini" });
+  });
+
+  it("reports bad_quantity for a zero or negative quantity", () => {
+    expect(buildOrderLines(items, [{ name: "bucatini", quantity: 0 }])).toEqual({
+      ok: false,
+      reason: "bad_quantity",
+      item: "bucatini",
+    });
+    expect(buildOrderLines(items, [{ name: "bucatini", quantity: -1 }])).toEqual({
+      ok: false,
+      reason: "bad_quantity",
+      item: "bucatini",
+    });
+  });
+
+  it("reports bad_quantity for a fractional quantity", () => {
+    const result = buildOrderLines(items, [{ name: "bucatini", quantity: 1.5 }]);
+    expect(result).toEqual({ ok: false, reason: "bad_quantity", item: "bucatini" });
+  });
+
+  it("stops at the first item that fails rather than checking the rest", () => {
+    const result = buildOrderLines(items, [{ name: "chicken tikka" }, { name: "bucatini", quantity: "two" }]);
+    expect(result).toEqual({ ok: false, reason: "unknown_item", item: "chicken tikka" });
+  });
+
+  it("hands priceOrder lines it will never throw on, because every quantity already passed normaliseQuantity", () => {
+    const result = buildOrderLines(items, [{ name: "bucatini", quantity: 2 }, { name: "lasagne verdi" }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    // priceOrder's own guard throws on a bad quantity as a last resort;
+    // this is the route's actual call path, and it must not throw here.
+    expect(() => priceOrder(result.lines, 0)).not.toThrow();
   });
 });

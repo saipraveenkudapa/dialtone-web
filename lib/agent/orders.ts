@@ -124,3 +124,56 @@ export function priceOrder(
     total_cents: subtotal + tax,
   };
 }
+
+export type OrderLine = { item: PricedItem; quantity: number };
+
+export type RequestedItem = { name?: string; quantity?: unknown };
+
+export type OrderLinesResult =
+  | { ok: true; lines: OrderLine[] }
+  | { ok: false; reason: "unknown_item" | "sold_out" | "bad_quantity"; item: string | undefined };
+
+/** Turn what a caller asked for into priced-and-ready order lines, or the
+ *  reason it cannot be done yet. This is the place `place_order`
+ *  (`app/api/agent/order/route.ts`) delegates to for every requested
+ *  item, pulled out so the three ways one can fail to become a line can
+ *  be tested without a database:
+ *
+ *  - "unknown_item": nothing on the menu matches (`matchItem`).
+ *  - "sold_out": it matches, but is flagged out right now. Re-checked
+ *    here even though `get_menu` already reported it -- a manager can
+ *    flag an item out from the dashboard while this very call is still
+ *    in progress, and this is the last checkpoint before the order is
+ *    written.
+ *  - "bad_quantity": `normaliseQuantity` could not make sense of the
+ *    quantity at all (missing, "two", fractional, zero, negative...).
+ *
+ *  "unknown_item" and "sold_out" are ordinary outcomes the agent speaks
+ *  to the caller (`agentOk({placed: false, reason, item})`), the same
+ *  way a full house is an ordinary outcome for a booking. "bad_quantity"
+ *  is not a menu decision -- it means the request itself could not be
+ *  understood, so the route is expected to treat it like a missing name
+ *  or phone number and answer with `agentFail` instead. Because every
+ *  quantity that reaches a returned line has already passed
+ *  `normaliseQuantity`, `priceOrder`'s own invariant-guard throw is
+ *  unreachable for lines built here. */
+export function buildOrderLines(menu: PricedItem[], requested: RequestedItem[]): OrderLinesResult {
+  const lines: OrderLine[] = [];
+
+  for (const requestedItem of requested) {
+    const match = matchItem(menu, requestedItem.name ?? "");
+    if (!match) {
+      return { ok: false, reason: "unknown_item", item: requestedItem.name };
+    }
+    if (match.sold_out_until !== null) {
+      return { ok: false, reason: "sold_out", item: match.name };
+    }
+    const quantity = normaliseQuantity(requestedItem.quantity ?? 1);
+    if (quantity === null) {
+      return { ok: false, reason: "bad_quantity", item: requestedItem.name };
+    }
+    lines.push({ item: match, quantity });
+  }
+
+  return { ok: true, lines };
+}
