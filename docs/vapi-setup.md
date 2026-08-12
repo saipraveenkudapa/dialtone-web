@@ -145,7 +145,7 @@ parse.
 | `get_menu` | `/api/agent/menu` | `{item?: string}` | `{categories, sold_out: string[], alternative: string \| null}`. Prices are **pre-tax** dollar strings (`"$12.00"`) -- see the tax gap below. `alternative` is filled only when `item` matches something sold out. |
 | `get_hours` | `/api/agent/hours` | `{}` | `{open_now, today, next_open}`. `today` is `"5:00 PM to 10:00 PM"` or `"closed"`. Hours that cross midnight cannot be represented -- see the gap below. |
 | `check_availability` | `/api/agent/availability` | `{requested_at: ISO 8601, party_size: number}` | `{available, alternatives}`, or `{available:false, reason:"large_party", alternatives:[]}` for a party over `max_party_size`. Refuses (400) a past `requested_at` (2-minute clock-skew tolerance) or an unparseable date/party size, rather than answering `available:false` for either. |
-| `create_reservation` | `/api/agent/reservation` | `{requested_at, party_size, customer_name, customer_phone, provider_call_id?}` | `{booked:true, booking_id, when}` or `{booked:false, reason:"full"}`. An over-max party gets the **same** generic 400 as a garbled party size ("I didn't catch how many people") -- unlike `check_availability`, this route does not distinguish "too big" from "didn't understand." **Not idempotent** -- see the gap below. |
+| `create_reservation` | `/api/agent/reservation` | `{requested_at, party_size, customer_name, customer_phone, provider_call_id?}` | `{booked:true, booking_id, when}` or `{booked:false, reason:"full"}`. An over-max party gets the **same** generic 400 as a garbled party size ("I didn't catch how many people") -- unlike `check_availability`, this route does not distinguish "too big" from "didn't understand." Idempotent per `provider_call_id` -- see below. |
 | `place_order` | `/api/agent/order` | `{items:[{name, quantity}], type?: "pickup"\|"delivery" (default "pickup"), customer_name, customer_phone, address?, provider_call_id?}` | See below -- this one has real edges. |
 | `transfer_to_human` | `/api/agent/transfer` | `{reason?: string, provider_call_id?}` | `{number}` -- always `location.fallback_human_number`. Fails (500) if the location has no fallback number configured at all; make sure every live location has one before go-live. Logging the transfer is fire-and-forget (`after()`) so this responds even if the database is unhealthy. |
 
@@ -157,18 +157,25 @@ Pass `provider_call_id` (Vapi's own id for the call in progress) on every
 `create_reservation`, `place_order`, and `transfer_to_human` call if your
 tool configuration can supply it. Two things depend on it:
 
-- **`place_order` deduplicates on it.** A retried tool call with the same
-  `provider_call_id`, type, customer, address, and items (order
-  independent) returns the order that already exists instead of writing a
-  second one -- this is what makes it safe for an LLM to retry a `place_order`
-  call after a timeout. Without a `provider_call_id`, there is no
-  fingerprint and no protection: every call, retry or not, writes a new
-  order. **`create_reservation` has no equivalent.** `public.book_table`
-  has no idempotency key at all, so a retried `create_reservation` call
-  --  a timeout, a Vapi-side retry, anything that makes the model call the
-  tool twice for the one booking -- creates two bookings for the same
-  party. Test your platform's retry behavior specifically against this
-  route before launch (see the checklist).
+- **`place_order` and `create_reservation` both deduplicate on it.** Each
+  fingerprints the call together with what makes the request distinct, and
+  a retry returns what already exists rather than writing a second row.
+  This is what makes it safe for an LLM to retry either tool after a
+  timeout.
+  - `place_order`: `provider_call_id` + type + customer + address +
+    items (order independent).
+  - `create_reservation`: `provider_call_id` + `requested_at` +
+    `party_size` + customer name + phone. A retry gets the same
+    `booking_id` and the same spoken confirmation back; two *different*
+    calls asking for the same slot still get two bookings, because the
+    call id is part of the key.
+
+  Without a `provider_call_id` there is no fingerprint and no protection:
+  every call, retry or not, writes a new order or holds another table. For
+  reservations that is worse than a duplicate record -- a phantom booking
+  holds seats for the whole slot, so the restaurant's own occupancy count
+  turns away a genuine caller for a table nobody is coming to. Send the id
+  on every call.
 - **It's how a tool call gets linked back to the `calls` row** for that
   conversation (`lib/agent/context.ts::callIdForProvider`), which is what
   lets an order or a transfer show up attached to the right call in the
@@ -258,15 +265,19 @@ bookings, calls, order_status_events, and menu_items before and after and
 asserting they are byte-for-byte identical, proving its own writes were
 fully cleaned up.
 
-It runs 36 checks, including: auth (missing/wrong secret, on both a read
+It runs 39 checks, including: auth (missing/wrong secret, on both a read
 and both write endpoints), cross-tenant isolation on both `get_menu` and
 `place_order` (a second tenant's secret can see only its own menu and
 cannot order off another tenant's menu), sold-out vs. unknown-item as
 distinct refusals, order-size limits, an unparseable quantity refused as a
 sentence rather than a menu decision, a retried `place_order` call
-deduplicating to one order, tax rounding pinned against two quantities
-chosen to land on opposite sides of a half cent, past-time refusals on
-both `check_availability` and `create_reservation`, an oversized party
+deduplicating to one order, a retried `create_reservation` call returning
+the same booking (with the `bookings` table itself checked for a second
+row), two different calls booking the same slot still creating two, and
+the same pair of calls *without* a `provider_call_id` correctly not
+deduplicating, tax rounding pinned against two quantities chosen to land
+on opposite sides of a half cent, past-time refusals on both
+`check_availability` and `create_reservation`, an oversized party
 refused before booking, and the assistant endpoint failing closed on the
 kill switch and on "not live" independently.
 
@@ -315,9 +326,16 @@ you onboard one.
   the model improvising from the prompt's wording, not answering from
   real data -- exactly the kind of invented answer the rest of the prompt
   works hard to prevent everywhere else.
-- **`create_reservation` is not idempotent.** Unlike `place_order`, there
-  is no fingerprint on a booking. A retried tool call for the same
-  reservation creates a second one. See step 3.
+- **Two identical bookings inside one call collapse into one.**
+  `create_reservation`'s fingerprint (step 3) cannot distinguish a
+  retried tool call from a caller genuinely asking for a second table at
+  the same time, for the same party size, under the same name and number,
+  in the same phone call -- the two requests are byte-identical, so the
+  second is treated as a retry and returns the first booking.
+  `place_order` makes exactly the same trade. In practice a party needing
+  two tables at one sitting is a party big enough to want a person, and
+  the agent transfers; but if a restaurant genuinely takes such bookings
+  over the phone, know that this one case is deduplicated.
 - **No secret rotation without a call-failure window.** Covered in step 1.
   Worth repeating here: there is no code path in this system that rotates
   a live location's secret without some number of calls failing auth in
@@ -353,7 +371,7 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Toggle an item sold out mid-call on the manager screen, then call again and confirm the next call knows.
 - [ ] Try to make it quote a wrong price. If you can, so can a customer.
 - [ ] Ask it something outside the four things it does. It must transfer.
-- [ ] Run `scripts/exercise-tools.mjs` against the environment Vapi will actually hit, and confirm all 36 checks pass. Don't onboard on top of a red run.
+- [ ] Run `scripts/exercise-tools.mjs` against the environment Vapi will actually hit, and confirm all 39 checks pass. Don't onboard on top of a red run.
 - [ ] Confirm your Vapi wiring fetches `/api/agent/assistant` **fresh at the start of every call**, not once at setup. Leave the integration alone overnight and call it again the next morning; it must state the correct date and today's real hours, not yesterday's.
 - [ ] Flip the location's kill switch on the dashboard mid-session and call again immediately. The very next call must not reach the AI -- confirm it lands on a human, not just that `/api/agent/assistant` reports `assistant_enabled:false` in isolation.
 - [ ] Set the location live to `false` and confirm the same thing happens for that condition independently of the kill switch.
@@ -364,5 +382,5 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Order something at a location with a nonzero tax rate and listen for whether the spoken total (read back before you confirm) matches the total in the confirmation / on the dashboard. If they differ, decide whether that's acceptable for this restaurant before launch -- see the tax gap above.
 - [ ] Ask it to change or cancel an existing reservation. Confirm it transfers cleanly rather than pretending to handle it -- the prompt claims this capability but no tool backs it.
 - [ ] Ask about parking, and ask it to text you a payment link. Confirm it doesn't invent a specific, wrong answer (a lot next door that doesn't exist, a link that never arrives) -- both are unimplemented and it may improvise from the prompt's wording alone.
-- [ ] If your Vapi tool configuration can retry a tool call (timeout, network blip), force one against `create_reservation` specifically and check whether it double-books. It has no idempotency protection, unlike `place_order`.
+- [ ] Confirm your Vapi tool configuration actually sends `provider_call_id` on `create_reservation` and `place_order`. It is the whole of the retry protection on both: without it a retried booking holds a second table, which costs the restaurant real capacity for that slot. If your configuration can force a retry (timeout, network blip), force one against `create_reservation` and confirm the dashboard shows one booking, not two.
 - [ ] Rotate the location's secret (`--force`) once, on purpose, during a maintenance window, so whoever runs this in production has done it before they have to do it under pressure. Confirm calls fail during the gap and recover once Vapi's headers are updated.

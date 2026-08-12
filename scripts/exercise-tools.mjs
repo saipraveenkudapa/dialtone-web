@@ -648,6 +648,115 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
     JSON.stringify(oversizedReservation.body),
   );
 
+  // Idempotency. public.book_table now fingerprints provider_call_id +
+  // requested_at + party_size + customer name + phone
+  // (supabase/migrations/20260812000500_book_table_idempotency.sql), so a
+  // retried tool call inside one phone call returns the booking that
+  // already exists instead of holding a second table for the same party.
+  // Checked at the HTTP boundary the agent actually sees -- two identical
+  // tool calls, same booking_id back both times -- AND against the table,
+  // because equal ids prove the route said the same thing while a row
+  // count proves the book really only has one table in it.
+  //
+  // Every booking below carries a name unique to this run, so the counts
+  // are of this run's own rows and nothing else, and each uses its own
+  // slot so none of them competes with another for seats.
+  const stamp = Date.now();
+  const trackBooking = (res) => {
+    if (res.body?.booked && res.body?.booking_id) created.bookings.push(res.body.booking_id);
+    return res;
+  };
+  const countBookingsNamed = async (name) => {
+    const rows = await mustOk(
+      admin
+        .from("bookings")
+        .select("id")
+        .eq("location_id", DEMO_LOCATION_ID)
+        .eq("customer_name", name),
+      `count bookings named ${name}`,
+    );
+    return rows.length;
+  };
+
+  const retryName = `Task15 Retry Canary ${stamp}`;
+  const retryWhen = new Date(Date.now() + 30 * 3600 * 1000).toISOString();
+  const retryCallId = `task15-reservation-idem-${stamp}`;
+  const retryBody = {
+    requested_at: retryWhen,
+    party_size: 2,
+    customer_name: retryName,
+    customer_phone: "+15105551015",
+    provider_call_id: retryCallId,
+  };
+  const retryFirst = trackBooking(await call("reservation", retryBody));
+  const retrySecond = trackBooking(await call("reservation", retryBody));
+  const retryRowCount = await countBookingsNamed(retryName);
+  check(
+    "a retried identical reservation inside one call returns the same booking and does not hold a second table",
+    retryFirst.body?.booked === true &&
+      retrySecond.body?.booked === true &&
+      retryFirst.body?.booking_id != null &&
+      retryFirst.body?.booking_id === retrySecond.body?.booking_id &&
+      retrySecond.body?.when === retryFirst.body?.when &&
+      retryRowCount === 1,
+    `first ${retryFirst.body?.booking_id}, second ${retrySecond.body?.booking_id}, ${retryRowCount} row(s) in bookings`,
+  );
+
+  // The other half of the guarantee, and the one a too-eager key would
+  // break: two DIFFERENT phone calls asking for the same slot, the same
+  // party size, even the same name and number, are two bookings. A key
+  // built from the request alone -- without provider_call_id in it --
+  // would collapse them and quietly lose a real reservation.
+  const distinctName = `Task15 Distinct Calls ${stamp}`;
+  const distinctBody = {
+    requested_at: new Date(Date.now() + 34 * 3600 * 1000).toISOString(),
+    party_size: 2,
+    customer_name: distinctName,
+    customer_phone: "+15105551016",
+  };
+  const callOne = trackBooking(
+    await call("reservation", { ...distinctBody, provider_call_id: `${retryCallId}-a` }),
+  );
+  const callTwo = trackBooking(
+    await call("reservation", { ...distinctBody, provider_call_id: `${retryCallId}-b` }),
+  );
+  const distinctRowCount = await countBookingsNamed(distinctName);
+  check(
+    "two different calls booking the identical slot still create two bookings",
+    callOne.body?.booked === true &&
+      callTwo.body?.booked === true &&
+      callOne.body?.booking_id != null &&
+      callTwo.body?.booking_id != null &&
+      callOne.body?.booking_id !== callTwo.body?.booking_id &&
+      distinctRowCount === 2,
+    `${callOne.body?.booking_id} vs ${callTwo.body?.booking_id}, ${distinctRowCount} row(s) in bookings`,
+  );
+
+  // And the documented limit of the protection, pinned rather than left
+  // to be discovered: with no provider_call_id there is no fingerprint,
+  // so book_table cannot tell a retry from a second request and every
+  // call books another table. This is what docs/vapi-setup.md means by
+  // "pass provider_call_id on every create_reservation call" -- the
+  // failure it warns about is proven here, not asserted.
+  const noIdName = `Task15 No Provider Id ${stamp}`;
+  const noIdBody = {
+    requested_at: new Date(Date.now() + 38 * 3600 * 1000).toISOString(),
+    party_size: 2,
+    customer_name: noIdName,
+    customer_phone: "+15105551017",
+  };
+  const noIdFirst = trackBooking(await call("reservation", noIdBody));
+  const noIdSecond = trackBooking(await call("reservation", noIdBody));
+  const noIdRowCount = await countBookingsNamed(noIdName);
+  check(
+    "without a provider_call_id there is no fingerprint, so an identical reservation is NOT deduplicated",
+    noIdFirst.body?.booked === true &&
+      noIdSecond.body?.booked === true &&
+      noIdFirst.body?.booking_id !== noIdSecond.body?.booking_id &&
+      noIdRowCount === 2,
+    `${noIdFirst.body?.booking_id} vs ${noIdSecond.body?.booking_id}, ${noIdRowCount} row(s) in bookings`,
+  );
+
   // ── Order ───────────────────────────────────────────────────────────
 
   const order = await call("order", {

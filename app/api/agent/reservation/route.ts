@@ -4,6 +4,14 @@ import { agentFail, agentOk } from "@/lib/agent/respond";
 import { callIdForProvider } from "@/lib/agent/context";
 import { isRequestInPast } from "@/lib/agent/availability";
 
+/** What `public.book_table` answers with. */
+type BookTableResult = {
+  booked: boolean;
+  duplicate: boolean;
+  booking_id: string | null;
+  reason: string | null;
+};
+
 /** create_reservation.
  *
  *  The capacity decision is NOT made here. This used to select the
@@ -18,6 +26,17 @@ import { isRequestInPast } from "@/lib/agent/availability";
  *  Seats, slot length and max party size come from the location row
  *  inside the function, so nothing about capacity is decided from a
  *  request body.
+ *
+ *  Neither is the retry decision. A 500 or a timeout is exactly what
+ *  makes an LLM call a tool twice, and a second booking is not a harmless
+ *  duplicate row -- it holds seats for the whole slot, so the phantom is
+ *  counted against the next genuine caller and the restaurant turns away
+ *  a booking it could have taken. book_table fingerprints the call and
+ *  what makes the booking distinct
+ *  (supabase/migrations/20260812000500_book_table_idempotency.sql) and
+ *  answers a retry with the booking that already exists, flagged
+ *  `duplicate`. This route says the same sentence either way -- see
+ *  below.
  *
  *  What remains here is what the caller has to be told: the validation
  *  that produces a sentence a person can hear, and the wording of the
@@ -58,8 +77,15 @@ export async function POST(request: Request) {
       p_customer_name: body.customer_name,
       p_customer_phone: body.customer_phone,
       p_call_id: await callIdForProvider(location.id, body.provider_call_id),
+      // Not the same thing as p_call_id: that is the calls row this
+      // booking hangs off and is null whenever no webhook has created one
+      // yet, while this is the provider's own id for the call in progress
+      // and is what makes a retried tool call recognisable as a retry.
+      // Absent, book_table has no fingerprint to build and every retry
+      // books another table.
+      p_provider_call_id: body.provider_call_id ?? null,
     })
-    .single<{ booked: boolean; booking_id: string | null; reason: string | null }>();
+    .single<BookTableResult>();
 
   if (error || !data) {
     console.error("[agent] book_table failed", error);
@@ -73,6 +99,12 @@ export async function POST(request: Request) {
     return agentOk({ booked: false, reason: data.reason ?? "full" });
   }
 
+  // `data.duplicate` is deliberately not in the response. A retry has to
+  // produce the SAME spoken confirmation as the first call -- the caller
+  // asked once and is owed one answer -- and anything extra in the body
+  // is something the model might read out ("you already have a booking")
+  // about a booking it made itself two seconds ago. The flag's job was to
+  // let this route tell the two apart and choose to say nothing.
   return agentOk({
     booked: true,
     booking_id: data.booking_id,
