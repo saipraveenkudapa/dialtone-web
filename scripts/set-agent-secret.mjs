@@ -7,18 +7,21 @@
    secret starts failing auth on its very next tool call, with no grace
    period. That is by design -- provisioning and rotation are the same
    operator-run action, and a leaked old secret must stop working the
-   moment a new one is set. This script warns before overwriting, but
-   does not block it, so the same command works unattended for both
-   first-time setup and rotation.
+   moment a new one is set. Because there is no confirmation step, this
+   script requires an explicit --force flag before it will replace an
+   existing secret; first-time provisioning (no secret set yet) needs no
+   flag.
 
-   node scripts/set-agent-secret.mjs <location-id>
+   node scripts/set-agent-secret.mjs <location-id> [--force]
 */
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
-const locationId = process.argv[2];
+const args = process.argv.slice(2).filter((a) => a !== "--force");
+const force = process.argv.slice(2).includes("--force");
+const locationId = args[0];
 if (!locationId) {
-  console.error("usage: node scripts/set-agent-secret.mjs <location-id>");
+  console.error("usage: node scripts/set-agent-secret.mjs <location-id> [--force]");
   process.exit(1);
 }
 
@@ -30,7 +33,7 @@ const supabase = createClient(
 
 const { data: existing, error: lookupError } = await supabase
   .from("locations")
-  .select("agent_secret_hash")
+  .select("name, agent_secret_hash")
   .eq("id", locationId)
   .maybeSingle();
 
@@ -44,13 +47,26 @@ if (!existing) {
   process.exit(1);
 }
 
-if (existing.agent_secret_hash) {
+console.error("Location:", existing.name, `(${locationId})`);
+
+if (existing.agent_secret_hash && !force) {
   console.error(
-    "warning: location",
+    "refused: location",
     locationId,
     "already has a secret configured -- overwriting it invalidates the",
-    "old one immediately. Any live caller still using it will start",
-    "failing auth on its next tool call.",
+    "old one immediately. If this location is live, every in-flight or",
+    "subsequent tool call using the old secret starts failing auth the",
+    "instant the new hash is written, with no grace period.",
+    "\nIf that is really what you want, re-run with --force.",
+  );
+  process.exit(1);
+}
+
+if (existing.agent_secret_hash && force) {
+  console.error(
+    "warning: overwriting the existing secret for location",
+    locationId,
+    "-- the old one stops working immediately.",
   );
 }
 
