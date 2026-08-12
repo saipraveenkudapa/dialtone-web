@@ -238,6 +238,13 @@ parse.
 | `change_reservation` | `/api/agent/change-reservation` | `{customer_name, customer_phone, booking_time: ISO 8601, new_requested_at: ISO 8601, new_party_size?: number}` | `{changed:true, booking_id, party_size, when}`. Ordinary refusals, booking untouched in every one: `reason` is `"not_found"`, `"ambiguous"`, `"full"`, `"large_party"`, or `"closed"` (with `hours_that_day`). Refuses (400) either timestamp being past or unparseable, a missing name/phone, or a `new_party_size` that isn't a positive whole number. Omit `new_party_size` to keep the party the booking already has. Retry-safe with no `provider_call_id`. |
 | `place_order` | `/api/agent/order` | `{items:[{name, quantity, note?}], type?: "pickup"\|"delivery" (default "pickup"), customer_name, customer_phone, address?, provider_call_id?}` | See below -- this one has real edges. |
 | `transfer_to_human` | `/api/agent/transfer` | `{reason?: string, provider_call_id?}` | `{number}` -- always `location.fallback_human_number`. Fails (500) if the location has no fallback number configured at all; make sure every live location has one before go-live. Logging the transfer is fire-and-forget (`after()`) so this responds even if the database is unhealthy. |
+| `take_message` | `/api/agent/message` | `{caller_name, callback_number, message, provider_call_id?}` | `{taken: true}` -- the message is in the `messages` table and shows on the call's page in the dashboard. Refuses (400) with a sentence to read out when any of the three is missing or could not be heard: an unusable name, a callback number with fewer than seven digits, or nothing to pass on. `message` is redacted and truncated to 400 characters before storage. There is no business refusal on this path -- there is no such thing as a message the restaurant may not receive. |
+
+**`take_message` is not in the provisioning script or the system prompt
+yet.** The route and its table exist and are live; wiring it into the
+assistant -- and narrowing `transfer_to_human` to catering and allergy
+questions, which is the reason this tool exists -- is the next change.
+Until then it can be exercised with `curl` against the shape above.
 
 `requested_at` must be a full ISO 8601 timestamp. The system prompt is
 told the current date and time as part of `system_prompt` itself (see step

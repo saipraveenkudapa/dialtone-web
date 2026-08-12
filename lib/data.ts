@@ -5,6 +5,7 @@ import type {
   LocationRow,
   MenuCategoryRow,
   MenuItemRow,
+  MessageRow,
   OrderItemRow,
   OrderRow,
 } from "@/lib/supabase/types";
@@ -194,13 +195,25 @@ export async function getCall(callId: string) {
   if (error) throw error;
   if (!call) return null;
 
-  const [order, booking] = await Promise.all([
+  const [order, booking, messages] = await Promise.all([
     supabase
       .from("orders")
       .select("*, order_items(*)")
       .eq("call_id", callId)
       .maybeSingle(),
     supabase.from("bookings").select("*").eq("call_id", callId).maybeSingle(),
+    // A list, not `.maybeSingle()` like the two above. Nothing stops one
+    // call producing two messages -- a retried tool call leaves a second
+    // copy on purpose (see the migration), and a caller can say one more
+    // thing before hanging up -- and `.maybeSingle()` answers more than
+    // one row with an error, which would turn a duplicate message into a
+    // call page that will not open at all. Oldest first, the order they
+    // were taken in.
+    supabase
+      .from("messages")
+      .select("*")
+      .eq("call_id", callId)
+      .order("taken_at", { ascending: true }),
   ]);
 
   return {
@@ -214,6 +227,7 @@ export async function getCall(callId: string) {
       | (OrderRow & { order_items: OrderItemRow[] })
       | null,
     booking: booking.data as BookingRow | null,
+    messages: (messages.data ?? []) as MessageRow[],
   };
 }
 

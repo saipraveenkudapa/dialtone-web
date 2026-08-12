@@ -17,7 +17,7 @@ export default async function CallDetailPage({
   const [location, data] = await Promise.all([getCurrentLocation(), getCall(id)]);
   if (!location || !data) notFound();
 
-  const { call, order, booking } = data;
+  const { call, order, booking, messages } = data;
   const tz = location.timezone;
   const recordingUrl = await getRecordingUrl(call.recording_path);
 
@@ -111,6 +111,47 @@ export default async function CallDetailPage({
               ) : null}
             </dl>
           </div>
+
+          {/* Above the order and the booking, deliberately: an order and a
+              booking are already done, while a message is the one thing on
+              this page that is still somebody's job. Every call that used
+              to be handed to a human for anything other than catering or
+              an allergy now lands here instead, so this card is the whole
+              record of it -- if it is not read, nobody rings the caller
+              back. Rendered as a list because one call can leave more than
+              one (see getCall). */}
+          {messages.map((message) => (
+            <div key={message.id} className="card blueprint admin-facts">
+              <Corners />
+              <div className="card-kicker">Message · {timeIn(tz, message.taken_at)}</div>
+              {/* Already redacted and length-bounded on the way in
+                  (lib/agent/messages.ts), so what a caller said is safe to
+                  render as-is. */}
+              <p className="card-body">{message.body}</p>
+              <dl>
+                <div className="fact-row">
+                  <dt className="text-muted">From</dt>
+                  <dd>{message.caller_name ?? "—"}</dd>
+                </div>
+                <div className="fact-row">
+                  <dt className="text-muted">Call back</dt>
+                  <dd className="num">{message.callback_phone ?? "—"}</dd>
+                </div>
+                <div className="fact-row">
+                  <dt className="text-muted">Status</dt>
+                  <dd>
+                    {message.handled && message.handled_at ? (
+                      <span className="tag tag-neutral">
+                        handled {timeIn(tz, message.handled_at)}
+                      </span>
+                    ) : (
+                      <span className="tag tag-accent">needs a callback</span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          ))}
 
           {order ? (
             <section className="panel">

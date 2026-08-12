@@ -125,6 +125,25 @@ export type BookingRow = {
   status: string;
 };
 
+/** A message taken for the restaurant during a call, because transfers
+ *  are now only for catering and allergy questions
+ *  (supabase/migrations/20260812000900_messages.sql). `body` is already
+ *  redacted and length-bounded by the time it is written -- see
+ *  lib/agent/messages.ts -- so nothing that reads this row has to scrub
+ *  it again. `handled_at` is non-null exactly when `handled` is true; the
+ *  table has a check constraint saying so. */
+export type MessageRow = {
+  id: string;
+  location_id: string;
+  call_id: string | null;
+  caller_name: string | null;
+  callback_phone: string | null;
+  body: string;
+  taken_at: string;
+  handled: boolean;
+  handled_at: string | null;
+};
+
 export type OrderItemRow = {
   id: string;
   order_id: string;
