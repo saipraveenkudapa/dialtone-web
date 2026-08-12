@@ -2,44 +2,66 @@
 /* Drive every tool endpoint the way the voice platform will, against the
    live database.
 
-   AGENT_SECRET=...            secret for the demo location (required)
-   CANARY_SECRET_ISOLATED=...  secret for a second, throwaway location
-                                whose menu holds one item the demo
-                                location's menu does not (required for
-                                the cross-tenant isolation checks)
-   CANARY_SECRET_KILLSWITCH=narrower secret for a throwaway location with
-                                kill_switch_on = true (required for the
-                                assistant fail-closed checks)
-   CANARY_SECRET_NOTLIVE=...   secret for a throwaway location with
-                                is_live = false (required for the same)
+   AGENT_SECRET=...             secret for the demo location (required;
+                                 the value from set-agent-secret.mjs)
+   NEXT_PUBLIC_SUPABASE_URL=... required -- this script talks to the
+   SUPABASE_SERVICE_ROLE_KEY=...  database directly (not just over HTTP)
+                                 for three things an HTTP-only script
+                                 cannot do: price an order independently
+                                 of the route under test, provision and
+                                 tear down its own throwaway tenants, and
+                                 audit the demo location's tables before
+                                 and after the run.
 
    node scripts/exercise-tools.mjs [base-url]
 
-   The three CANARY_* secrets belong to locations this script does not
-   own the lifecycle of -- they are provisioned and torn down around a
-   run of this script, not by it. Every write this script itself causes
-   (an order, a booking) is left in the database on exit; the caller is
-   expected to know what it created and remove exactly that, the same
-   way Task 14's own cleanup step does.
-*/
+   This script is self-contained: every canary location it needs (one
+   for cross-tenant isolation, one with the kill switch on, one that is
+   not live) is created here, used here, and deleted here, in a
+   try/finally that runs even if a check throws partway through -- so a
+   second run of this script starts from exactly the same database state
+   as the first. The demo location itself (a10c0000-0000-0000-0000-
+   00000000000a) and its seeded rows are never written to except for the
+   orders/bookings this run itself places, and those are removed at the
+   end; an audit at the bottom proves it by snapshotting orders,
+   order_items, bookings, calls, order_status_events and menu_items for
+   that location before and after and asserting they are identical. */
+import crypto from "node:crypto";
+import { createClient } from "@supabase/supabase-js";
+
 const base = process.argv[2] ?? "http://localhost:3000";
 const secret = process.env.AGENT_SECRET;
-const isolatedSecret = process.env.CANARY_SECRET_ISOLATED;
-const killSwitchSecret = process.env.CANARY_SECRET_KILLSWITCH;
-const notLiveSecret = process.env.CANARY_SECRET_NOTLIVE;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!secret) {
   console.error("set AGENT_SECRET to the value from set-agent-secret.mjs");
   process.exit(1);
 }
-if (!isolatedSecret || !killSwitchSecret || !notLiveSecret) {
+if (!supabaseUrl || !serviceRoleKey) {
   console.error(
-    "set CANARY_SECRET_ISOLATED, CANARY_SECRET_KILLSWITCH and CANARY_SECRET_NOTLIVE " +
-      "to the secrets of the three throwaway locations this run needs " +
-      "(see the task-14 report for how they were provisioned).",
+    "set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (same " +
+      ".env.local values the app itself uses) -- this script provisions " +
+      "and tears down its own canary tenants and audits the demo " +
+      "location directly, both of which need database access beyond " +
+      "what the HTTP API exposes.",
   );
   process.exit(1);
 }
+
+const DEMO_LOCATION_ID = "a10c0000-0000-0000-0000-00000000000a";
+
+const admin = createClient(supabaseUrl, serviceRoleKey, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+
+/** Same algorithm as lib/agent/auth.ts::hashAgentSecret. Duplicated
+ *  rather than imported: that file is `import "server-only"`, which
+ *  throws outside a Next.js server context, and pulling in the TS
+ *  compiler for one function is a worse trade than nine lines that must
+ *  stay in step with it. */
+const hashAgentSecret = (value) =>
+  crypto.createHash("sha256").update(value, "utf-8").digest("hex");
 
 const call = async (path, body, headerSecret = secret) => {
   const res = await fetch(`${base}/api/agent/${path}`, {
@@ -59,342 +81,776 @@ const check = (name, pass, detail) => {
   console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 };
 
-// Track exactly what this run creates so the report can state precisely
-// what needs to be cleaned up, and so a human can double check nothing
-// else moved.
+/** Throws with the failing operation named, instead of a check quietly
+ *  comparing against `undefined` because a Postgres error was ignored. */
+async function mustOk(promise, label) {
+  const { data, error } = await promise;
+  if (error) throw new Error(`${label} failed: ${error.message}`);
+  return data;
+}
+
+// ── real-data replicas of the pure functions the routes use ───────────
+//
+// These mirror lib/agent/hours.ts::openState and
+// lib/agent/availability.ts::seatsTaken closely enough to answer "what
+// should the route say right now" from the same rows the route itself
+// reads, independent of the route's own output -- that independence is
+// the entire point: comparing the route's answer to itself would prove
+// nothing. Both files are TypeScript importing `next/font`-adjacent and
+// `server-only` dependencies that do not resolve outside the Next.js
+// build, so the logic is copied rather than imported; keep these in step
+// by hand if either source function changes.
+
+const toMinutesOfDay = (time) => {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + m;
+};
+
+const spokenTimeOfDay = (time) => {
+  const [h, m] = time.split(":").map(Number);
+  const suffix = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
+};
+
+function localParts(now, timezone) {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "short",
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(now).map((p) => [p.type, p.value]));
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    minutes: (Number(parts.hour) % 24) * 60 + Number(parts.minute),
+    dayOfWeek: days.indexOf(parts.weekday),
+  };
+}
+
+/** Same shape as lib/agent/hours.ts::openState's `today`/`open_now`
+ *  (next_open omitted -- no check here needs it). */
+function computeOpenState(now, timezone, hoursRows, holidayRows) {
+  const local = localParts(now, timezone);
+  const holiday = holidayRows.find((h) => h.date === local.date);
+  const weekday = hoursRows.find((h) => h.day_of_week === local.dayOfWeek);
+  const today = holiday
+    ? { is_closed: holiday.is_closed, open_time: holiday.open_time, close_time: holiday.close_time }
+    : {
+        is_closed: weekday?.is_closed ?? true,
+        open_time: weekday?.open_time ?? null,
+        close_time: weekday?.close_time ?? null,
+      };
+
+  if (today.is_closed || !today.open_time || !today.close_time) {
+    return { open_now: false, today: "closed" };
+  }
+  const opens = toMinutesOfDay(today.open_time);
+  const closes = toMinutesOfDay(today.close_time);
+  return {
+    open_now: local.minutes >= opens && local.minutes < closes,
+    today: `${spokenTimeOfDay(today.open_time)} to ${spokenTimeOfDay(today.close_time)}`,
+  };
+}
+
+/** Verbatim port of lib/agent/availability.ts::seatsTaken. */
+function seatsTakenJS(bookings, slotStart, slotMinutes) {
+  const start = slotStart.getTime();
+  const end = start + slotMinutes * 60_000;
+
+  const overlapping = bookings
+    .map((booking) => {
+      const bStart = new Date(booking.requested_at).getTime();
+      return { bStart, bEnd: bStart + slotMinutes * 60_000, party: booking.party_size };
+    })
+    .filter((b) => b.bStart < end && b.bEnd > start);
+
+  const events = overlapping.flatMap((b) => [
+    { time: b.bStart, delta: b.party },
+    { time: b.bEnd, delta: -b.party },
+  ]);
+  events.sort((a, b) => a.time - b.time || a.delta - b.delta);
+
+  let running = 0;
+  let peak = 0;
+  for (const event of events) {
+    running += event.delta;
+    if (running > peak) peak = running;
+  }
+  return peak;
+}
+
+// ── canary tenant lifecycle ─────────────────────────────────────────
+//
+// Three throwaway locations this run owns start to finish, replacing
+// the ad hoc SQL a human used to run outside the repo (see the task-14
+// report) with something `node scripts/exercise-tools.mjs` can redo on
+// its own, in CI, forever. Ids are pushed into `canaryLocationIds` the
+// instant each insert succeeds -- not returned in a batch at the end --
+// so a failure partway through provisioning still leaves every already-
+// created row tracked for teardown.
+const canaryLocationIds = [];
+
+async function createCanaryLocation(orgId, { name, is_live, kill_switch_on }) {
+  const plaintextSecret = crypto.randomBytes(32).toString("base64url");
+  const row = await mustOk(
+    admin
+      .from("locations")
+      .insert({
+        org_id: orgId,
+        name,
+        is_live,
+        kill_switch_on,
+        agent_secret_hash: hashAgentSecret(plaintextSecret),
+      })
+      .select("id")
+      .single(),
+    `insert canary location "${name}"`,
+  );
+  canaryLocationIds.push(row.id);
+  return { id: row.id, secret: plaintextSecret };
+}
+
+async function provisionCanaries(orgId) {
+  // Isolated: proves get_menu AND place_order never cross a secret
+  // boundary. Its one item deliberately shares no name with anything on
+  // the demo menu, so a name-based order lookup has nothing to
+  // accidentally collide with either.
+  const isolated = await createCanaryLocation(orgId, {
+    name: "Task14 Canary Isolated (exercise-tools, ephemeral)",
+    is_live: true,
+    kill_switch_on: false,
+  });
+  const category = await mustOk(
+    admin.from("menu_categories").insert({ location_id: isolated.id, name: "Canary" }).select("id").single(),
+    "insert canary menu category",
+  );
+  await mustOk(
+    admin.from("menu_items").insert({
+      category_id: category.id,
+      location_id: isolated.id,
+      name: "Zzyzx Canary Special",
+      price_cents: 999,
+    }),
+    "insert canary menu item",
+  );
+
+  // Kill-switch and not-live: prove the assistant route fails closed on
+  // each condition independently, without ever touching the demo
+  // location's own live switch -- that is real, user-facing
+  // configuration this task must leave untouched.
+  const killSwitch = await createCanaryLocation(orgId, {
+    name: "Task14 Canary KillSwitch (exercise-tools, ephemeral)",
+    is_live: true,
+    kill_switch_on: true,
+  });
+  const notLive = await createCanaryLocation(orgId, {
+    name: "Task14 Canary NotLive (exercise-tools, ephemeral)",
+    is_live: false,
+    kill_switch_on: false,
+  });
+
+  return {
+    isolatedSecret: isolated.secret,
+    killSwitchSecret: killSwitch.secret,
+    notLiveSecret: notLive.secret,
+  };
+}
+
+async function teardownCanaries() {
+  if (!canaryLocationIds.length) return;
+  // menu_categories/menu_items cascade from locations via
+  // ON DELETE CASCADE (confirmed in supabase/migrations/20260807000100_
+  // schema.sql), so deleting the location is the whole teardown.
+  const { error } = await admin.from("locations").delete().in("id", canaryLocationIds);
+  if (error) {
+    console.error("cleanup: failed to delete canary locations", error.message, canaryLocationIds);
+  }
+}
+
+// ── what this run writes to the demo location ──────────────────────
+
 const created = { orders: [], bookings: [] };
 
-// ── Auth ────────────────────────────────────────────────────────────
-
-const noAuth = await call("menu", {}, null);
-check("unauthenticated menu is rejected", noAuth.status === 401);
-
-const badAuth = await call("menu", {}, "wrong-secret");
-check("wrong secret is rejected", badAuth.status === 401);
-
-// ── Menu ────────────────────────────────────────────────────────────
-
-const menu = await call("menu", { item: "Squid Ink Tonnarelli" });
-check("menu returns categories", Array.isArray(menu.body?.categories));
-check(
-  "menu marks sold out items",
-  (menu.body?.sold_out ?? []).includes("Squid Ink Tonnarelli") &&
-    (menu.body?.sold_out ?? []).includes("Bistecca, 32oz"),
-  JSON.stringify(menu.body?.sold_out),
-);
-check(
-  "menu suggests an alternative",
-  typeof menu.body?.alternative === "string" && menu.body.alternative.length > 0,
-  String(menu.body?.alternative),
-);
-
-// Cross-tenant isolation. A secret decides the location for every tool
-// call (lib/agent/auth.ts::locationForSecret) -- nothing in a request
-// body can move it. Proving this from the outside means fetching two
-// different locations' menus with two different secrets and checking
-// each side only ever sees its own data, not asserting on the auth
-// function's source.
-const demoMenu = await call("menu", {});
-const canaryMenu = await call("menu", {}, isolatedSecret);
-const demoItemNames = (demoMenu.body?.categories ?? []).flatMap((c) =>
-  c.items.map((i) => i.name),
-);
-const canaryItemNames = (canaryMenu.body?.categories ?? []).flatMap((c) =>
-  c.items.map((i) => i.name),
-);
-check(
-  "demo secret cannot see the canary location's menu item",
-  !demoItemNames.includes("Zzyzx Canary Special"),
-  JSON.stringify(demoItemNames),
-);
-check(
-  "canary secret sees its own item and none of the demo menu",
-  canaryItemNames.includes("Zzyzx Canary Special") &&
-    !canaryItemNames.some((n) => demoItemNames.includes(n)),
-  JSON.stringify(canaryItemNames),
-);
-
-// ── Hours ───────────────────────────────────────────────────────────
-
-const hours = await call("hours", {});
-check(
-  "hours answers open_now",
-  typeof hours.body?.open_now === "boolean",
-  `today: ${hours.body?.today}`,
-);
-
-// ── Availability ────────────────────────────────────────────────────
-
-const when = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
-const avail = await call("availability", { requested_at: when, party_size: 2 });
-check("availability answers", typeof avail.body?.available === "boolean");
-
-// The brief only checked `available === false` for an oversized party.
-// The route now answers with a distinct, speakable reason
-// (app/api/agent/availability/route.ts) rather than folding it into the
-// same "no tables" answer a full house gets -- an agent needs to say
-// something different to a party of 99 than to a party of 2 that just
-// didn't fit.
-const huge = await call("availability", { requested_at: when, party_size: 99 });
-check(
-  "oversized party is refused with a distinct reason",
-  huge.body?.available === false && huge.body?.reason === "large_party",
-  JSON.stringify(huge.body),
-);
-
-// Past times are refused outright now (lib/agent/availability.ts::isRequestInPast),
-// not answered with `available: false` -- a caller asking about a moment
-// already gone should never hear a confident answer either way.
-const pastWhen = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
-const pastAvail = await call("availability", { requested_at: pastWhen, party_size: 2 });
-check(
-  "past availability request is refused, not answered",
-  pastAvail.status === 400 && pastAvail.body?.ok === false,
-  JSON.stringify(pastAvail.body),
-);
-
-// ── Reservation ─────────────────────────────────────────────────────
-
-const reservationWhen = new Date(Date.now() + 26 * 3600 * 1000).toISOString();
-const booking = await call("reservation", {
-  requested_at: reservationWhen,
-  party_size: 2,
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check("reservation books", booking.body?.booked === true, booking.body?.when);
-if (booking.body?.booked && booking.body?.booking_id) {
-  created.bookings.push(booking.body.booking_id);
+async function teardownDemoWrites() {
+  if (created.orders.length) {
+    const rows = await mustOk(
+      admin
+        .from("orders")
+        .select("id")
+        .eq("location_id", DEMO_LOCATION_ID)
+        .in("order_number", created.orders),
+      "look up created orders for cleanup",
+    );
+    const ids = (rows ?? []).map((r) => r.id);
+    if (ids.length) {
+      // order_status_events cascades from orders' own delete (FK
+      // order_id -> orders(id) on delete cascade), so deleting the
+      // order is enough to remove its events too -- verified by the
+      // before/after audit below, not just assumed.
+      await mustOk(admin.from("order_items").delete().in("order_id", ids), "delete created order_items");
+      await mustOk(admin.from("orders").delete().in("id", ids), "delete created orders");
+    }
+  }
+  if (created.bookings.length) {
+    await mustOk(admin.from("bookings").delete().in("id", created.bookings), "delete created bookings");
+  }
 }
 
-// The capacity decision now lives in public.book_table
-// (supabase/migrations/20260812000200_book_table.sql), which serialises
-// on the location and counts peak occupancy under that lock rather than
-// the route reading-then-writing in two round trips. This run does not
-// try to exhaust the demo location's 40 seats -- that would mean leaving
-// dozens of throwaway bookings against real seeded data -- so what is
-// checked here is the same fail-closed shape the availability endpoint
-// gets: a request for a time already past is refused before book_table
-// is ever called.
-const pastReservation = await call("reservation", {
-  requested_at: pastWhen,
-  party_size: 2,
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check(
-  "reservation for a past time is refused",
-  pastReservation.status === 400 && pastReservation.body?.ok === false,
-  JSON.stringify(pastReservation.body),
-);
+// ── before/after audit of the demo location ────────────────────────
+//
+// Full-row snapshots, not just counts: "byte-for-byte unchanged" means
+// the seeded Dana order and Marcus booking must read back identically,
+// not merely that the row counts still add up. `.order("id")` on every
+// query makes the comparison independent of Postgres' unspecified
+// default row order, which otherwise would make two genuinely identical
+// snapshots compare unequal by chance.
 
-const oversizedReservation = await call("reservation", {
-  requested_at: reservationWhen,
-  party_size: 99,
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check(
-  "reservation for an over-max party is refused before booking",
-  oversizedReservation.status === 400 && oversizedReservation.body?.ok === false,
-  JSON.stringify(oversizedReservation.body),
-);
-
-// ── Order ───────────────────────────────────────────────────────────
-
-const order = await call("order", {
-  items: [{ name: "Cacio e Pepe", quantity: 2 }],
-  type: "pickup",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check(
-  "order is placed",
-  order.body?.placed === true,
-  `#${order.body?.order_number} ${order.body?.total}`,
-);
-if (order.body?.placed && order.body?.order_number) {
-  created.orders.push(order.body.order_number);
+async function snapshotTable(table, build) {
+  return mustOk(build(admin.from(table).select("*")), `snapshot ${table}`);
 }
 
-const soldOut = await call("order", {
-  items: [{ name: "Squid Ink Tonnarelli", quantity: 1 }],
-  type: "pickup",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check(
-  "sold out item is refused, distinctly from unknown",
-  soldOut.body?.reason === "sold_out" && soldOut.body?.item === "Squid Ink Tonnarelli",
-  JSON.stringify(soldOut.body),
-);
-
-const unknown = await call("order", {
-  items: [{ name: "Chicken Tikka Masala", quantity: 1 }],
-  type: "pickup",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check(
-  "unknown item is refused, distinctly from sold out",
-  unknown.body?.reason === "unknown_item",
-  JSON.stringify(unknown.body),
-);
-
-// Order type mismatch. The demo location is pickup-only
-// (order_types = 'pickup'), so a delivery request must be refused by
-// name, not silently accepted as pickup or 500ing.
-const wrongType = await call("order", {
-  items: [{ name: "Cacio e Pepe", quantity: 1 }],
-  type: "delivery",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-  address: "123 Test St",
-});
-check(
-  "delivery order is refused at a pickup-only location",
-  wrongType.body?.placed === false && wrongType.body?.reason === "no_delivery",
-  JSON.stringify(wrongType.body),
-);
-
-// A quantity the route cannot parse ("two" is not a number
-// normaliseQuantity accepts) is not a menu decision -- lib/agent/orders.ts
-// treats it the same as a missing name or phone number: agentFail, not
-// agentOk({placed:false}). This is one of the "more reasons than the
-// brief knows about" the task called out.
-const badQuantity = await call("order", {
-  items: [{ name: "Cacio e Pepe", quantity: "two" }],
-  type: "pickup",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check(
-  "an unparseable quantity is refused as a speakable failure, not a menu reason",
-  badQuantity.status === 400 &&
-    badQuantity.body?.ok === false &&
-    typeof badQuantity.body?.error === "string",
-  JSON.stringify(badQuantity.body),
-);
-
-// Order-size limits (lib/agent/orders.ts::MAX_ORDER_LINES /
-// MAX_ITEM_QUANTITY, mirrored as the authority in
-// supabase/migrations/20260812000400_place_order.sql's c_max_lines /
-// c_max_qty). Neither limit existed in the brief's script.
-const tooManyLines = await call("order", {
-  items: Array.from({ length: 41 }, () => ({ name: "Cacio e Pepe", quantity: 1 })),
-  type: "pickup",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check(
-  "more than 40 distinct lines is refused before touching the menu",
-  tooManyLines.status === 400 && tooManyLines.body?.ok === false,
-  JSON.stringify(tooManyLines.body),
-);
-
-const tooManyOfOne = await call("order", {
-  items: [{ name: "Cacio e Pepe", quantity: 51 }],
-  type: "pickup",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-});
-check(
-  "more than 50 of one item is refused",
-  tooManyOfOne.status === 400 && tooManyOfOne.body?.ok === false,
-  JSON.stringify(tooManyOfOne.body),
-);
-
-// Idempotency. public.place_order fingerprints provider_call_id + type +
-// customer + address + sorted lines, and a retry inside the same call
-// returns the order that already exists instead of writing a second one
-// -- this is now checked at the HTTP boundary the agent actually sees:
-// two identical tool calls, same order_number back both times.
-const providerCallId = `task14-idem-${Date.now()}`;
-const idemFirst = await call("order", {
-  items: [{ name: "Bucatini Amatriciana", quantity: 1 }],
-  type: "pickup",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-  provider_call_id: providerCallId,
-});
-const idemSecond = await call("order", {
-  items: [{ name: "Bucatini Amatriciana", quantity: 1 }],
-  type: "pickup",
-  customer_name: "Task14 QA Caller",
-  customer_phone: "+15105551014",
-  provider_call_id: providerCallId,
-});
-check(
-  "a retried identical order does not create a second order",
-  idemFirst.body?.placed === true &&
-    idemSecond.body?.placed === true &&
-    idemFirst.body?.order_number != null &&
-    idemFirst.body?.order_number === idemSecond.body?.order_number,
-  `first #${idemFirst.body?.order_number}, second #${idemSecond.body?.order_number}`,
-);
-if (idemFirst.body?.placed && idemFirst.body?.order_number) {
-  created.orders.push(idemFirst.body.order_number);
+async function snapshotDemoLocation() {
+  const orders = await snapshotTable("orders", (q) =>
+    q.eq("location_id", DEMO_LOCATION_ID).order("id"),
+  );
+  const orderIds = orders.map((o) => o.id);
+  const orderItems = orderIds.length
+    ? await snapshotTable("order_items", (q) => q.in("order_id", orderIds).order("id"))
+    : [];
+  const orderStatusEvents = orderIds.length
+    ? await snapshotTable("order_status_events", (q) => q.in("order_id", orderIds).order("id"))
+    : [];
+  const bookings = await snapshotTable("bookings", (q) =>
+    q.eq("location_id", DEMO_LOCATION_ID).order("id"),
+  );
+  const calls = await snapshotTable("calls", (q) => q.eq("location_id", DEMO_LOCATION_ID).order("id"));
+  const menuItems = await snapshotTable("menu_items", (q) =>
+    q.eq("location_id", DEMO_LOCATION_ID).order("id"),
+  );
+  return { orders, order_items: orderItems, bookings, calls, order_status_events: orderStatusEvents, menu_items: menuItems };
 }
 
-// ── Transfer ────────────────────────────────────────────────────────
+const tableCounts = (snapshot) =>
+  Object.fromEntries(Object.entries(snapshot).map(([table, rows]) => [table, rows.length]));
 
-const transfer = await call("transfer", { reason: "Allergy question" });
-check(
-  "transfer returns a number",
-  typeof transfer.body?.number === "string",
-  transfer.body?.number,
-);
+// ── main ─────────────────────────────────────────────────────────────
 
-// ── Assistant config ────────────────────────────────────────────────
+async function main() {
+  const before = await snapshotDemoLocation();
+  console.log("before (demo location row counts):", JSON.stringify(tableCounts(before)));
 
-const assistant = await call("assistant", {});
-check(
-  "demo location is live with the kill switch off, so the assistant is enabled",
-  assistant.body?.assistant_enabled === true &&
-    assistant.body?.kill_switch_on === false &&
-    assistant.body?.is_live === true,
-  JSON.stringify({
-    assistant_enabled: assistant.body?.assistant_enabled,
-    kill_switch_on: assistant.body?.kill_switch_on,
-    is_live: assistant.body?.is_live,
-  }),
-);
-check(
-  "prompt has no unfilled placeholders",
-  typeof assistant.body?.system_prompt === "string" &&
-    !/\{\{[a-z_]+\}\}/.test(assistant.body.system_prompt),
-);
+  const demoLocation = await mustOk(
+    admin.from("locations").select("*").eq("id", DEMO_LOCATION_ID).single(),
+    "read demo location",
+  );
+  const cacioPepe = await mustOk(
+    admin
+      .from("menu_items")
+      .select("price_cents")
+      .eq("location_id", DEMO_LOCATION_ID)
+      .eq("name", "Cacio e Pepe")
+      .single(),
+    "read Cacio e Pepe price",
+  );
 
-// Fail-closed. The brief did not know this route could refuse at all --
-// it assumed every location always gets a usable prompt. It now fails
-// closed on two independent conditions, each proven against its own
-// throwaway location so the demo location's live switch is never
-// touched by this run.
-const killSwitchAssistant = await call("assistant", {}, killSwitchSecret);
-check(
-  "assistant fails closed when the kill switch is on",
-  killSwitchAssistant.body?.assistant_enabled === false &&
-    killSwitchAssistant.body?.disabled_reason === "kill_switch" &&
-    killSwitchAssistant.body?.system_prompt === null &&
-    killSwitchAssistant.body?.greeting === null,
-  JSON.stringify(killSwitchAssistant.body),
-);
+  let canaries = null;
+  let runError = null;
 
-const notLiveAssistant = await call("assistant", {}, notLiveSecret);
-check(
-  "assistant fails closed when the location is not live",
-  notLiveAssistant.body?.assistant_enabled === false &&
-    notLiveAssistant.body?.disabled_reason === "not_live" &&
-    notLiveAssistant.body?.system_prompt === null &&
-    notLiveAssistant.body?.greeting === null,
-  JSON.stringify(notLiveAssistant.body),
-);
+  try {
+    canaries = await provisionCanaries(demoLocation.org_id);
+    await runChecks(demoLocation, cacioPepe, canaries);
+  } catch (err) {
+    runError = err;
+    console.error("\nFATAL — a check threw instead of failing normally:", err.stack ?? err);
+  } finally {
+    // Cleanup runs even when a check above threw partway through, so a
+    // crash never leaves this run's writes (or its canary tenants)
+    // behind for the next one to trip over.
+    await teardownDemoWrites();
+    await teardownCanaries();
+  }
 
-// ── Report ──────────────────────────────────────────────────────────
+  const after = await snapshotDemoLocation();
+  const unchanged = JSON.stringify(before) === JSON.stringify(after);
+  check(
+    "demo location's orders, order_items, bookings, calls, order_status_events and menu_items are byte-for-byte unchanged",
+    unchanged,
+    unchanged
+      ? JSON.stringify(tableCounts(after))
+      : `before ${JSON.stringify(tableCounts(before))}, after ${JSON.stringify(tableCounts(after))}`,
+  );
 
-const failed = results.filter((r) => !r.pass);
-console.log(`\n${results.length - failed.length}/${results.length} passed`);
-console.log(
-  `\ncreated (needs cleanup): orders ${JSON.stringify(created.orders)}, bookings ${JSON.stringify(created.bookings)}`,
-);
-process.exit(failed.length ? 1 : 0);
+  // ── report ────────────────────────────────────────────────────────
+
+  const failed = results.filter((r) => !r.pass);
+  console.log(`\n${results.length - failed.length}/${results.length} passed`);
+  console.log(`\nafter (demo location row counts):`, JSON.stringify(tableCounts(after)));
+
+  if (runError || failed.length) process.exit(1);
+  process.exit(0);
+}
+
+async function runChecks(demoLocation, cacioPepe, canaries) {
+  // ── Auth ──────────────────────────────────────────────────────────
+
+  const noAuth = await call("menu", {}, null);
+  check("unauthenticated menu is rejected", noAuth.status === 401);
+
+  const badAuth = await call("menu", {}, "wrong-secret");
+  check("wrong secret is rejected", badAuth.status === 401);
+
+  // The auth gate (lib/agent/auth.ts::locationForSecret) is shared code
+  // every route calls first, but "shared" is not "tested" -- proving it
+  // once on a read tells you nothing about the two routes that write.
+  // A write reaching another tenant is worse than a read reaching one,
+  // so both WRITE endpoints get their own missing/wrong-secret pair.
+  const noAuthOrder = await call("order", {}, null);
+  check("unauthenticated order is rejected", noAuthOrder.status === 401);
+  const badAuthOrder = await call("order", {}, "wrong-secret");
+  check("wrong secret is rejected on order", badAuthOrder.status === 401);
+
+  const noAuthReservation = await call("reservation", {}, null);
+  check("unauthenticated reservation is rejected", noAuthReservation.status === 401);
+  const badAuthReservation = await call("reservation", {}, "wrong-secret");
+  check("wrong secret is rejected on reservation", badAuthReservation.status === 401);
+
+  // ── Menu ──────────────────────────────────────────────────────────
+
+  const menu = await call("menu", { item: "Squid Ink Tonnarelli" });
+  check("menu returns categories", Array.isArray(menu.body?.categories));
+  check(
+    "menu marks sold out items",
+    (menu.body?.sold_out ?? []).includes("Squid Ink Tonnarelli") &&
+      (menu.body?.sold_out ?? []).includes("Bistecca, 32oz"),
+    JSON.stringify(menu.body?.sold_out),
+  );
+
+  // Not just "some string came back" -- the suggestion has to be a real
+  // item on THIS menu, in stock, or an agent that reads it aloud is
+  // promising food the kitchen cannot make.
+  const allMenuItems = (menu.body?.categories ?? []).flatMap((c) => c.items);
+  const suggested = allMenuItems.find((i) => i.name === menu.body?.alternative);
+  check(
+    "menu suggests an alternative that is an actual in-stock item on this menu",
+    typeof menu.body?.alternative === "string" &&
+      menu.body.alternative.length > 0 &&
+      suggested !== undefined &&
+      suggested.sold_out === false,
+    String(menu.body?.alternative),
+  );
+
+  // Cross-tenant isolation. A secret decides the location for every tool
+  // call (lib/agent/auth.ts::locationForSecret) -- nothing in a request
+  // body can move it. Proving this from the outside means fetching two
+  // different locations' menus with two different secrets and checking
+  // each side only ever sees its own data, not asserting on the auth
+  // function's source. The canary tenant is provisioned by this script,
+  // above, specifically so this is not the ad hoc, unreproducible setup
+  // it used to be.
+  const demoMenu = await call("menu", {});
+  const canaryMenu = await call("menu", {}, canaries.isolatedSecret);
+  const demoItemNames = (demoMenu.body?.categories ?? []).flatMap((c) =>
+    c.items.map((i) => i.name),
+  );
+  const canaryItemNames = (canaryMenu.body?.categories ?? []).flatMap((c) =>
+    c.items.map((i) => i.name),
+  );
+  check(
+    "demo secret cannot see the canary location's menu item",
+    !demoItemNames.includes("Zzyzx Canary Special"),
+    JSON.stringify(demoItemNames),
+  );
+  check(
+    "canary secret sees its own item and none of the demo menu",
+    canaryItemNames.includes("Zzyzx Canary Special") &&
+      !canaryItemNames.some((n) => demoItemNames.includes(n)),
+    JSON.stringify(canaryItemNames),
+  );
+
+  // Isolation on the READ side (get_menu) says nothing about the WRITE
+  // side. "Cacio e Pepe" exists only on the demo menu -- the canary
+  // tenant's own menu has exactly one item and it is not this one -- so
+  // a canary secret asking to order it has to be refused the same way
+  // an item that does not exist anywhere would be. This exercises
+  // place_order's location-scoped menu_items join, not just the route's
+  // name lookup: even if the route's matching ever stopped being
+  // per-tenant, the database function prices and validates every id
+  // against `m.location_id = p_location_id` and would still refuse it.
+  const canaryOrderAttempt = await call(
+    "order",
+    {
+      items: [{ name: "Cacio e Pepe", quantity: 1 }],
+      type: "pickup",
+      customer_name: "Task14 Canary Probe",
+      customer_phone: "+15105559999",
+    },
+    canaries.isolatedSecret,
+  );
+  check(
+    "a canary secret cannot place an order against the demo location's menu",
+    canaryOrderAttempt.body?.placed === false && canaryOrderAttempt.body?.reason === "unknown_item",
+    JSON.stringify(canaryOrderAttempt.body),
+  );
+
+  // ── Hours ─────────────────────────────────────────────────────────
+
+  const hours = await call("hours", {});
+  const hoursRows = await mustOk(
+    admin.from("hours").select("day_of_week, open_time, close_time, is_closed").eq("location_id", DEMO_LOCATION_ID),
+    "read hours for independent check",
+  );
+  const holidayRows = await mustOk(
+    admin.from("holiday_hours").select("date, is_closed, open_time, close_time").eq("location_id", DEMO_LOCATION_ID),
+    "read holiday_hours for independent check",
+  );
+  const expectedHoursState = computeOpenState(new Date(), demoLocation.timezone, hoursRows, holidayRows);
+  check(
+    "hours answers open_now, matching today's real hours row computed independently of the route",
+    hours.body?.open_now === expectedHoursState.open_now && hours.body?.today === expectedHoursState.today,
+    `expected ${JSON.stringify(expectedHoursState)}, got open_now=${hours.body?.open_now} today=${JSON.stringify(hours.body?.today)}`,
+  );
+
+  // ── Availability ────────────────────────────────────────────────────
+
+  const when = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+  const avail = await call("availability", { requested_at: when, party_size: 2 });
+  const slot = demoLocation.reservation_slot_minutes;
+  const whenDate = new Date(when);
+  const windowStart = new Date(whenDate.getTime() - slot * 60_000).toISOString();
+  const windowEnd = new Date(whenDate.getTime() + slot * 60_000).toISOString();
+  const overlappingBookings = await mustOk(
+    admin
+      .from("bookings")
+      .select("requested_at, party_size")
+      .eq("location_id", DEMO_LOCATION_ID)
+      .in("status", ["requested", "confirmed", "seated"])
+      .gte("requested_at", windowStart)
+      .lte("requested_at", windowEnd),
+    "read overlapping bookings for independent availability check",
+  );
+  const expectedTaken = seatsTakenJS(overlappingBookings, whenDate, slot);
+  const expectedAvailable = expectedTaken + 2 <= demoLocation.seats;
+  check(
+    "availability answers, matching real booking occupancy computed independently of the route",
+    avail.body?.available === expectedAvailable,
+    `expected ${expectedAvailable} (${expectedTaken}+2 seats taken of ${demoLocation.seats}), got ${avail.body?.available}`,
+  );
+
+  // The brief only checked `available === false` for an oversized party.
+  // The route now answers with a distinct, speakable reason
+  // (app/api/agent/availability/route.ts) rather than folding it into the
+  // same "no tables" answer a full house gets -- an agent needs to say
+  // something different to a party of 99 than to a party of 2 that just
+  // didn't fit.
+  const huge = await call("availability", { requested_at: when, party_size: 99 });
+  check(
+    "oversized party is refused with a distinct reason",
+    huge.body?.available === false && huge.body?.reason === "large_party",
+    JSON.stringify(huge.body),
+  );
+
+  // Past times are refused outright now (lib/agent/availability.ts::isRequestInPast),
+  // not answered with `available: false` -- a caller asking about a moment
+  // already gone should never hear a confident answer either way.
+  const pastWhen = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+  const pastAvail = await call("availability", { requested_at: pastWhen, party_size: 2 });
+  check(
+    "past availability request is refused, not answered",
+    pastAvail.status === 400 && pastAvail.body?.ok === false,
+    JSON.stringify(pastAvail.body),
+  );
+
+  // ── Reservation ─────────────────────────────────────────────────────
+
+  const reservationWhen = new Date(Date.now() + 26 * 3600 * 1000).toISOString();
+  const booking = await call("reservation", {
+    requested_at: reservationWhen,
+    party_size: 2,
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check("reservation books", booking.body?.booked === true, booking.body?.when);
+  if (booking.body?.booked && booking.body?.booking_id) {
+    created.bookings.push(booking.body.booking_id);
+  }
+
+  // The capacity decision now lives in public.book_table
+  // (supabase/migrations/20260812000200_book_table.sql), which serialises
+  // on the location and counts peak occupancy under that lock rather than
+  // the route reading-then-writing in two round trips. This run does not
+  // try to exhaust the demo location's 40 seats -- that would mean leaving
+  // dozens of throwaway bookings against real seeded data -- so what is
+  // checked here is the same fail-closed shape the availability endpoint
+  // gets: a request for a time already past is refused before book_table
+  // is ever called.
+  const pastReservation = await call("reservation", {
+    requested_at: pastWhen,
+    party_size: 2,
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check(
+    "reservation for a past time is refused",
+    pastReservation.status === 400 && pastReservation.body?.ok === false,
+    JSON.stringify(pastReservation.body),
+  );
+
+  const oversizedReservation = await call("reservation", {
+    requested_at: reservationWhen,
+    party_size: 99,
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check(
+    "reservation for an over-max party is refused before booking",
+    oversizedReservation.status === 400 && oversizedReservation.body?.ok === false,
+    JSON.stringify(oversizedReservation.body),
+  );
+
+  // ── Order ───────────────────────────────────────────────────────────
+
+  const order = await call("order", {
+    items: [{ name: "Cacio e Pepe", quantity: 2 }],
+    type: "pickup",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check(
+    "order is placed",
+    order.body?.placed === true,
+    `#${order.body?.order_number} ${order.body?.total}`,
+  );
+  if (order.body?.placed && order.body?.order_number) {
+    created.orders.push(order.body.order_number);
+  }
+
+  // The number a restaurant checks first. place_order
+  // (supabase/migrations/20260812000400_place_order.sql) prices every
+  // line from menu_items and applies locations.tax_rate_bps server-side
+  // -- the route never sends a price. Computed here from the same two
+  // sources, independently, in integer cents throughout (no float ever
+  // holds money, matching lib/agent/orders.ts::priceOrder and the
+  // function's own `round(subtotal * bps / 10000)`), then formatted the
+  // same way the route formats its response for an exact string compare.
+  const expectedSubtotalCents = cacioPepe.price_cents * 2;
+  const expectedTaxCents = Math.round((expectedSubtotalCents * demoLocation.tax_rate_bps) / 10_000);
+  const expectedTotalCents = expectedSubtotalCents + expectedTaxCents;
+  const expectedTotal = `$${(expectedTotalCents / 100).toFixed(2)}`;
+  check(
+    "order total matches menu price × quantity plus tax, computed independently from menu_items and locations.tax_rate_bps",
+    order.body?.total === expectedTotal,
+    `expected ${expectedTotal} (subtotal ${expectedSubtotalCents}c + tax ${expectedTaxCents}c), got ${order.body?.total}`,
+  );
+
+  const soldOut = await call("order", {
+    items: [{ name: "Squid Ink Tonnarelli", quantity: 1 }],
+    type: "pickup",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check(
+    "sold out item is refused, distinctly from unknown",
+    soldOut.body?.reason === "sold_out" && soldOut.body?.item === "Squid Ink Tonnarelli",
+    JSON.stringify(soldOut.body),
+  );
+
+  const unknown = await call("order", {
+    items: [{ name: "Chicken Tikka Masala", quantity: 1 }],
+    type: "pickup",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check(
+    "unknown item is refused, distinctly from sold out",
+    unknown.body?.reason === "unknown_item",
+    JSON.stringify(unknown.body),
+  );
+
+  // Order type mismatch. The demo location is pickup-only
+  // (order_types = 'pickup'), so a delivery request must be refused by
+  // name, not silently accepted as pickup or 500ing.
+  const wrongType = await call("order", {
+    items: [{ name: "Cacio e Pepe", quantity: 1 }],
+    type: "delivery",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+    address: "123 Test St",
+  });
+  check(
+    "delivery order is refused at a pickup-only location",
+    wrongType.body?.placed === false && wrongType.body?.reason === "no_delivery",
+    JSON.stringify(wrongType.body),
+  );
+
+  // A quantity the route cannot parse ("two" is not a number
+  // normaliseQuantity accepts) is not a menu decision -- lib/agent/orders.ts
+  // treats it the same as a missing name or phone number: agentFail, not
+  // agentOk({placed:false}). This is one of the "more reasons than the
+  // brief knows about" the task called out.
+  const badQuantity = await call("order", {
+    items: [{ name: "Cacio e Pepe", quantity: "two" }],
+    type: "pickup",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check(
+    "an unparseable quantity is refused as a speakable failure, not a menu reason",
+    badQuantity.status === 400 &&
+      badQuantity.body?.ok === false &&
+      typeof badQuantity.body?.error === "string",
+    JSON.stringify(badQuantity.body),
+  );
+
+  // Order-size limits (lib/agent/orders.ts::MAX_ORDER_LINES /
+  // MAX_ITEM_QUANTITY, mirrored as the authority in
+  // supabase/migrations/20260812000400_place_order.sql's c_max_lines /
+  // c_max_qty). Neither limit existed in the brief's script.
+  const tooManyLines = await call("order", {
+    items: Array.from({ length: 41 }, () => ({ name: "Cacio e Pepe", quantity: 1 })),
+    type: "pickup",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check(
+    "more than 40 distinct lines is refused before touching the menu",
+    tooManyLines.status === 400 && tooManyLines.body?.ok === false,
+    JSON.stringify(tooManyLines.body),
+  );
+
+  const tooManyOfOne = await call("order", {
+    items: [{ name: "Cacio e Pepe", quantity: 51 }],
+    type: "pickup",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+  });
+  check(
+    "more than 50 of one item is refused",
+    tooManyOfOne.status === 400 && tooManyOfOne.body?.ok === false,
+    JSON.stringify(tooManyOfOne.body),
+  );
+
+  // Idempotency. public.place_order fingerprints provider_call_id + type +
+  // customer + address + sorted lines, and a retry inside the same call
+  // returns the order that already exists instead of writing a second one
+  // -- this is now checked at the HTTP boundary the agent actually sees:
+  // two identical tool calls, same order_number back both times.
+  const providerCallId = `task14-idem-${Date.now()}`;
+  const idemFirst = await call("order", {
+    items: [{ name: "Bucatini Amatriciana", quantity: 1 }],
+    type: "pickup",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+    provider_call_id: providerCallId,
+  });
+  const idemSecond = await call("order", {
+    items: [{ name: "Bucatini Amatriciana", quantity: 1 }],
+    type: "pickup",
+    customer_name: "Task14 QA Caller",
+    customer_phone: "+15105551014",
+    provider_call_id: providerCallId,
+  });
+  check(
+    "a retried identical order does not create a second order",
+    idemFirst.body?.placed === true &&
+      idemSecond.body?.placed === true &&
+      idemFirst.body?.order_number != null &&
+      idemFirst.body?.order_number === idemSecond.body?.order_number,
+    `first #${idemFirst.body?.order_number}, second #${idemSecond.body?.order_number}`,
+  );
+  if (idemFirst.body?.placed && idemFirst.body?.order_number) {
+    created.orders.push(idemFirst.body.order_number);
+  }
+
+  // ── Transfer ────────────────────────────────────────────────────────
+
+  const transfer = await call("transfer", { reason: "Allergy question" });
+  check(
+    "transfer returns the location's actual fallback number, not just some string",
+    typeof transfer.body?.number === "string" &&
+      transfer.body.number.length > 0 &&
+      transfer.body.number === demoLocation.fallback_human_number,
+    `expected ${demoLocation.fallback_human_number}, got ${JSON.stringify(transfer.body?.number)}`,
+  );
+
+  // ── Assistant config ────────────────────────────────────────────────
+
+  const assistant = await call("assistant", {});
+  check(
+    "demo location is live with the kill switch off, so the assistant is enabled",
+    assistant.body?.assistant_enabled === true &&
+      assistant.body?.kill_switch_on === false &&
+      assistant.body?.is_live === true,
+    JSON.stringify({
+      assistant_enabled: assistant.body?.assistant_enabled,
+      kill_switch_on: assistant.body?.kill_switch_on,
+      is_live: assistant.body?.is_live,
+    }),
+  );
+
+  const prompt = assistant.body?.system_prompt;
+  // {{[a-z_]+}} only matched a lowercase-and-underscore placeholder name
+  // -- it would silently pass a leftover {{Upper}} or {{item-name}} (a
+  // hyphen, or a capital letter, is all it takes to escape the old
+  // pattern) as if it were ordinary prompt text a caller should hear
+  // read aloud. Any {{...}} at all is a bug: every real placeholder is
+  // always substituted by lib/agent/prompt.ts::buildSystemPrompt before
+  // this route returns.
+  const hasUnfilledPlaceholder = /\{\{[^{}]+\}\}/.test(prompt ?? "");
+  // A prompt this short could not possibly contain the safety rules
+  // below -- an empty string, or a stub, passed the old length-blind
+  // regex check vacuously. 3000 is comfortably below the real prompt's
+  // length (~5700 characters after substitution) and comfortably above
+  // anything that could plausibly be a stand-in.
+  const isSubstantial = typeof prompt === "string" && prompt.length > 3000;
+  // Two verbatim, load-bearing lines from lib/agent/prompt.ts's
+  // SYSTEM_PROMPT_TEMPLATE that never get substituted -- proving this is
+  // actually the restaurant's real prompt (with its payment and allergy
+  // hard rules intact), not merely "some non-empty string with no curly
+  // braces in it".
+  const hasPaymentRule =
+    typeof prompt === "string" &&
+    prompt.includes("Never take a card number. Never take any payment details.");
+  const hasAllergyRule =
+    typeof prompt === "string" &&
+    prompt.includes(
+      "If anyone mentions an allergy, an intolerance, celiac, or asks what is in a dish for a health reason, stop.",
+    );
+  check(
+    "prompt is substantial, contains load-bearing spec lines, and has no unfilled placeholders",
+    isSubstantial && hasPaymentRule && hasAllergyRule && !hasUnfilledPlaceholder,
+    `length=${typeof prompt === "string" ? prompt.length : "n/a"} payment_rule=${hasPaymentRule} allergy_rule=${hasAllergyRule} unfilled={{...}}=${hasUnfilledPlaceholder}`,
+  );
+
+  // Fail-closed. The brief did not know this route could refuse at all --
+  // it assumed every location always gets a usable prompt. It now fails
+  // closed on two independent conditions, each proven against its own
+  // throwaway location so the demo location's live switch is never
+  // touched by this run.
+  const killSwitchAssistant = await call("assistant", {}, canaries.killSwitchSecret);
+  check(
+    "assistant fails closed when the kill switch is on",
+    killSwitchAssistant.body?.assistant_enabled === false &&
+      killSwitchAssistant.body?.disabled_reason === "kill_switch" &&
+      killSwitchAssistant.body?.system_prompt === null &&
+      killSwitchAssistant.body?.greeting === null,
+    JSON.stringify(killSwitchAssistant.body),
+  );
+
+  const notLiveAssistant = await call("assistant", {}, canaries.notLiveSecret);
+  check(
+    "assistant fails closed when the location is not live",
+    notLiveAssistant.body?.assistant_enabled === false &&
+      notLiveAssistant.body?.disabled_reason === "not_live" &&
+      notLiveAssistant.body?.system_prompt === null &&
+      notLiveAssistant.body?.greeting === null,
+    JSON.stringify(notLiveAssistant.body),
+  );
+}
+
+await main();
