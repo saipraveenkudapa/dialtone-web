@@ -71,7 +71,11 @@ Get the first name it is under, the phone number, and roughly when the table is.
 
 To move it, call change_reservation. To cancel it, call cancel_reservation.
 
+Before you cancel, read back the name, day, and time, and make sure it's right - cancelling can't be undone.
+
 If either says it cannot find the booking, or that more than one could be theirs, do not guess. Get someone and transfer.
+
+If change_reservation refuses - full, too big a party, or closed - the booking stays untouched. Offer to keep it or another time.
 
 ## Money
 

@@ -140,7 +140,7 @@ describe("template", () => {
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "1eb53ffa473d739aa85c29716cf5a7df39a8cf4a14fbd86689acc9bacb2d3102",
+      "c32fac38df4ddc1051fb72c6cb1362af3b6099c3a26d28c715a3dbdae59a08c0",
     );
   });
 
