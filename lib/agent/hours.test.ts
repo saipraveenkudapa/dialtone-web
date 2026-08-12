@@ -100,4 +100,74 @@ describe("open state", () => {
     expect(state.today).toBe("closed");
     expect(state.next_open).toBe("Wednesday at 5:00 PM");
   });
+
+  it("returns null when nothing opens in the next seven days", () => {
+    // Every weekday is closed, so the forward search exhausts all 7 days
+    // without finding an opening. This is the case where the agent truly
+    // has no answer for "when do you open" and must say so, not guess.
+    const allClosed = Array.from({ length: 7 }, (_, day) => ({
+      day_of_week: day,
+      open_time: null,
+      close_time: null,
+      is_closed: true,
+    }));
+    const state = openState({
+      now: new Date("2026-08-11T02:00:00Z"), // Monday 7pm Los Angeles (local date 2026-08-10)
+      timezone: tz,
+      hours: allClosed,
+      holidays: [],
+    });
+    expect(state.open_now).toBe(false);
+    expect(state.today).toBe("closed");
+    expect(state.next_open).toBeNull();
+  });
+
+  it("lets a forward-search holiday open a day the weekday row marks closed", () => {
+    // Every weekday row is closed, so on its own the search would never
+    // find an opening. A holiday_hours row for 2026-08-12 (Wednesday) with
+    // is_closed: false and explicit times must override that closed
+    // weekday row and be the day next_open names.
+    const allClosed = Array.from({ length: 7 }, (_, day) => ({
+      day_of_week: day,
+      open_time: null,
+      close_time: null,
+      is_closed: true,
+    }));
+    const state = openState({
+      now: new Date("2026-08-11T02:00:00Z"), // Monday 7pm Los Angeles (local date 2026-08-10)
+      timezone: tz,
+      hours: allClosed,
+      holidays: [
+        { date: "2026-08-12", is_closed: false, open_time: "09:00:00", close_time: "14:00:00" },
+      ],
+    });
+    expect(state.open_now).toBe(false);
+    expect(state.today).toBe("closed");
+    expect(state.next_open).toBe("Wednesday at 9:00 AM");
+  });
+
+  it("steps across the November DST fall-back without skipping or repeating a day", () => {
+    // Only Sunday is open. 2026-10-26T19:00:00Z is Monday, 12:00 PM Los
+    // Angeles (PDT) -- verified via Intl.DateTimeFormat, local date
+    // 2026-10-26. The 7-day forward search (Tue Oct 27 .. Sun Nov 1) walks
+    // straight through the Nov 1, 2026 fall-back transition (2am -> 1am
+    // local). Because day-stepping is pure calendar-string arithmetic, not
+    // wall-clock math, it must land on Sunday, Nov 1 -- not Saturday (a
+    // repeat) or Monday, Nov 2 (a skip).
+    const sundayOnly = Array.from({ length: 7 }, (_, day) => ({
+      day_of_week: day,
+      open_time: day === 0 ? "10:00:00" : null,
+      close_time: day === 0 ? "14:00:00" : null,
+      is_closed: day !== 0,
+    }));
+    const state = openState({
+      now: new Date("2026-10-26T19:00:00Z"),
+      timezone: tz,
+      hours: sundayOnly,
+      holidays: [],
+    });
+    expect(state.open_now).toBe(false);
+    expect(state.today).toBe("closed");
+    expect(state.next_open).toBe("Sunday at 10:00 AM");
+  });
 });
