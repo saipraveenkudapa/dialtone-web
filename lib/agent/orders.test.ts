@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildOrderLines, matchItem, normaliseQuantity, priceOrder, type PricedItem } from "./orders";
+import {
+  buildOrderLines,
+  matchItem,
+  normaliseOrderType,
+  normaliseQuantity,
+  priceOrder,
+  MAX_ITEM_QUANTITY,
+  MAX_ORDER_LINES,
+  type PricedItem,
+} from "./orders";
 
 const items: PricedItem[] = [
   { id: "i1", name: "Bucatini Amatriciana", price_cents: 2400, sold_out_until: null },
@@ -238,5 +247,101 @@ describe("buildOrderLines", () => {
     // priceOrder's own guard throws on a bad quantity as a last resort;
     // this is the route's actual call path, and it must not throw here.
     expect(() => priceOrder(result.lines, 0)).not.toThrow();
+  });
+});
+
+describe("reading the order type a caller asked for", () => {
+  it("takes the two values the tool contract defines", () => {
+    expect(normaliseOrderType("pickup")).toBe("pickup");
+    expect(normaliseOrderType("delivery")).toBe("delivery");
+  });
+
+  // The bug this replaced: `body.type === "delivery" ? ... : "pickup"`
+  // turned every one of these into a PICKUP order and dropped the
+  // address with it, so a caller who asked for delivery was told to come
+  // and collect.
+  it("reads a capitalised or padded delivery as delivery, not as pickup", () => {
+    expect(normaliseOrderType("Delivery")).toBe("delivery");
+    expect(normaliseOrderType("DELIVERY")).toBe("delivery");
+    expect(normaliseOrderType("  delivery  ")).toBe("delivery");
+  });
+
+  it("reads a capitalised or padded pickup as pickup", () => {
+    expect(normaliseOrderType("Pickup")).toBe("pickup");
+    expect(normaliseOrderType(" PICKUP ")).toBe("pickup");
+  });
+
+  it("defaults an absent type to pickup, the ordinary case", () => {
+    expect(normaliseOrderType(undefined)).toBe("pickup");
+    expect(normaliseOrderType(null)).toBe("pickup");
+    expect(normaliseOrderType("   ")).toBe("pickup");
+  });
+
+  // Refusing and asking is one more question; guessing is a driver sent
+  // to an address nobody gave, or a caller waiting at home for food
+  // sitting on a pickup shelf.
+  it("returns null for a value it cannot recognise rather than guessing pickup", () => {
+    expect(normaliseOrderType("takeaway")).toBeNull();
+    expect(normaliseOrderType("dine-in")).toBeNull();
+    expect(normaliseOrderType("drop it off")).toBeNull();
+    expect(normaliseOrderType("")).toBe("pickup");
+  });
+
+  it("returns null for a value that is not a string at all", () => {
+    expect(normaliseOrderType(1)).toBeNull();
+    expect(normaliseOrderType({ type: "delivery" })).toBeNull();
+    expect(normaliseOrderType(["delivery"])).toBeNull();
+  });
+});
+
+describe("the size of a phone order", () => {
+  it("takes an order right up to the line limit", () => {
+    const requested = Array.from({ length: MAX_ORDER_LINES }, () => ({ name: "bucatini" }));
+    expect(buildOrderLines(items, requested).ok).toBe(true);
+  });
+
+  it("refuses one line past the limit, before touching any of them", () => {
+    const requested = Array.from({ length: MAX_ORDER_LINES + 1 }, () => ({ name: "bucatini" }));
+    expect(buildOrderLines(items, requested)).toEqual({
+      ok: false,
+      reason: "too_many_items",
+      item: undefined,
+    });
+  });
+
+  it("takes a quantity right up to the per-item limit", () => {
+    const result = buildOrderLines(items, [{ name: "bucatini", quantity: MAX_ITEM_QUANTITY }]);
+    expect(result.ok).toBe(true);
+  });
+
+  // A transcript reads "fifty thousand" when someone says "fifteen" down
+  // a bad line. Unbounded, that priced and printed as a five-figure
+  // ticket; now it is a sentence the agent can say.
+  it("refuses one past the per-item limit, and names the item it refused", () => {
+    const result = buildOrderLines(items, [{ name: "bucatini", quantity: MAX_ITEM_QUANTITY + 1 }]);
+    expect(result).toEqual({
+      ok: false,
+      reason: "too_many_of_item",
+      item: "Bucatini Amatriciana",
+    });
+  });
+
+  it("refuses a wildly mis-heard quantity", () => {
+    const result = buildOrderLines(items, [{ name: "lasagne verdi", quantity: 50000 }]);
+    expect(result).toEqual({
+      ok: false,
+      reason: "too_many_of_item",
+      item: "Lasagne Verdi",
+    });
+  });
+
+  // The limits are duplicated in
+  // supabase/migrations/20260812000400_place_order.sql (c_max_lines,
+  // c_max_qty), which is the authority. If they drift, this route starts
+  // asking the database for orders it will refuse -- so the values are
+  // pinned here rather than left implicit.
+  it("keeps the limits the database enforces", () => {
+    expect(MAX_ORDER_LINES).toBe(40);
+    expect(MAX_ITEM_QUANTITY).toBe(50);
   });
 });
