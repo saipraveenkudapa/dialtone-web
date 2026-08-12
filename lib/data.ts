@@ -237,3 +237,119 @@ export async function getRecordingUrl(path: string | null) {
   }
   return data.signedUrl;
 }
+
+export type CallFilter =
+  | "all"
+  | "orders"
+  | "bookings"
+  | "transferred"
+  | "missed"
+  | "spam";
+
+export const CALL_FILTERS: { key: CallFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "orders", label: "Orders" },
+  { key: "bookings", label: "Bookings" },
+  { key: "transferred", label: "Sent to a human" },
+  { key: "missed", label: "Missed" },
+  { key: "spam", label: "Spam" },
+];
+
+export const CALLS_PER_PAGE = 50;
+
+/** One page of the call log, plus what each call produced.
+ *
+ *  Counting and filtering happen in Postgres rather than in the page, so
+ *  the log stays honest once a busy restaurant has thousands of calls. */
+export async function getCallsPage(
+  locationId: string,
+  { filter = "all", page = 1 }: { filter?: CallFilter; page?: number } = {},
+) {
+  const supabase = await supabaseServer();
+
+  const applyFilter = <T extends { eq: unknown; is: unknown }>(query: T): T => {
+    let q = query as unknown as {
+      eq: (c: string, v: unknown) => unknown;
+      is: (c: string, v: unknown) => unknown;
+    };
+    if (filter === "orders") q = q.eq("outcome", "order") as typeof q;
+    if (filter === "bookings") q = q.eq("outcome", "booking") as typeof q;
+    if (filter === "transferred") q = q.eq("transferred_to_human", true) as typeof q;
+    // Missed is the number this product is judged on: it reached us and
+    // nobody picked up. Robocalls are not missed business.
+    if (filter === "missed") {
+      q = q.is("answered_at", null) as typeof q;
+      q = q.eq("is_spam", false) as typeof q;
+    }
+    if (filter === "spam") q = q.eq("is_spam", true) as typeof q;
+    return q as unknown as T;
+  };
+
+  // Count first. PostgREST rejects a range whose offset is past the end
+  // of the result set (PGRST103) rather than returning an empty page, so
+  // asking for page 9 of a 2-page log would be a 500 -- and a stale
+  // bookmark or an edited URL is enough to hit it.
+  const { count, error: countError } = await applyFilter(
+    supabase
+      .from("calls")
+      .select("id", { count: "exact", head: true })
+      .eq("location_id", locationId),
+  );
+
+  if (countError) throw countError;
+
+  const total = count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / CALLS_PER_PAGE));
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const from = (safePage - 1) * CALLS_PER_PAGE;
+
+  const { data, error } = await applyFilter(
+    supabase.from("calls").select("*").eq("location_id", locationId),
+  )
+    .order("started_at", { ascending: false })
+    .range(from, from + CALLS_PER_PAGE - 1);
+
+  if (error) throw error;
+
+  const calls = (data ?? []) as CallRow[];
+  const ids = calls.map((c) => c.id);
+
+  // What came of each call, fetched in two queries rather than one per
+  // row.
+  const [orders, bookings] = ids.length
+    ? await Promise.all([
+        supabase
+          .from("orders")
+          .select("call_id, order_number, total_cents")
+          .in("call_id", ids),
+        supabase
+          .from("bookings")
+          .select("call_id, party_size, requested_at")
+          .in("call_id", ids),
+      ])
+    : [{ data: [] }, { data: [] }];
+
+  const orderByCall = new Map(
+    ((orders.data ?? []) as {
+      call_id: string;
+      order_number: number;
+      total_cents: number;
+    }[]).map((o) => [o.call_id, o]),
+  );
+  const bookingByCall = new Map(
+    ((bookings.data ?? []) as {
+      call_id: string;
+      party_size: number;
+      requested_at: string;
+    }[]).map((b) => [b.call_id, b]),
+  );
+
+  return {
+    calls,
+    total,
+    page: safePage,
+    pageCount,
+    orderByCall,
+    bookingByCall,
+  };
+}

@@ -616,3 +616,22 @@ a:hover { color: var(--color-accent); }
   gap: var(--space-3);
   font-size: 12px;
 }
+
+/* ── calls log ─────────────────────────────────────────────────────── */
+
+/* The system's .seg is built on radio inputs; here the options are links
+   so the filter lives in the URL. Same look, anchor semantics. */
+.filter-seg { flex-wrap: wrap; align-self: flex-start; }
+.filter-seg .seg-opt { text-decoration: none; color: inherit; }
+.filter-seg .seg-opt.is-on { background: var(--color-accent); color: var(--color-bg); }
+.filter-seg .seg-opt:not(.is-on):hover {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+
+.call-result { font-size: 13px; }
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 13px;
+}
