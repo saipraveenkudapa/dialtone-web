@@ -86,6 +86,17 @@ describe("availability", () => {
     expect(times).toContain("11:15 PM");
   });
 
+  it("qualifies an alternative that crosses into the previous day with 'yesterday'", () => {
+    // 12:15 AM Los Angeles on 2026-08-14 (daylight time, UTC-7).
+    // Verified with Intl.DateTimeFormat: 2026-08-14T07:15:00Z is
+    // "12:15 AM" on "2026-08-14" in America/Los_Angeles.
+    const earlySlot = new Date("2026-08-14T07:15:00Z");
+    const times = nearestTimes(earlySlot, "America/Los_Angeles", 2);
+    // -30 minutes lands at 11:45 PM on the previous local calendar day
+    // (2026-08-13), sorting before the +30 minute alternative.
+    expect(times).toEqual(["yesterday at 11:45 PM", "12:45 AM"]);
+  });
+
   describe("isRequestInPast", () => {
     const now = new Date("2026-08-13T02:00:00Z");
 
