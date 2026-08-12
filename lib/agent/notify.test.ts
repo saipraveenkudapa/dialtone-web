@@ -69,6 +69,60 @@ describe("order message", () => {
   });
 });
 
+/** A delivery ticket used to reach the pass with a customer, a total and
+ *  a 25-minute promise, and nowhere to take the food. */
+describe("the delivery address on the ticket", () => {
+  const deliveryOrder = {
+    ...baseOrder,
+    type: "delivery",
+    address: "1412 Telegraph Ave, Apt 3, Oakland, CA 94612",
+  };
+
+  it("carries the address on a delivery ticket", () => {
+    expect(orderMessage(deliveryOrder)).toContain("1412 Telegraph Ave, Apt 3, Oakland, CA 94612");
+  });
+
+  it("puts the address last, where it can be copied straight into a map", () => {
+    const lines = orderMessage(deliveryOrder).split("\n");
+    expect(lines[lines.length - 1]).toBe("1412 Telegraph Ave, Apt 3, Oakland, CA 94612");
+  });
+
+  it("still leads with the order number and type, and still shows the total", () => {
+    const message = orderMessage(deliveryOrder);
+    expect(message.startsWith("#1043 DELIVERY")).toBe(true);
+    expect(message).toContain("$80.48");
+    expect(message).toContain("2x Bucatini Amatriciana");
+  });
+
+  // A pickup order has no address to show. Printing one anyway is how a
+  // driver gets dispatched to a meal nobody ordered delivered -- so an
+  // address supplied on a pickup order is dropped, not shown.
+  it("shows no address on a pickup ticket, even if one was supplied", () => {
+    const message = orderMessage({ ...baseOrder, address: "1412 Telegraph Ave, Oakland, CA" });
+    expect(message).not.toContain("Telegraph");
+    expect(message.split("\n")).toHaveLength(5);
+  });
+
+  it("adds no empty line when a delivery order has no address to show", () => {
+    expect(orderMessage({ ...baseOrder, type: "delivery" }).endsWith("\n")).toBe(false);
+    expect(orderMessage({ ...baseOrder, type: "delivery", address: "   " }).split("\n")).toHaveLength(5);
+    expect(orderMessage({ ...baseOrder, type: "delivery", address: null }).split("\n")).toHaveLength(5);
+  });
+
+  // The address is a free-text field a caller speaks, which makes it one
+  // more place a misheard card number can land verbatim -- and the only
+  // new one this change introduces. A real address must not trip the
+  // guard, and a card number in that field must.
+  it("a real address does not look like a card number", () => {
+    expect(orderMessage(deliveryOrder)).not.toMatch(CARD_NUMBER_PATTERN);
+  });
+
+  it("the card-number guard reaches the address field too", () => {
+    const leaked = orderMessage({ ...deliveryOrder, address: "4111 1111 1111 1111" });
+    expect(leaked).toMatch(CARD_NUMBER_PATTERN);
+  });
+});
+
 /** Every field `sendOrderSms` doesn't look at, filled with plausible
  *  values, so each test only has to override what it's actually about. */
 function testLocation(overrides: Partial<LocationRow> = {}): LocationRow {

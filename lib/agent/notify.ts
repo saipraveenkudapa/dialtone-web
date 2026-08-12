@@ -9,6 +9,7 @@ export function orderMessage({
   type,
   customerName,
   customerPhone,
+  address,
   lines,
   totalCents,
   promisedMinutes,
@@ -17,16 +18,29 @@ export function orderMessage({
   type: string;
   customerName: string;
   customerPhone: string;
+  address?: string | null;
   lines: { quantity: number; name: string }[];
   totalCents: number;
   promisedMinutes: number;
 }) {
   const items = lines.map((l) => `${l.quantity}x ${l.name}`).join("\n");
+
+  // The address was missing entirely, so a DELIVERY ticket reached the
+  // pass naming a customer, a total and a 25-minute promise with nowhere
+  // to take it -- the one field that makes the order actionable. Last
+  // line so it is the easiest thing to copy into a phone's map, and only
+  // for delivery: a pickup ticket has no address to show, and printing a
+  // stale or irrelevant one on a collection order is how a driver ends up
+  // dispatched to a meal nobody ordered delivered.
+  const trimmedAddress = typeof address === "string" ? address.trim() : "";
+  const showAddress = type.trim().toLowerCase() === "delivery" && trimmedAddress !== "";
+
   return [
     `#${orderNumber} ${type.toUpperCase()} - ${promisedMinutes} min`,
     items,
     `Total $${(totalCents / 100).toFixed(2)}`,
     `${customerName} ${customerPhone}`,
+    ...(showAddress ? [trimmedAddress] : []),
   ].join("\n");
 }
 
