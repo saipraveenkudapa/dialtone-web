@@ -140,7 +140,7 @@ describe("template", () => {
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "c32fac38df4ddc1051fb72c6cb1362af3b6099c3a26d28c715a3dbdae59a08c0",
+      "e0c58aa9b92fd2506738a2b60252b97a3b5773727e15630b3235d329525cccb0",
     );
   });
 
@@ -148,7 +148,7 @@ describe("template", () => {
   // compile -- it's a string. It just silently breaks every call the
   // agent makes to it at runtime. This asserts the exact set of
   // tool-shaped names (snake_case words) mentioned in the prompt matches
-  // the eight tools that actually exist as routes under app/api/agent/.
+  // the nine tools that actually exist as routes under app/api/agent/.
   //
   // It catches the reverse too, which is the failure this product
   // actually shipped: for months the prompt listed "Book, change, or
@@ -158,7 +158,7 @@ describe("template", () => {
   // never fired for it, and a caller ringing to cancel met an agent that
   // believed it could help and had nothing to call. A capability named
   // in prose is not a capability; only a tool name in this set is.
-  it("only mentions the eight tools that actually exist", () => {
+  it("only mentions the nine tools that actually exist", () => {
     const withoutPlaceholders = SYSTEM_PROMPT_TEMPLATE.replace(
       /\{\{[a-z_]+\}\}/g,
       "",
@@ -178,6 +178,11 @@ describe("template", () => {
         "cancel_reservation",
         "place_order",
         "transfer_to_human",
+        // Added when transferring narrowed to catering and allergies:
+        // every other reason a call used to be handed to a person is now
+        // a message, so a prompt that never names this tool is a prompt
+        // that apologises to an upset caller and writes nothing down.
+        "take_message",
       ]),
     );
   });

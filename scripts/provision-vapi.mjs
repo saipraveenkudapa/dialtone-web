@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* Make the Vapi account match what this codebase expects for one
    location: one assistant, carrying the current system prompt, greeting
-   and a transfer destination, with the eight conversational tools
+   and a transfer destination, with the nine conversational tools
    registered against this deployment's real endpoints.
 
    This automates the by-hand steps in docs/vapi-setup.md ("Tool
@@ -203,7 +203,7 @@ async function fetchAssistantConfig() {
   return json;
 }
 
-// ── the eight tools ─────────────────────────────────────────────────
+// ── the nine tools ──────────────────────────────────────────────────
 //
 // One entry per app/api/agent/*/route.ts. `properties`/`required` are
 // the JSON Schema the MODEL sees and fills in from what the caller said
@@ -368,18 +368,54 @@ const TOOLS = [
     name: "transfer_to_human",
     path: "transfer",
     description:
-      "Transfer the call to a person at the restaurant. Use this for allergies or dietary health " +
-      "questions, a request for a manager, a large or catering order, anything about payment or " +
-      "money owed, anything you've failed twice to understand, or anything outside what you can do.",
+      "Transfer the call to a person at the restaurant. Only two things reach a person: a catering " +
+      "or large order, and anything to do with an allergy, an intolerance, celiac, or what is in a " +
+      "dish for a health reason. Everything else you cannot handle -- an upset caller, a complaint, " +
+      "a request for a manager, anything about payment or money owed, anything outside what you " +
+      "can do, anything you've failed twice to understand -- is take_message, not this.",
     properties: {
       reason: {
         type: "string",
         description:
-          'A short internal note on why you are transferring (e.g. "allergy question", "asked for ' +
-          'a manager"). This is not spoken to the caller.',
+          'A short internal note on why you are transferring (e.g. "allergy question", "catering ' +
+          'order"). This is not spoken to the caller.',
       },
     },
     required: [],
+    staticParameters: [{ key: "provider_call_id", value: "{{call.id}}" }],
+  },
+  {
+    name: "take_message",
+    path: "message",
+    // The counterweight to the narrowed transfer_to_human above. Every
+    // reason a call used to be handed to a person and no longer is ends
+    // here, so all three fields are required: a message the restaurant
+    // cannot act on is worse than none, because the caller has already
+    // been told somebody will ring them back. The route refuses (400)
+    // with a sentence to read out when any one of them is missing or
+    // could not be heard -- that is a question to ask the caller again,
+    // not an error.
+    description:
+      "Take a message for the restaurant to call back about. Use this for anything you cannot " +
+      "handle yourself except a catering order or an allergy question: an upset caller, a " +
+      "complaint about a past order, a request for a manager or a person, anything about payment, " +
+      "refunds or money owed, anything outside what you can do, and anything you still cannot make " +
+      "out after two tries. Apologise, take all three details, then call this and tell them " +
+      "someone will call them back.",
+    properties: {
+      caller_name: { type: "string", description: "The caller's name." },
+      callback_number: {
+        type: "string",
+        description: "The best number to call them back on, as they said it.",
+      },
+      message: {
+        type: "string",
+        description:
+          "What the message is about, in the caller's own words -- what to pass on to the " +
+          "restaurant. Never a card number.",
+      },
+    },
+    required: ["caller_name", "callback_number", "message"],
     staticParameters: [{ key: "provider_call_id", value: "{{call.id}}" }],
   },
 ];
@@ -578,9 +614,10 @@ async function main() {
     console.error("");
     console.error(
       "Refusing to provision: this location has no fallback_human_number configured. " +
-        "transfer_to_human -- the escape hatch for allergies, complaints, and anything the agent " +
-        "can't do -- would fail outright, and this assistant's transfer destination has nowhere to " +
-        "point. Set locations.fallback_human_number for this location first.",
+        "transfer_to_human -- the escape hatch for allergies and catering orders, the only two " +
+        "things that still reach a person -- would fail outright, and this assistant's transfer " +
+        "destination has nowhere to point. " +
+        "Set locations.fallback_human_number for this location first.",
     );
     process.exit(1);
   }

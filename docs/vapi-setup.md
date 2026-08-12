@@ -2,7 +2,7 @@
 
 Inbound only. Nothing here originates a call.
 
-This app exposes nine HTTP endpoints under `app/api/agent/`: eight tools the
+This app exposes ten HTTP endpoints under `app/api/agent/`: nine tools the
 agent calls mid-conversation, and one config endpoint (`/assistant`) that
 hands Vapi the system prompt for a call before it starts. Vapi (or whatever
 holds the call) is the thing that actually talks to the caller, decides
@@ -13,7 +13,7 @@ trusting a detail that matters to you, especially anything about Vapi's own
 wire format, which is outside this repo and can change under us.
 
 `scripts/provision-vapi.mjs` (step 3 below) does the Vapi-side wiring --
-creating or updating the assistant and registering all eight tools --
+creating or updating the assistant and registering all nine tools --
 against a real Vapi account, from the command line, idempotently. The
 "Tool reference" and "Assistant reference" sections below still describe
 every request/response shape and every value that goes on the assistant in
@@ -142,7 +142,7 @@ This is the automated version of everything below in this section and in
 "Assistant reference: what goes where" -- it fetches the config from step 2
 with the secret from step 1, then creates or updates a Vapi assistant carrying the
 system prompt, the greeting as `firstMessage`, temperature 0.3, and a
-transfer destination, and registers all eight tools against
+transfer destination, and registers all nine tools against
 `<public-https-base-url>`, each with the `x-dialtone-secret` header and a
 parameter schema matched against the routes themselves, not against prose.
 It prints the assistant id at the end -- put that in `VAPI_ASSISTANT_ID`.
@@ -158,7 +158,7 @@ Vapi assistant instead of creating a second one. "The assistant for this
 location" means the one whose `metadata.dialtone_location_id` equals
 `<location-id>` -- not its name, which a restaurant can rename and which
 two locations could share, and not a locally-cached id, since this script
-keeps no state of its own between runs. All eight tools (plus the native
+keeps no state of its own between runs. All nine tools (plus the native
 transfer destination below) live inline on the assistant object itself and
 are fully replaced on every run, so there is nothing separate to
 deduplicate.
@@ -183,7 +183,7 @@ without one and the assistant's transfer destination (below) would have
 nowhere to point.
 
 **`--dry-run`** prints the exact assistant payload it would send -- the
-full system prompt, all eight tools, the transfer destination -- with the
+full system prompt, all nine tools, the transfer destination -- with the
 secret redacted, and calls none of Vapi's write endpoints. It still fetches
 the real config from step 2, so it is a genuine preview, not a mock; it
 also still refuses a plain `http://` URL (the config fetch really happens
@@ -193,7 +193,7 @@ Omit the flag to actually create or update the assistant; that is the
 default.
 
 **Two mechanisms move the call, not one.** `transfer_to_human` (below) is
-a `function` tool like the other seven -- it hits `/api/agent/transfer`
+a `function` tool like the other eight -- it hits `/api/agent/transfer`
 and returns `{number}`, which is what the route's own docstring describes:
 best-effort logging, with the number handed back first. A `function` tool
 cannot itself move a live phone call; only Vapi's native `transferCall`
@@ -234,17 +234,18 @@ parse.
 | `get_hours` | `/api/agent/hours` | `{}` | `{open_now, today, next_open}`. `today` is `"5:00 PM to 10:00 PM"` or `"closed"`. Hours that cross midnight cannot be represented -- see the gap below. |
 | `check_availability` | `/api/agent/availability` | `{requested_at: ISO 8601, party_size: number}` | `{available, alternatives}`; `{available:false, reason:"large_party", alternatives:[]}` for a party over `max_party_size`; `{available:false, reason:"closed", hours_that_day, alternatives}` when the restaurant is shut at that time. Refuses (400) a past `requested_at` (2-minute clock-skew tolerance) or an unparseable date/party size, rather than answering `available:false` for either. Every string in `alternatives` has been checked -- see below. |
 | `create_reservation` | `/api/agent/reservation` | `{requested_at, party_size, customer_name, customer_phone, provider_call_id?}` | `{booked:true, booking_id, when}`, `{booked:false, reason:"full"}`, `{booked:false, reason:"large_party"}` for a party over `max_party_size` -- the same reason `check_availability` gives, so the two agree about one party -- or `{booked:false, reason:"closed", hours_that_day}` for a time outside opening hours. Refuses (400) a past `requested_at` or an unparseable date/party size. Idempotent per `provider_call_id` -- see below. `when` includes the date, not just the weekday. |
-| `cancel_reservation` | `/api/agent/cancel-reservation` | `{customer_name, customer_phone, booking_time: ISO 8601}` | `{cancelled:true, booking_id, when}` -- `when` is the cancelled booking's own time, with the date, in the location's timezone. `{cancelled:false, reason:"not_found"}` and `{cancelled:false, reason:"ambiguous"}` are ordinary answers the agent speaks or transfers on. Refuses (400) a `booking_time` that is already past or unparseable, or a missing name/phone. `booking_time` is *roughly* when the table is -- see the matching rule below. Retry-safe with no `provider_call_id`. |
+| `cancel_reservation` | `/api/agent/cancel-reservation` | `{customer_name, customer_phone, booking_time: ISO 8601}` | `{cancelled:true, booking_id, when}` -- `when` is the cancelled booking's own time, with the date, in the location's timezone. `{cancelled:false, reason:"not_found"}` and `{cancelled:false, reason:"ambiguous"}` are ordinary answers the agent speaks or takes a message on. Refuses (400) a `booking_time` that is already past or unparseable, or a missing name/phone. `booking_time` is *roughly* when the table is -- see the matching rule below. Retry-safe with no `provider_call_id`. |
 | `change_reservation` | `/api/agent/change-reservation` | `{customer_name, customer_phone, booking_time: ISO 8601, new_requested_at: ISO 8601, new_party_size?: number}` | `{changed:true, booking_id, party_size, when}`. Ordinary refusals, booking untouched in every one: `reason` is `"not_found"`, `"ambiguous"`, `"full"`, `"large_party"`, or `"closed"` (with `hours_that_day`). Refuses (400) either timestamp being past or unparseable, a missing name/phone, or a `new_party_size` that isn't a positive whole number. Omit `new_party_size` to keep the party the booking already has. Retry-safe with no `provider_call_id`. |
 | `place_order` | `/api/agent/order` | `{items:[{name, quantity, note?}], type?: "pickup"\|"delivery" (default "pickup"), customer_name, customer_phone, address?, provider_call_id?}` | See below -- this one has real edges. |
-| `transfer_to_human` | `/api/agent/transfer` | `{reason?: string, provider_call_id?}` | `{number}` -- always `location.fallback_human_number`. Fails (500) if the location has no fallback number configured at all; make sure every live location has one before go-live. Logging the transfer is fire-and-forget (`after()`) so this responds even if the database is unhealthy. |
+| `transfer_to_human` | `/api/agent/transfer` | `{reason?: string, provider_call_id?}` | `{number}` -- always `location.fallback_human_number`. **Two things reach a person and nothing else: a catering or large order, and an allergy, intolerance, celiac or "what is in this dish" health question.** Everything the agent used to hand over -- an upset caller, a complaint about a past order, a request for a manager, anything about payment or money owed, anything outside what it does, speech it still cannot make out after two tries -- is `take_message` now. Fails (500) if the location has no fallback number configured at all; make sure every live location has one before go-live. Logging the transfer is fire-and-forget (`after()`) so this responds even if the database is unhealthy. |
 | `take_message` | `/api/agent/message` | `{caller_name, callback_number, message, provider_call_id?}` | `{taken: true}` -- the message is in the `messages` table and shows on **Messages** in the dashboard, and on the call's own page when the call row exists. Messages is the reliable one: a message taken before the telephony webhook wrote the call row has no call to appear on, and is still somebody waiting for a callback. Refuses (400) with a sentence to read out when any of the three is missing or could not be heard: an unusable name, a callback number with fewer than seven digits, or nothing to pass on. `message` and `caller_name` are redacted and `message` truncated to 400 characters before storage. The callback number is **not** redacted -- scrubbing it turned every international number into a refusal the caller could not answer -- but a value that is actually a card number (card length, card checksum, card issuer digit) is refused outright, storing nothing. There is no business refusal on this path -- there is no such thing as a message the restaurant may not receive. |
 
-**`take_message` is not in the provisioning script or the system prompt
-yet.** The route and its table exist and are live; wiring it into the
-assistant -- and narrowing `transfer_to_human` to catering and allergy
-questions, which is the reason this tool exists -- is the next change.
-Until then it can be exercised with `curl` against the shape above.
+`take_message` is registered by `scripts/provision-vapi.mjs` and named in
+the system prompt, and `transfer_to_human` is narrowed to catering and
+allergy questions to match -- the two are one policy and must not drift
+apart. A prompt that describes only the narrow transfer without naming
+`take_message` leaves every other caller apologised to and nothing written
+down.
 
 `requested_at` must be a full ISO 8601 timestamp. The system prompt is
 told the current date and time as part of `system_prompt` itself (see step
@@ -288,8 +289,8 @@ the closing minute), and a promise time that runs past close (an order at
 10:30).
 
 Pass `provider_call_id` (Vapi's own id for the call in progress) on every
-`create_reservation`, `place_order`, and `transfer_to_human` call if your
-tool configuration can supply it. Two things depend on it:
+`create_reservation`, `place_order`, `transfer_to_human`, and
+`take_message` call if your tool configuration can supply it. Two things depend on it:
 
 - **`place_order` and `create_reservation` both deduplicate on it.** Each
   fingerprints the call together with what makes the request distinct, and
@@ -312,8 +313,8 @@ tool configuration can supply it. Two things depend on it:
   on every call.
 - **It's how a tool call gets linked back to the `calls` row** for that
   conversation (`lib/agent/context.ts::callIdForProvider`), which is what
-  lets an order or a transfer show up attached to the right call in the
-  dashboard rather than as an orphan.
+  lets an order, a transfer or a message show up attached to the right
+  call in the dashboard rather than as an orphan.
 
 ### Finding the caller's booking, and what that refuses
 
@@ -356,13 +357,14 @@ What that refuses, which is the part worth knowing:
   `requested_at` even from a future-looking hint;
 - a booking already cancelled, seated, or marked no-show;
 - **anything where more than one booking could be the one meant.** Nothing
-  is written and the answer is `reason: "ambiguous"`, so the agent hands
-  the call to a person. Guessing here cancels a table belonging to someone
+  is written and the answer is `reason: "ambiguous"`, so the agent takes
+  a message instead. Guessing here cancels a table belonging to someone
   who is not on the phone.
 
 This is not identity proof and is not sold as one. It raises the bar from
 "knows a phone number" to "knows the number, the name, and the evening",
-and every case it cannot settle ends with a human rather than a guess. Two
+and every case it cannot settle ends with a person ringing back rather
+than a guess. Two
 people called Marcus on one number the same evening are the *ambiguous*
 case, not an authentication decision.
 
@@ -416,13 +418,14 @@ not know this order exists.
 not be placed again -- retrying writes nothing new anyway (the
 `provider_call_id` fingerprint dedupes it) but the caller must not be
 asked to reorder either. Tell them the order is in and that you want
-someone there to confirm it, then call `transfer_to_human`. The system
-prompt carries exactly this instruction ("If it goes through but says the
-kitchen was not reached, do not sign off. Say the order is in and you want
-someone to confirm it, then transfer.") -- your tool wiring only has to
-put the response in front of the model.
+someone there to confirm it, then call `take_message` -- this is not one
+of the two things that transfer, and a message names the order and reaches
+the same people. The system prompt carries exactly this instruction ("If
+it goes through but says the kitchen was not reached, do not sign off. Say
+the order is in and you want someone to confirm it, then take a message.")
+-- your tool wiring only has to put the response in front of the model.
 
-Handing the call to a person is the only answer that is true at that
+Getting a person to confirm it is the only answer that is true at that
 moment: the order exists, and the person who has to cook it has not been
 told. Ending on "you're all set" is a promise nobody at the restaurant is
 in a position to keep, and the caller finds out when they arrive for food
@@ -691,8 +694,8 @@ you onboard one.
   their own booking.** Both tools now exist, but the only way in is the
   name, the number and roughly when (above). A caller who booked under a
   different name, gave a different number, or genuinely cannot say what
-  evening it was gets `not_found` and a transfer -- correctly, but the
-  restaurant still ends up answering the phone for them. There is no
+  evening it was gets `not_found` and a message taken -- correctly, but
+  the restaurant still ends up ringing them back. There is no
   booking reference to read out, because nothing in this product ever
   gives the caller one.
 - **The spoken order total is pre-tax; the recorded one is not.** The
@@ -727,8 +730,8 @@ you onboard one.
   it does not do is deliver the order: there is no retry, no queue, no
   second notification path, and no orders dashboard to fall back on
   (`app/dashboard/orders/page.tsx` is a stub). A location whose
-  `order_sms_to` is wrong will transfer every single food call to a human,
-  which is safe and completely useless. Check that column before go-live,
+  `order_sms_to` is wrong will end every single food call in a message
+  rather than a confirmation, which is safe and completely useless. Check that column before go-live,
   not after.
 - **Nothing answers a parking question, and nothing texts a caller.**
   Both promises are out of the prompt: there is no parking field anywhere
@@ -736,7 +739,7 @@ you onboard one.
   (`lib/agent/notify.ts`'s only outbound message is the order ticket to
   the restaurant's own staff number). Removing the wording means both
   questions now fall through the prompt's "anything outside these four
-  things" rule to a transfer, instead of being improvised. Parking could
+  things" rule to a message, instead of being improvised. Parking could
   be added as a location field; **texting a caller is a different legal
   problem from the staff ticket and must not be built** on the strength of
   this line.
@@ -748,7 +751,7 @@ you onboard one.
   second is treated as a retry and returns the first booking.
   `place_order` makes exactly the same trade. In practice a party needing
   two tables at one sitting is a party big enough to want a person, and
-  the agent transfers; but if a restaurant genuinely takes such bookings
+  the agent takes a message; but if a restaurant genuinely takes such bookings
   over the phone, know that this one case is deduplicated.
 - **No secret rotation without a call-failure window.** Covered in step 1.
   Worth repeating here: there is no code path in this system that rotates
@@ -796,7 +799,9 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Confirm the transfer works with the app stopped -- kill `npm run dev` and call.
 - [ ] Toggle an item sold out mid-call on the manager screen, then call again and confirm the next call knows.
 - [ ] Try to make it quote a wrong price. If you can, so can a customer.
-- [ ] Ask it something outside the four things it does. It must transfer.
+- [ ] Ask it something outside the four things it does. It must apologise, take your name, number and what it's about, and say someone will call back -- not transfer. Then check **Messages** on the dashboard for the row.
+- [ ] Get upset with it, ask for the manager, and ask about a refund, on three separate calls. All three are messages now, not transfers. A transfer here means the prompt has drifted back.
+- [ ] Ask for something that names two items on this menu ("fries" where there are Hand Cut Fries and Cheese Fries). It must ask which one and say both names. It must not guess and must not hand the call off.
 - [ ] Run `scripts/exercise-tools.mjs` against the environment Vapi will actually hit, and confirm all 71 checks pass. Don't onboard on top of a red run.
 - [ ] Run `scripts/provision-vapi.mjs <location-id> <base-url>` (no `--dry-run`) against that same environment, put the printed assistant id in `VAPI_ASSISTANT_ID`, and attach that assistant to this location's number.
 - [ ] Confirm your Vapi wiring fetches `/api/agent/assistant` **fresh at the start of every call**, not once at setup. Leave the integration alone overnight and call it again the next morning; it must state the correct date and today's real hours, not yesterday's.
@@ -808,7 +813,7 @@ Work through this list. Every line is a way these break in the field.
 - [ ] **Take an offered alternative time.** Ask for a time that is full or outside hours, listen to the alternatives the agent offers, and then book the one it named. It must go through. An alternative the agent offers and `create_reservation` then refuses is the single worst thing this endpoint can do to a caller -- it is the agent contradicting itself, out loud, about a promise it just made.
 - [ ] Confirm the menu at this location doesn't depend on size or modifiers for price (no "small/large", no "add bacon +$2"). If it does, don't launch until that's supported -- today it prices everything at the base rate.
 - [ ] **Order something modified, then read the ticket that comes out.** Say "no onions" (or "sauce on the side") on one item of a two-item order, let the agent confirm it back, and then look at the SMS that lands on the staff phone. The change must be on the ticket, under the item it belongs to and not under the other one. This is the one thing no automated check can prove end-to-end: whether the model actually put what it heard into that item's `note` instead of narrating it and moving on. If the ticket says `1x Margherita` and the caller was told "got it, no onions", the caller gets the wrong food and nobody finds out until they're eating it.
-- [ ] Place a real test order and confirm the SMS ticket actually lands on the staff phone (`order_sms_to`) from the right Twilio number (`twilio_number`). The order itself still succeeds if this fails -- but the response now says `staff_notified: false`, `orders.staff_notified` stays false, and the agent is supposed to hand the caller to a person rather than sign off. Confirm both halves: that the text arrives when the config is right, and (unset `order_sms_to` on a throwaway location and order again) that the agent transfers instead of saying "you're all set" when it doesn't.
+- [ ] Place a real test order and confirm the SMS ticket actually lands on the staff phone (`order_sms_to`) from the right Twilio number (`twilio_number`). The order itself still succeeds if this fails -- but the response now says `staff_notified: false`, `orders.staff_notified` stays false, and the agent is supposed to hand the caller to a person rather than sign off. Confirm both halves: that the text arrives when the config is right, and (unset `order_sms_to` on a throwaway location and order again) that the agent takes a message instead of saying "you're all set" when it doesn't.
 - [ ] Order something at a location with a nonzero tax rate and listen for whether the spoken total (read back before you confirm) matches the total in the confirmation / on the dashboard. If they differ, decide whether that's acceptable for this restaurant before launch -- see the tax gap above.
 - [ ] **Book a table by phone, then ring back and cancel it.** Give the first name and the number the way a person actually says them, and say the time roughly ("around seven") rather than exactly. It must cancel it and read the booking's own date and time back. Then check the row: `status` must be `cancelled`, and `check_availability` for that slot must report the seats free again -- a cancellation that only flips a column and does not give the seats back is worse than no cancellation, because the restaurant then turns away the caller who could have had that table.
 - [ ] **Cancel the same booking twice in one call.** Force a second attempt if you can. The agent must say the same thing both times and there must still be exactly one row. It must never tell a caller "I can't find that booking" seconds after cancelling it.
@@ -817,7 +822,7 @@ Work through this list. Every line is a way these break in the field.
 - [ ] **Ring back about a table that has already passed.** It must not cancel or move it. A booking that has already happened is not the caller's to rewrite, and the restaurant's record of the night depends on that.
 - [ ] **Change a booking to a time that is full, to a time the restaurant is shut, and to a party bigger than `max_party_size`.** All three must be refused with the booking left exactly where it was -- then check the row to be sure it did not move. A change is a capacity decision, not an edit, and a move that half-happened costs a table twice.
 - [ ] **Change a booking to a genuinely open time and confirm it moved rather than duplicated.** One row, new time, and the old slot bookable again by someone else.
-- [ ] Ask about parking, and ask it to text you a payment link. Both are now outside the four things it does, so it must transfer rather than answer -- there is no parking data anywhere in this system and nothing that texts a customer. If it names a car park or promises a link, the prompt has drifted back.
-- [ ] Confirm your Vapi tool configuration actually sends `provider_call_id` on `create_reservation`, `place_order` and `transfer_to_human`. It is the whole of the retry protection on the first two, and how a transfer gets logged against the right call on the third: without it a retried booking holds a second table, which costs the restaurant real capacity for that slot. `scripts/provision-vapi.mjs` sends it as a static parameter (`{{call.id}}`) on all three, so this should already be true if you provisioned with the script -- confirm it anyway. If your configuration can force a retry (timeout, network blip), force one against `create_reservation` and confirm the dashboard shows one booking, not two.
+- [ ] Ask about parking, and ask it to text you a payment link. Both are now outside the four things it does, so it must take a message rather than answer -- there is no parking data anywhere in this system and nothing that texts a customer. If it names a car park or promises a link, the prompt has drifted back.
+- [ ] Confirm your Vapi tool configuration actually sends `provider_call_id` on `create_reservation`, `place_order`, `transfer_to_human` and `take_message`. It is the whole of the retry protection on the first two, and how a transfer or a message gets attached to the right call on the other two: without it a retried booking holds a second table, which costs the restaurant real capacity for that slot. `scripts/provision-vapi.mjs` sends it as a static parameter (`{{call.id}}`) on all four, so this should already be true if you provisioned with the script -- confirm it anyway. If your configuration can force a retry (timeout, network blip), force one against `create_reservation` and confirm the dashboard shows one booking, not two.
 - [ ] Rotate the location's secret (`--force`) once, on purpose, during a maintenance window, so whoever runs this in production has done it before they have to do it under pressure. Confirm calls fail during the gap, then re-run `node scripts/provision-vapi.mjs <location-id> <base-url>` with the new `AGENT_SECRET` to push it into every tool's header, and confirm calls recover.
 - [ ] Set `locations.pickup_promise_minutes` and `locations.delivery_promise_minutes` to numbers this kitchen can actually hit -- ask whoever runs the pass, not the owner guessing from a good night. Every location starts on the defaults (25 / 45) until someone changes them; an owner who leaves the defaults is promising times they cannot keep, and the customer who believed it shows up angry at the restaurant, not at this checklist. Neither number adjusts for how backed up the kitchen is right now -- see the gap above -- so revisit both if this location's actual ticket times change.
