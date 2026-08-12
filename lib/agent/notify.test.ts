@@ -152,6 +152,8 @@ function testLocation(overrides: Partial<LocationRow> = {}): LocationRow {
     reservation_slot_minutes: 30,
     max_party_size: 8,
     order_types: "both",
+    pickup_promise_minutes: 25,
+    delivery_promise_minutes: 45,
     ...overrides,
   };
 }

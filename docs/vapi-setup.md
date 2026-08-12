@@ -186,7 +186,31 @@ tool configuration can supply it. Two things depend on it:
 The write is one transaction (`public.place_order`) -- pricing, the
 sold-out check, and both inserts (`orders`, `order_items`) commit together
 or not at all, so a failure partway through can never leave a priced order
-with no food on it. Refusals fall into three shapes, and the model needs
+with no food on it.
+
+**On success**, `200`:
+
+```jsonc
+{
+  "ok": true,
+  "placed": true,
+  "order_number": 1002,
+  "total": "$44.00",       // tax-inclusive, see below
+  "promised_minutes": 25   // location.pickup_promise_minutes or
+                            // location.delivery_promise_minutes, by type
+}
+```
+
+`promised_minutes` is what gets spoken to the caller, written to
+`orders.promised_at`, and printed on the kitchen ticket
+(`#1002 PICKUP - 25 min`, `lib/agent/notify.ts`) -- the same number in all
+three places, always. It comes from the location's own
+`pickup_promise_minutes` / `delivery_promise_minutes` column
+(`supabase/migrations/20260812000600_promise_minutes.sql`), picked by the
+order's `type`, never a constant. Set both to a number this kitchen can
+actually hit -- see the checklist item below.
+
+Refusals fall into three shapes, and the model needs
 to treat them differently:
 
 - **Ordinary business answers**, `agentOk({placed:false, reason, item?})`,
@@ -318,6 +342,20 @@ you onboard one.
   records, unless the model is separately told the tax rate and reliably
   does that arithmetic in a phone conversation -- which nothing in this
   system currently gives it a tool for.
+- **The promised pickup/delivery time is a fixed number per location and
+  order type, not a load-aware one.** `place_order` no longer hands every
+  caller the same 25 minutes regardless of restaurant -- it reads
+  `locations.pickup_promise_minutes` / `delivery_promise_minutes`
+  (`supabase/migrations/20260812000600_promise_minutes.sql`) and picks by
+  order type, so a kitchen that actually runs 45-minute tickets can say
+  so. What it still does not do: change that number for how backed up the
+  kitchen is *right now*, how large this particular order is, or the time
+  of day. A location that is normally fast but slammed on a Friday night
+  will still promise its configured Friday-morning number to a caller at
+  8pm. Nothing in this system reads current order volume or measures
+  actual fulfillment time to adjust the promise automatically -- an owner
+  has to notice they're running behind and change the two columns by
+  hand.
 - **The prompt answers questions about parking and offers to text a
   payment link. Neither has anything behind it.** There's no parking data
   anywhere in the schema, and no payment-link tool or SMS-to-customer
@@ -384,3 +422,4 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Ask about parking, and ask it to text you a payment link. Confirm it doesn't invent a specific, wrong answer (a lot next door that doesn't exist, a link that never arrives) -- both are unimplemented and it may improvise from the prompt's wording alone.
 - [ ] Confirm your Vapi tool configuration actually sends `provider_call_id` on `create_reservation` and `place_order`. It is the whole of the retry protection on both: without it a retried booking holds a second table, which costs the restaurant real capacity for that slot. If your configuration can force a retry (timeout, network blip), force one against `create_reservation` and confirm the dashboard shows one booking, not two.
 - [ ] Rotate the location's secret (`--force`) once, on purpose, during a maintenance window, so whoever runs this in production has done it before they have to do it under pressure. Confirm calls fail during the gap and recover once Vapi's headers are updated.
+- [ ] Set `locations.pickup_promise_minutes` and `locations.delivery_promise_minutes` to numbers this kitchen can actually hit -- ask whoever runs the pass, not the owner guessing from a good night. Every location starts on the defaults (25 / 45) until someone changes them; an owner who leaves the defaults is promising times they cannot keep, and the customer who believed it shows up angry at the restaurant, not at this checklist. Neither number adjusts for how backed up the kitchen is right now -- see the gap above -- so revisit both if this location's actual ticket times change.

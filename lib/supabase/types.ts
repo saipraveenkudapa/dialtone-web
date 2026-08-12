@@ -57,6 +57,8 @@ export type LocationRow = {
   reservation_slot_minutes: number;
   max_party_size: number;
   order_types: "pickup" | "delivery" | "both";
+  pickup_promise_minutes: number;
+  delivery_promise_minutes: number;
 };
 
 export type MenuCategoryRow = {

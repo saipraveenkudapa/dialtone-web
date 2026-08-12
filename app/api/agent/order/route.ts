@@ -12,8 +12,6 @@ import {
 } from "@/lib/agent/orders";
 import { orderMessage, sendOrderSms } from "@/lib/agent/notify";
 
-const PROMISED_MINUTES = 25;
-
 /** What `public.place_order` answers with. */
 type PlaceOrderResult = {
   placed: boolean;
@@ -154,6 +152,16 @@ export async function POST(request: Request) {
   }
   const lines = built.lines;
 
+  // Per-location, per-order-type: a kitchen quotes pickup and delivery
+  // differently, and one restaurant's promise is not another's (a place
+  // running 45-minute tickets must not hand out the same number as one
+  // running 20). Read from the location row this request already fetched
+  // -- never a constant -- so the number spoken to the caller, written to
+  // orders.promised_at, and printed on the kitchen ticket are always the
+  // same one, and always the one this restaurant actually configured.
+  const promisedMinutes =
+    type === "delivery" ? location.delivery_promise_minutes : location.pickup_promise_minutes;
+
   // Ids and quantities only. There is no price and no tax rate in this
   // call: place_order re-reads both from menu_items and locations, which
   // is what "prices from the live menu" has to mean once the write is
@@ -173,7 +181,7 @@ export async function POST(request: Request) {
       // while this is the provider's own id for the call in progress and
       // is what makes a retried tool call recognisable as a retry.
       p_provider_call_id: body.provider_call_id ?? null,
-      p_promised_minutes: PROMISED_MINUTES,
+      p_promised_minutes: promisedMinutes,
     })
     .single<PlaceOrderResult>();
 
@@ -226,7 +234,7 @@ export async function POST(request: Request) {
       address: type === "delivery" ? body.address : null,
       lines: lines.map((l) => ({ quantity: l.quantity, name: l.item.name })),
       totalCents: data.total_cents ?? 0,
-      promisedMinutes: PROMISED_MINUTES,
+      promisedMinutes,
     }),
   );
   if (!smsSent) {
@@ -241,6 +249,6 @@ export async function POST(request: Request) {
     placed: true,
     order_number: data.order_number,
     total: `$${((data.total_cents ?? 0) / 100).toFixed(2)}`,
-    promised_minutes: PROMISED_MINUTES,
+    promised_minutes: promisedMinutes,
   });
 }
