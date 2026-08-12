@@ -107,6 +107,109 @@ function findNextOpen(
   return null;
 }
 
+/** The hours that apply on one local calendar date: the holiday override
+ *  if there is one for that date, otherwise the weekday row, otherwise
+ *  closed. A missing weekday row means closed on purpose -- a location
+ *  that is shut on Mondays simply has no Monday row -- which is why the
+ *  "we have no idea" case is decided by the caller (`openAt` below), not
+ *  here. */
+function hoursOnDate(
+  date: string,
+  dayOfWeek: number,
+  hours: HoursRow[],
+  holidays: HolidayRow[],
+) {
+  const holiday = holidays.find((h) => h.date === date);
+  if (holiday) {
+    return {
+      is_closed: holiday.is_closed,
+      open_time: holiday.open_time,
+      close_time: holiday.close_time,
+      source: "holiday" as const,
+    };
+  }
+  const weekday = hours.find((h) => h.day_of_week === dayOfWeek);
+  return {
+    is_closed: weekday?.is_closed ?? true,
+    open_time: weekday?.open_time ?? null,
+    close_time: weekday?.close_time ?? null,
+    source: weekday ? ("weekday" as const) : ("missing" as const),
+  };
+}
+
+/** Is the location open at one particular instant?
+ *
+ *  Nothing on the booking or ordering path consulted the hours at all:
+ *  `book_table`, `place_order`, and both routes in front of them would
+ *  take, write, and confirm a 3 AM table or a 3 AM order, and the only
+ *  thing standing in the way was a line of prose in the system prompt
+ *  telling the model to check. This is what the routes can call instead.
+ *
+ *  Three states, not two, and the third is the important one. `openState`
+ *  below answers "are you open right now" for a caller who asked, where
+ *  guessing "closed" when the data cannot say is a harmless, visible
+ *  wrong answer. Here the answer *refuses a booking or an order*, so the
+ *  same guess would silently turn a data-representation problem into a
+ *  restaurant that can never take one:
+ *
+ *   - a location whose hours cross midnight (open 22:00, close 02:00)
+ *     cannot be represented at all -- see the known gap in
+ *     docs/vapi-setup.md -- and `close <= open` reads as closed at every
+ *     minute of every day. A late-night kitchen is exactly the kind that
+ *     lives on phone orders, and refusing all of them, forever, silently,
+ *     is far worse than the 3 AM order this check exists to stop;
+ *   - a location that has never had its hours filled in has nothing to
+ *     check against, and refusing every booking because a setup step was
+ *     skipped is a worse failure than allowing one.
+ *
+ *  Both come back `unknown`, and the routes let an unknown through. This
+ *  check can only refuse what the hours table can actually express. */
+export type OpenAtVerdict =
+  | { state: "open"; hoursThatDay: string }
+  | { state: "closed"; hoursThatDay: string }
+  | { state: "unknown"; reason: "no_hours_configured" | "crosses_midnight" };
+
+export function openAt({
+  at,
+  timezone,
+  hours,
+  holidays,
+}: {
+  at: Date;
+  timezone: string;
+  hours: HoursRow[];
+  holidays: HolidayRow[];
+}): OpenAtVerdict {
+  const local = localParts(at, timezone);
+  const day = hoursOnDate(local.date, local.dayOfWeek, hours, holidays);
+
+  // Nothing configured anywhere: no weekday row for this day AND no
+  // weekday rows at all. A location with a Tuesday row and no Monday row
+  // is closed on Mondays, which is a real answer; a location with no rows
+  // at all has simply never been set up.
+  if (day.source === "missing" && hours.length === 0) {
+    return { state: "unknown", reason: "no_hours_configured" };
+  }
+
+  if (day.is_closed) return { state: "closed", hoursThatDay: "closed" };
+
+  // An open day with a missing end (only reachable through a holiday
+  // override -- the hours table's own check constraint forbids it) says
+  // nothing about when.
+  if (!day.open_time || !day.close_time) {
+    return { state: "unknown", reason: "no_hours_configured" };
+  }
+
+  const opens = toMinutes(day.open_time);
+  const closes = toMinutes(day.close_time);
+  if (closes <= opens) return { state: "unknown", reason: "crosses_midnight" };
+
+  const hoursThatDay = `${spoken(day.open_time)} to ${spoken(day.close_time)}`;
+  return local.minutes >= opens && local.minutes < closes
+    ? { state: "open", hoursThatDay }
+    : { state: "closed", hoursThatDay };
+}
+
 export function openState({
   now,
   timezone,
@@ -120,20 +223,7 @@ export function openState({
 }) {
   const local = localParts(now, timezone);
 
-  const holiday = holidays.find((h) => h.date === local.date);
-  const weekday = hours.find((h) => h.day_of_week === local.dayOfWeek);
-
-  const today = holiday
-    ? {
-        is_closed: holiday.is_closed,
-        open_time: holiday.open_time,
-        close_time: holiday.close_time,
-      }
-    : {
-        is_closed: weekday?.is_closed ?? true,
-        open_time: weekday?.open_time ?? null,
-        close_time: weekday?.close_time ?? null,
-      };
+  const today = hoursOnDate(local.date, local.dayOfWeek, hours, holidays);
 
   if (today.is_closed || !today.open_time || !today.close_time) {
     return {

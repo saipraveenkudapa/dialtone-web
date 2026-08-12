@@ -3,6 +3,7 @@ import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
 import { agentFail, agentOk } from "@/lib/agent/respond";
 import { callIdForProvider } from "@/lib/agent/context";
 import { isRequestInPast } from "@/lib/agent/availability";
+import { openAt, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
 
 /** What `public.book_table` answers with. */
 type BookTableResult = {
@@ -83,7 +84,54 @@ export async function POST(request: Request) {
     return agentFail("I still need a name and a number for the booking.");
   }
 
-  const { data, error } = await supabaseAdmin()
+  // Nothing on this path read the opening hours. `book_table` does not,
+  // this route did not, and `check_availability` did not either -- so a
+  // table for 3 AM was counted against the seats, written, and read back
+  // to the caller as confirmed, with a line of prose in the system prompt
+  // as the only thing standing in the way. A booking is a promise about a
+  // specific instant, so this is the one place that instant can be
+  // checked against the hours the restaurant actually keeps.
+  //
+  // Before book_table, not inside it: hours live in two tables with a
+  // holiday override and a timezone, and `lib/agent/hours.ts` is where
+  // that reasoning already exists, tested. A second implementation in SQL
+  // would be a third copy of the same rules to keep in step, and the
+  // first time they disagreed the agent and the database would refuse
+  // different bookings.
+  const supabase = supabaseAdmin();
+  const [hours, holidays] = await Promise.all([
+    supabase.from("hours").select("*").eq("location_id", location.id),
+    supabase.from("holiday_hours").select("*").eq("location_id", location.id),
+  ]);
+
+  if (hours.error || holidays.error) {
+    console.error("[agent] hours read failed during reservation", {
+      location_id: location.id,
+      code: (hours.error ?? holidays.error)?.code ?? null,
+    });
+    return agentFail("I can't check the book right now.", 500);
+  }
+
+  const verdict = openAt({
+    at: when,
+    timezone: location.timezone,
+    hours: (hours.data ?? []) as HoursRow[],
+    holidays: (holidays.data ?? []) as HolidayRow[],
+  });
+  // An ordinary answer with a reason and the day's real hours, the same
+  // shape a full house gets: the agent says "we're closed then, but we're
+  // open five to ten thirty" and asks for another time. `unknown` is
+  // deliberately not refused -- see openAt for why an unrepresentable set
+  // of hours must not become a restaurant that can never take a booking.
+  if (verdict.state === "closed") {
+    return agentOk({
+      booked: false,
+      reason: "closed",
+      hours_that_day: verdict.hoursThatDay,
+    });
+  }
+
+  const { data, error } = await supabase
     .rpc("book_table", {
       p_location_id: location.id,
       p_requested_at: when.toISOString(),

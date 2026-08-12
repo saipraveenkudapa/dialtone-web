@@ -144,14 +144,51 @@ parse.
 |---|---|---|---|
 | `get_menu` | `/api/agent/menu` | `{item?: string}` | `{categories, sold_out: string[], alternative: string \| null}`. Prices are **pre-tax** dollar strings (`"$12.00"`) -- see the tax gap below. `alternative` is filled only when `item` matches something sold out. |
 | `get_hours` | `/api/agent/hours` | `{}` | `{open_now, today, next_open}`. `today` is `"5:00 PM to 10:00 PM"` or `"closed"`. Hours that cross midnight cannot be represented -- see the gap below. |
-| `check_availability` | `/api/agent/availability` | `{requested_at: ISO 8601, party_size: number}` | `{available, alternatives}`, or `{available:false, reason:"large_party", alternatives:[]}` for a party over `max_party_size`. Refuses (400) a past `requested_at` (2-minute clock-skew tolerance) or an unparseable date/party size, rather than answering `available:false` for either. |
-| `create_reservation` | `/api/agent/reservation` | `{requested_at, party_size, customer_name, customer_phone, provider_call_id?}` | `{booked:true, booking_id, when}`, `{booked:false, reason:"full"}`, or `{booked:false, reason:"large_party"}` for a party over `max_party_size` -- the same reason `check_availability` gives, so the two agree about one party. Refuses (400) a past `requested_at` or an unparseable date/party size. Idempotent per `provider_call_id` -- see below. |
+| `check_availability` | `/api/agent/availability` | `{requested_at: ISO 8601, party_size: number}` | `{available, alternatives}`; `{available:false, reason:"large_party", alternatives:[]}` for a party over `max_party_size`; `{available:false, reason:"closed", hours_that_day, alternatives}` when the restaurant is shut at that time. Refuses (400) a past `requested_at` (2-minute clock-skew tolerance) or an unparseable date/party size, rather than answering `available:false` for either. Every string in `alternatives` has been checked -- see below. |
+| `create_reservation` | `/api/agent/reservation` | `{requested_at, party_size, customer_name, customer_phone, provider_call_id?}` | `{booked:true, booking_id, when}`, `{booked:false, reason:"full"}`, `{booked:false, reason:"large_party"}` for a party over `max_party_size` -- the same reason `check_availability` gives, so the two agree about one party -- or `{booked:false, reason:"closed", hours_that_day}` for a time outside opening hours. Refuses (400) a past `requested_at` or an unparseable date/party size. Idempotent per `provider_call_id` -- see below. `when` includes the date, not just the weekday. |
 | `place_order` | `/api/agent/order` | `{items:[{name, quantity, note?}], type?: "pickup"\|"delivery" (default "pickup"), customer_name, customer_phone, address?, provider_call_id?}` | See below -- this one has real edges. |
 | `transfer_to_human` | `/api/agent/transfer` | `{reason?: string, provider_call_id?}` | `{number}` -- always `location.fallback_human_number`. Fails (500) if the location has no fallback number configured at all; make sure every live location has one before go-live. Logging the transfer is fire-and-forget (`after()`) so this responds even if the database is unhealthy. |
 
 `requested_at` must be a full ISO 8601 timestamp. The system prompt is
 told the current date and time as part of `system_prompt` itself (see step
 2) and is expected to resolve "tomorrow at seven" against that.
+
+### Alternatives, and opening hours
+
+`check_availability`'s `alternatives` are spoken strings (`"7:30 PM"`,
+`"tomorrow at 1:15 AM"` when one crosses midnight) at up to 90 minutes
+either side of the requested time, nearest first. **Each one has been put
+through the same three tests the requested time was**: it is not in the
+past, the restaurant is open then, and there are seats for this party at
+that moment (the same peak-occupancy sweep, over bookings fetched wide
+enough to cover every candidate). If none survive, the list is empty --
+the agent offers nothing rather than a time nobody checked. Previously
+these were `requested_at ± 30 minutes` with nothing checked at all, which
+at 6:45 PM offered "6:40 PM" for a 7:10 request and `create_reservation`
+then refused it as already past.
+
+Both reservation endpoints and `place_order` consult `hours` and
+`holiday_hours` (holiday rows override the weekday row) in the location's
+timezone:
+
+- `create_reservation` refuses a booking for a time the restaurant is
+  shut, with `reason: "closed"` and `hours_that_day` (`"5:00 PM to 10:30
+  PM"`, or `"closed"` for a day it never opens) so the agent can offer the
+  real hours back instead of only saying no.
+- `place_order` refuses with the same shape when the kitchen is shut **at
+  the moment of the call** -- an order has no requested time other than
+  now. It checks after it has understood the request, so "I didn't catch
+  how many" and "we're out of that" still come first.
+- Both **abstain** rather than refuse when the hours cannot be read: a
+  location whose hours cross midnight (see the gap below) or one with no
+  `hours` rows at all. Refusing everything at a late-night kitchen because
+  its 22:00–02:00 row cannot be represented would be a worse outage than
+  the 3 AM order this prevents.
+
+What this does *not* model: last seating (a booking is allowed right up to
+the closing minute), and a promise time that runs past close (an order at
+10:20 PM with a 25-minute promise is accepted by a kitchen closing at
+10:30).
 
 Pass `provider_call_id` (Vapi's own id for the call in progress) on every
 `create_reservation`, `place_order`, and `transfer_to_human` call if your
@@ -395,9 +432,12 @@ you onboard one.
   `closes` (120) less than `opens` (1320), so that condition is false for
   every minute of every day -- `get_hours` and the assistant's baked-in
   "hours today" both report the location closed, always, even while it is
-  genuinely open. Do not onboard a location whose hours cross midnight
-  until this is fixed; if one already exists, split the hours row or
-  don't rely on this for it.
+  genuinely open. The hours gate on `create_reservation` and `place_order`
+  detects this case (`close <= open`) and abstains rather than refusing,
+  so such a location can still take bookings and orders -- but the agent
+  is still being told, and still telling callers, that it is closed. Do
+  not onboard a location whose hours cross midnight until this is fixed;
+  if one already exists, split the hours row or don't rely on this for it.
 - **The prompt promises changing and cancelling a reservation** ("Book,
   change, or cancel a table reservation" is in the system prompt's "What
   you can do" list) **and no tool exists for either.** The agent will
@@ -501,6 +541,8 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Set the location live to `false` and confirm the same thing happens for that condition independently of the kill switch.
 - [ ] Confirm `fallback_human_number` is set and correct for this location. `transfer_to_human` fails outright without one, and it's the destination for both the kill switch and every AI-initiated transfer.
 - [ ] Check the location's hours don't cross midnight (e.g. open past 12am). If they do, `get_hours` and the assistant will report the location closed at every hour, forever -- see the gaps above.
+- [ ] **Try to book a table outside opening hours**, and try to book one on a day the restaurant is closed. Both must come back as "we're closed then" with the day's real hours offered, not as a confirmed booking. Then check the `bookings` table: a refused booking must not be in it. Do this against this location's actual `hours` rows, not the demo location's -- a wrong `hours` row is invisible until someone books against it.
+- [ ] **Take an offered alternative time.** Ask for a time that is full or outside hours, listen to the alternatives the agent offers, and then book the one it named. It must go through. An alternative the agent offers and `create_reservation` then refuses is the single worst thing this endpoint can do to a caller -- it is the agent contradicting itself, out loud, about a promise it just made.
 - [ ] Confirm the menu at this location doesn't depend on size or modifiers for price (no "small/large", no "add bacon +$2"). If it does, don't launch until that's supported -- today it prices everything at the base rate.
 - [ ] **Order something modified, then read the ticket that comes out.** Say "no onions" (or "sauce on the side") on one item of a two-item order, let the agent confirm it back, and then look at the SMS that lands on the staff phone. The change must be on the ticket, under the item it belongs to and not under the other one. This is the one thing no automated check can prove end-to-end: whether the model actually put what it heard into that item's `note` instead of narrating it and moving on. If the ticket says `1x Margherita` and the caller was told "got it, no onions", the caller gets the wrong food and nobody finds out until they're eating it.
 - [ ] Place a real test order and confirm the SMS ticket actually lands on the staff phone (`order_sms_to`) from the right Twilio number (`twilio_number`). The order itself still succeeds if this fails -- but the response now says `staff_notified: false`, `orders.staff_notified` stays false, and the agent is supposed to hand the caller to a person rather than sign off. Confirm both halves: that the text arrives when the config is right, and (unset `order_sms_to` on a throwaway location and order again) that the agent transfers instead of saying "you're all set" when it doesn't.

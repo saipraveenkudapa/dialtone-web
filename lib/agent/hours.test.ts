@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openState } from "./hours";
+import { openAt, openState } from "./hours";
 
 const week = Array.from({ length: 7 }, (_, day) => ({
   day_of_week: day,
@@ -169,5 +169,126 @@ describe("open state", () => {
     expect(state.open_now).toBe(false);
     expect(state.today).toBe("closed");
     expect(state.next_open).toBe("Sunday at 10:00 AM");
+  });
+});
+
+describe("openAt", () => {
+  // The gate in front of create_reservation and place_order. Before it
+  // existed, a 3 AM table and a 3 AM order were both taken, written and
+  // confirmed -- the only thing checking the hours was a sentence in the
+  // system prompt telling the model to.
+  it("is open inside the window on an open day", () => {
+    const verdict = openAt({
+      at: new Date("2026-08-13T02:00:00Z"), // Wednesday 7:00 PM LA
+      timezone: tz,
+      hours: week,
+      holidays: [],
+    });
+    expect(verdict).toEqual({ state: "open", hoursThatDay: "5:00 PM to 10:30 PM" });
+  });
+
+  it("is closed outside the window, and says what the hours were", () => {
+    const verdict = openAt({
+      at: new Date("2026-08-13T10:00:00Z"), // Thursday 3:00 AM LA
+      timezone: tz,
+      hours: week,
+      holidays: [],
+    });
+    // The day's real hours ride along so the agent can offer them back
+    // instead of only saying no.
+    expect(verdict).toEqual({ state: "closed", hoursThatDay: "5:00 PM to 10:30 PM" });
+  });
+
+  it("is closed all day on a closed weekday", () => {
+    const verdict = openAt({
+      at: new Date("2026-08-11T02:00:00Z"), // Monday 7:00 PM LA
+      timezone: tz,
+      hours: week,
+      holidays: [],
+    });
+    expect(verdict).toEqual({ state: "closed", hoursThatDay: "closed" });
+  });
+
+  it("lets a holiday override the weekday, both ways", () => {
+    const closedHoliday = openAt({
+      at: new Date("2026-08-13T02:00:00Z"), // Wednesday 7:00 PM LA
+      timezone: tz,
+      hours: week,
+      holidays: [{ date: "2026-08-12", is_closed: true, open_time: null, close_time: null }],
+    });
+    expect(closedHoliday).toEqual({ state: "closed", hoursThatDay: "closed" });
+
+    const openHoliday = openAt({
+      at: new Date("2026-08-11T02:00:00Z"), // Monday 7:00 PM LA, normally shut
+      timezone: tz,
+      hours: week,
+      holidays: [
+        { date: "2026-08-10", is_closed: false, open_time: "18:00:00", close_time: "23:00:00" },
+      ],
+    });
+    expect(openHoliday).toEqual({ state: "open", hoursThatDay: "6:00 PM to 11:00 PM" });
+  });
+
+  it("treats the boundary the same way a slot does: open at open, closed at close", () => {
+    const atOpen = openAt({
+      at: new Date("2026-08-13T00:00:00Z"), // 5:00 PM LA exactly
+      timezone: tz,
+      hours: week,
+      holidays: [],
+    });
+    expect(atOpen.state).toBe("open");
+
+    const atClose = openAt({
+      at: new Date("2026-08-13T05:30:00Z"), // 10:30 PM LA exactly
+      timezone: tz,
+      hours: week,
+      holidays: [],
+    });
+    expect(atClose.state).toBe("closed");
+  });
+
+  // The two cases that must never come back "closed". Both are failures
+  // of the data, not statements about the restaurant, and answering
+  // "closed" to either turns them into a location that can never take a
+  // booking or an order again.
+  it("says unknown, not closed, when the hours cross midnight", () => {
+    const lateNight = week.map((day) => ({ ...day, open_time: "22:00:00", close_time: "02:00:00" }));
+    const verdict = openAt({
+      at: new Date("2026-08-13T08:00:00Z"), // 1:00 AM LA, genuinely open
+      timezone: tz,
+      hours: lateNight,
+      holidays: [],
+    });
+    expect(verdict).toEqual({ state: "unknown", reason: "crosses_midnight" });
+  });
+
+  it("says unknown when no hours have ever been configured", () => {
+    expect(openAt({ at: new Date(), timezone: tz, hours: [], holidays: [] })).toEqual({
+      state: "unknown",
+      reason: "no_hours_configured",
+    });
+  });
+
+  it("still says closed for a day with no row when other days have one", () => {
+    // A location with a Tuesday row and no Monday row is shut on Mondays.
+    // That is a real answer about the restaurant, not missing setup.
+    const tuesdayOnly = [week[2]];
+    const verdict = openAt({
+      at: new Date("2026-08-11T02:00:00Z"), // Monday 7:00 PM LA
+      timezone: tz,
+      hours: tuesdayOnly,
+      holidays: [],
+    });
+    expect(verdict).toEqual({ state: "closed", hoursThatDay: "closed" });
+  });
+
+  it("says unknown for a holiday that is open with no times on it", () => {
+    const verdict = openAt({
+      at: new Date("2026-08-13T02:00:00Z"),
+      timezone: tz,
+      hours: week,
+      holidays: [{ date: "2026-08-12", is_closed: false, open_time: null, close_time: null }],
+    });
+    expect(verdict).toEqual({ state: "unknown", reason: "no_hours_configured" });
   });
 });

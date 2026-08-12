@@ -75,8 +75,35 @@ const spokenTime = (date: Date, timezone: string) =>
 const localDate = (date: Date, timezone: string) =>
   new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(date);
 
+/** How far either side of the requested time an alternative may be, in
+ *  the order a host would try them: nearest first, and never more than an
+ *  hour and a half away -- past that it is a different evening, not an
+ *  alternative. Exported so a caller that has to fetch bookings covering
+ *  every candidate (app/api/agent/availability/route.ts) can widen its
+ *  window by exactly this much rather than guessing. */
+export const ALTERNATIVE_OFFSETS_MINUTES = [-30, 30, -60, 60, -90, 90];
+export const MAX_ALTERNATIVE_OFFSET_MINUTES = 90;
+
 /** Times to offer when the requested one is full: half an hour either
- *  side, nearest first, because that is what a host would say.
+ *  side, nearest first, because that is what a host would say -- but only
+ *  the ones that would actually be taken.
+ *
+ *  `isOffered` is not optional, and that is the entire point. This used
+ *  to be plain arithmetic: it offered `slotStart ± 30 minutes` with no
+ *  capacity query, no hours check, and no past-time check, while the
+ *  system prompt called the result "the nearest open times". A caller
+ *  asking at 6:45 PM about 7:10 was offered "6:40 PM" -- a time
+ *  `create_reservation` then refused outright as already past -- and
+ *  could just as easily be offered a time the restaurant is shut or has
+ *  no seats left at. Offering a time nobody checked is worse than
+ *  offering none: the caller hears a promise, tries to take it, and is
+ *  told no by the same agent that just made it.
+ *
+ *  So the decision of what is offerable belongs to the caller of this
+ *  function -- it is the one holding the bookings, the hours and the
+ *  clock -- and this walks the offsets in preference order and formats
+ *  the first `count` that survive. Nothing here can be spoken without
+ *  having been through that predicate.
  *
  *  An offset can cross into the previous or next calendar day when the
  *  requested slot is near midnight. Speaking a bare "1:15 AM" in that
@@ -86,12 +113,29 @@ const localDate = (date: Date, timezone: string) =>
  *  `hours.ts`'s `findNextOpen` uses ("tomorrow at 5:00 PM"). Offsets here
  *  never exceed 90 minutes, so at most one calendar boundary is crossed
  *  in either direction. */
-export function nearestTimes(slotStart: Date, timezone: string, count = 2) {
-  const offsets = [-30, 30, -60, 60, -90, 90];
+export function nearestOpenTimes({
+  slotStart,
+  timezone,
+  isOffered,
+  count = 2,
+}: {
+  slotStart: Date;
+  timezone: string;
+  isOffered: (candidate: Date) => boolean;
+  count?: number;
+}) {
   const requestedDate = localDate(slotStart, timezone);
-  return offsets
-    .slice(0, count)
-    .map((minutes) => new Date(slotStart.getTime() + minutes * 60_000))
+  const offered: Date[] = [];
+
+  for (const minutes of ALTERNATIVE_OFFSETS_MINUTES) {
+    if (offered.length === count) break;
+    const candidate = new Date(slotStart.getTime() + minutes * 60_000);
+    if (isOffered(candidate)) offered.push(candidate);
+  }
+
+  // Spoken in time order regardless of which offsets survived, because
+  // that is how a person reads a pair of times out loud.
+  return offered
     .sort((a, b) => a.getTime() - b.getTime())
     .map((d) => {
       const spoken = spokenTime(d, timezone);

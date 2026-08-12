@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { seatsTaken, nearestTimes, isRequestInPast } from "./availability";
+import { seatsTaken, nearestOpenTimes, isRequestInPast } from "./availability";
+
+/** The old, unchecked behaviour: every candidate offered. Used only where
+ *  a test is about the formatting or the ordering rather than the
+ *  filtering. */
+const anyTime = () => true;
 
 describe("availability", () => {
   const slot = new Date("2026-08-13T02:00:00Z"); // 7pm Los Angeles
@@ -70,16 +75,67 @@ describe("availability", () => {
   });
 
   it("offers nearby times in the location's timezone", () => {
-    expect(nearestTimes(slot, "America/Los_Angeles", 2)).toEqual([
-      "6:30 PM",
-      "7:30 PM",
-    ]);
+    expect(
+      nearestOpenTimes({
+        slotStart: slot,
+        timezone: "America/Los_Angeles",
+        isOffered: anyTime,
+        count: 2,
+      }),
+    ).toEqual(["6:30 PM", "7:30 PM"]);
+  });
+
+  // The bug this predicate exists for: the offsets were pure arithmetic,
+  // so the agent offered times nobody had checked -- a slot already past,
+  // one the restaurant is closed at, or one with no seats left -- while
+  // the prompt called them "the nearest open times".
+  it("skips a candidate the caller rejects and reaches for the next offset", () => {
+    const rejected = new Date(slot.getTime() - 30 * 60_000); // 6:30 PM
+    const times = nearestOpenTimes({
+      slotStart: slot,
+      timezone: "America/Los_Angeles",
+      isOffered: (candidate) => candidate.getTime() !== rejected.getTime(),
+      count: 2,
+    });
+    // -30 is rejected, so +30 and -60 are offered instead, still spoken
+    // in time order.
+    expect(times).toEqual(["6:00 PM", "7:30 PM"]);
+  });
+
+  it("offers nothing at all rather than a time that was not checked", () => {
+    expect(
+      nearestOpenTimes({
+        slotStart: slot,
+        timezone: "America/Los_Angeles",
+        isOffered: () => false,
+        count: 2,
+      }),
+    ).toEqual([]);
+  });
+
+  it("never reaches past an hour and a half either side", () => {
+    const seen: number[] = [];
+    nearestOpenTimes({
+      slotStart: slot,
+      timezone: "America/Los_Angeles",
+      isOffered: (candidate) => {
+        seen.push((candidate.getTime() - slot.getTime()) / 60_000);
+        return false;
+      },
+      count: 2,
+    });
+    expect(seen).toEqual([-30, 30, -60, 60, -90, 90]);
   });
 
   it("qualifies an alternative that crosses midnight with a day word", () => {
     // 11:45 PM Los Angeles on 2026-08-13 (daylight time, UTC-7).
     const lateSlot = new Date("2026-08-14T06:45:00Z");
-    const times = nearestTimes(lateSlot, "America/Los_Angeles", 6);
+    const times = nearestOpenTimes({
+      slotStart: lateSlot,
+      timezone: "America/Los_Angeles",
+      isOffered: anyTime,
+      count: 6,
+    });
     // +90 minutes lands at 1:15 AM the next local calendar day.
     expect(times).toContain("tomorrow at 1:15 AM");
     // -30 minutes stays within the same local calendar day.
@@ -91,7 +147,12 @@ describe("availability", () => {
     // Verified with Intl.DateTimeFormat: 2026-08-14T07:15:00Z is
     // "12:15 AM" on "2026-08-14" in America/Los_Angeles.
     const earlySlot = new Date("2026-08-14T07:15:00Z");
-    const times = nearestTimes(earlySlot, "America/Los_Angeles", 2);
+    const times = nearestOpenTimes({
+      slotStart: earlySlot,
+      timezone: "America/Los_Angeles",
+      isOffered: anyTime,
+      count: 2,
+    });
     // -30 minutes lands at 11:45 PM on the previous local calendar day
     // (2026-08-13), sorting before the +30 minute alternative.
     expect(times).toEqual(["yesterday at 11:45 PM", "12:45 AM"]);

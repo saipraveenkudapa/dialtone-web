@@ -11,6 +11,7 @@ import {
   type RequestedItem,
 } from "@/lib/agent/orders";
 import { orderMessage, sendOrderSms } from "@/lib/agent/notify";
+import { openAt, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
 
 /** What `public.place_order` answers with. */
 type PlaceOrderResult = {
@@ -100,22 +101,29 @@ export async function POST(request: Request) {
   }
 
   const supabase = supabaseAdmin();
-  const { data: menu, error: menuError } = await supabase
-    .from("menu_items")
-    .select("id, name, price_cents, sold_out_until")
-    .eq("location_id", location.id);
+  // The hours are fetched alongside the menu rather than after it -- they
+  // are needed either way, and a closed kitchen is not worth a second
+  // round trip to discover.
+  const [menu, hours, holidays] = await Promise.all([
+    supabase
+      .from("menu_items")
+      .select("id, name, price_cents, sold_out_until")
+      .eq("location_id", location.id),
+    supabase.from("hours").select("*").eq("location_id", location.id),
+    supabase.from("holiday_hours").select("*").eq("location_id", location.id),
+  ]);
 
-  if (menuError) {
+  if (menu.error || hours.error || holidays.error) {
     // Only the SQLSTATE. See the place_order log below for why nothing
     // else from a PostgrestError is safe to write down.
-    console.error("[agent] menu read failed during order", {
+    console.error("[agent] menu or hours read failed during order", {
       location_id: location.id,
-      code: menuError.code,
+      code: (menu.error ?? hours.error ?? holidays.error)?.code ?? null,
     });
     return agentFail("I can't reach the kitchen system right now.", 500);
   }
 
-  const menuItems = (menu ?? []) as PricedItem[];
+  const menuItems = (menu.data ?? []) as PricedItem[];
 
   // matchItem, quantity validation and the order-size limits all live in
   // buildOrderLines (lib/agent/orders.ts) so they can be tested without a
@@ -163,6 +171,34 @@ export async function POST(request: Request) {
     return agentOk({ placed: false, reason: built.reason, item: built.item });
   }
   const lines = built.lines;
+
+  // The kitchen has to actually be open. Nothing on this path read the
+  // hours: a 3 AM order was priced, written, promised a ready time and
+  // confirmed to the caller, with a line in the system prompt as the only
+  // guard. Checked here rather than before the menu read so that every
+  // "I didn't catch that" answer still comes first -- a caller whose
+  // request could not be understood should hear that, not "we're closed"
+  // -- and so this sits immediately in front of the write, which is where
+  // a gate belongs.
+  //
+  // `unknown` is let through deliberately (see openAt): a kitchen whose
+  // hours cross midnight cannot be represented in this schema, and those
+  // are precisely the late-night kitchens that live on phone orders.
+  // Refusing every one of their orders, forever and silently, would be a
+  // far worse bug than the one this prevents.
+  const verdict = openAt({
+    at: new Date(),
+    timezone: location.timezone,
+    hours: (hours.data ?? []) as HoursRow[],
+    holidays: (holidays.data ?? []) as HolidayRow[],
+  });
+  if (verdict.state === "closed") {
+    return agentOk({
+      placed: false,
+      reason: "closed",
+      hours_that_day: verdict.hoursThatDay,
+    });
+  }
 
   // Per-location, per-order-type: a kitchen quotes pickup and delivery
   // differently, and one restaurant's promise is not another's (a place
