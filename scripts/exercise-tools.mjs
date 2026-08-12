@@ -768,6 +768,60 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
     JSON.stringify(canaryOrderAttempt.body),
   );
 
+  // A word that answers to more than one item is a QUESTION, not a
+  // refusal. This canary's two items both begin "Zzyzx", which is the
+  // same shape as the failure this check exists for: at a burger shop
+  // "fries" matches Hand Cut Fries and Cheese Fries, and the whole order
+  // used to come back `unknown_item` -- so the agent apologised for not
+  // selling fries and handed the call to a human, on most calls. The
+  // names have to come back with it or the agent cannot ask which one.
+  // Asserted as a set, not a list: the route reads the menu in
+  // sort_order and these two canary rows do not set one.
+  const ambiguousOrder = await call(
+    "order",
+    {
+      items: [{ name: "Zzyzx", quantity: 1 }],
+      type: "pickup",
+      customer_name: "Task14 Canary Probe",
+      customer_phone: "+15105559999",
+    },
+    canaries.isolatedSecret,
+  );
+  check(
+    "a spoken word matching two items asks which one, with both names, instead of refusing as unknown",
+    ambiguousOrder.status === 200 &&
+      ambiguousOrder.body?.placed === false &&
+      ambiguousOrder.body?.reason === "ambiguous_item" &&
+      Array.isArray(ambiguousOrder.body?.options) &&
+      ambiguousOrder.body.options.length === 2 &&
+      ambiguousOrder.body.options.includes("Zzyzx Canary Special") &&
+      ambiguousOrder.body.options.includes(TAX_CANARY_ITEM_NAME),
+    JSON.stringify(ambiguousOrder.body),
+  );
+
+  // ...and the distinction is only worth anything if the other side of
+  // it still holds: a word that matches nothing is still unknown_item,
+  // and one that matches exactly one item still just gets ordered (the
+  // orders further down this file, all of which name one item, are that
+  // second half).
+  const stillUnknown = await call(
+    "order",
+    {
+      items: [{ name: "Xyzzy Nothingburger", quantity: 1 }],
+      type: "pickup",
+      customer_name: "Task14 Canary Probe",
+      customer_phone: "+15105559999",
+    },
+    canaries.isolatedSecret,
+  );
+  check(
+    "a word that matches nothing on the menu is still unknown_item, not ambiguity",
+    stillUnknown.body?.placed === false &&
+      stillUnknown.body?.reason === "unknown_item" &&
+      stillUnknown.body?.options === undefined,
+    JSON.stringify(stillUnknown.body),
+  );
+
   // ── Hours ─────────────────────────────────────────────────────────
 
   const hours = await call("hours", {});

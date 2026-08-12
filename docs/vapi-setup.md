@@ -474,11 +474,43 @@ quietly cooking without it is the one outcome that must not happen.
 Card-number-like digit runs in a note are redacted before it is stored or
 texted (`lib/agent/redact.ts`).
 
+**"Which one did you mean" is not "we don't have that".** A spoken word
+that matches more than one menu item answers `reason: "ambiguous_item"`
+with `options`, the full list of names it could have meant, and `item`
+set to what the caller actually said:
+
+```jsonc
+{
+  "ok": true,
+  "placed": false,
+  "reason": "ambiguous_item",
+  "item": "fries",                                  // what they said
+  "options": ["Hand Cut Fries", "Cheese Fries"]     // what it could mean
+}
+```
+
+The agent's job here is to ask ("hand cut or cheese fries?") and re-send
+the order with the name it is given -- an exact whole name always wins,
+so the second attempt goes straight through. Nothing is written, and no
+part of the order is kept: send the whole `items` array again.
+
+This was `unknown_item` until this branch, and at a burger restaurant --
+where "fries" is most of the calls -- that made the agent apologise for
+not selling fries and hand the call to a human. The rule that produced it
+has not changed: the route still refuses to pick between two items,
+because a wrong item on a kitchen ticket costs more than one more
+question. What changed is that it now says which question to ask.
+`options` is never truncated -- an option the agent is not told about is
+one the caller cannot choose -- so at a menu with eight pizzas, "pizza"
+returns eight names, and the agent should narrow it rather than read the
+list.
+
 Refusals fall into three shapes, and the model needs
 to treat them differently:
 
 - **Ordinary business answers**, `agentOk({placed:false, reason, item?})`,
-  200: `reason` is `"unknown_item"`, `"sold_out"`, `"no_delivery"` (delivery
+  200: `reason` is `"unknown_item"`, `"ambiguous_item"` (with `options`,
+  above), `"sold_out"`, `"no_delivery"` (delivery
   asked for at a pickup-only location), `"no_pickup"` (the reverse), or
   `"closed"` (with `hours_that_day`) when the kitchen is shut right now.
   These are things a host says out loud without anything having gone

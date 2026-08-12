@@ -108,7 +108,14 @@ export async function POST(request: Request) {
     supabase
       .from("menu_items")
       .select("id, name, price_cents, sold_out_until")
-      .eq("location_id", location.id),
+      .eq("location_id", location.id)
+      // Menu order, the same order get_menu reads the items out in. This
+      // query never needed one while every answer was about a single
+      // item; an ambiguous match now reads a list of names back to the
+      // caller, and without an ORDER BY that list is whatever order
+      // Postgres happened to return -- so the same question could be
+      // asked two different ways on two calls.
+      .order("sort_order"),
     supabase.from("hours").select("*").eq("location_id", location.id),
     supabase.from("holiday_hours").select("*").eq("location_id", location.id),
   ]);
@@ -167,6 +174,27 @@ export async function POST(request: Request) {
       return agentFail(
         `I can only take up to ${MAX_ITEM_QUANTITY} of ${built.item ?? "one item"} over the phone. Let me put you through to someone.`,
       );
+    }
+    // More than one thing on this menu answers to what the caller said --
+    // "fries" where there are Hand Cut Fries and Cheese Fries. This used
+    // to come back as `unknown_item`, so the agent apologised for not
+    // selling fries and handed the call to a human, on most calls at a
+    // burger shop. The refusal to guess is unchanged; what is new is that
+    // the answer says which question to ask and carries the names to ask
+    // it with, the way `check_availability` answers a full slot with the
+    // times it could offer instead. 200, not 400: "hand cut or cheese?"
+    // is an ordinary thing a host says, not a request nobody could parse.
+    if (built.reason === "ambiguous_item") {
+      return agentOk({
+        placed: false,
+        reason: "ambiguous_item",
+        // What the caller said. `options` is the complete list of what it
+        // could have meant, never truncated -- an option the agent is not
+        // told about is one the caller cannot choose, and hiding one is
+        // how "which of these did you mean" quietly becomes a guess.
+        item: built.item,
+        options: built.options,
+      });
     }
     return agentOk({ placed: false, reason: built.reason, item: built.item });
   }

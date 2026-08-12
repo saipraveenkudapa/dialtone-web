@@ -64,20 +64,56 @@ export function matchesSpokenName(itemName: string, spoken: string) {
   return wordAwareMatch(itemName, needleWords);
 }
 
+/** What happened when we looked for the item a caller named: we found the
+ *  one they meant, nothing on this menu answers to it, or several things
+ *  do and only they can say which.
+ *
+ *  A discriminated union rather than `PricedItem | null`, because null was
+ *  answering two different questions at once (see `matchItem`). The
+ *  `reason` strings are deliberately the same strings the order route
+ *  speaks (`unknown_item`, `ambiguous_item`), so nothing between here and
+ *  the wire needs a translation table that could drift -- the same way
+ *  `OrderLinesResult` below carries the route's own reasons. Candidates
+ *  are whole `PricedItem`s, not names: the caller of this function decides
+ *  what part of them is worth saying out loud. */
+export type ItemMatch =
+  | { ok: true; item: PricedItem }
+  | { ok: false; reason: "unknown_item" }
+  | { ok: false; reason: "ambiguous_item"; candidates: PricedItem[] };
+
 /** Find the one item a caller meant.
  *
- *  Returns null when two items could match rather than picking one: a
- *  wrong item on the ticket is worse than one more question, and the
- *  agent is told to transfer when it cannot find something. */
-export function matchItem(items: PricedItem[], spoken: string) {
+ *  Never guesses between two items that both answer to what was said: a
+ *  wrong item on a kitchen ticket is worse than one more question. But
+ *  "several of these could be it" is not the same answer as "we don't
+ *  sell that", and this used to return null for both. At a burger shop,
+ *  "fries" matches Hand Cut Fries and Cheese Fries -- the single most
+ *  common thing a caller says there -- and the whole order was refused as
+ *  an unknown item, so the agent apologised for not having fries and
+ *  handed the call to a human. The question it should have asked ("hand
+ *  cut or cheese?") is one the caller answers in two words, and it can
+ *  only be asked by something that knows which of the two happened and
+ *  which names were in the running.
+ *
+ *  Exact, whole-name wins outright: at a menu with Cheese Fries and Hand
+ *  Cut Fries, "cheese fries" is an order, not a question. */
+export function matchItem(items: PricedItem[], spoken: string): ItemMatch {
   const needle = normalise(spoken);
-  if (!needle) return null;
+  if (!needle) return { ok: false, reason: "unknown_item" };
 
   const exact = items.filter((i) => normalise(i.name) === needle);
-  if (exact.length === 1) return exact[0];
+  if (exact.length === 1) return { ok: true, item: exact[0] };
 
-  const partial = items.filter((i) => matchesSpokenName(i.name, needle));
-  return partial.length === 1 ? partial[0] : null;
+  // A tie on the exact name means two menu rows literally share a name.
+  // Those rows, not the wider partial set, are what the caller named, so
+  // they are the candidates -- but it is still a tie, and a tie is
+  // answered the same way every other one is: ask, never pick.
+  const candidates =
+    exact.length > 1 ? exact : items.filter((i) => matchesSpokenName(i.name, needle));
+
+  if (candidates.length === 1) return { ok: true, item: candidates[0] };
+  if (candidates.length === 0) return { ok: false, reason: "unknown_item" };
+  return { ok: false, reason: "ambiguous_item", candidates };
 }
 
 /** Validate a spoken quantity BEFORE calling `priceOrder`. This is the
@@ -255,6 +291,19 @@ export type OrderLinesResult =
   | { ok: true; lines: OrderLine[] }
   | {
       ok: false;
+      reason: "ambiguous_item";
+      /** What the caller said, not a menu name -- there is no one menu
+       *  name to give, which is the whole point of this outcome. */
+      item: string | undefined;
+      /** Every menu item those words could have meant, in the order the
+       *  menu was given in, so the agent can ask which one. Its own
+       *  variant of this union rather than an optional field on the
+       *  shared one: `options` is meaningless for every other reason, and
+       *  a reader narrowing on `reason` gets it without a null check. */
+      options: string[];
+    }
+  | {
+      ok: false;
       reason:
         | "unknown_item"
         | "sold_out"
@@ -272,6 +321,12 @@ export type OrderLinesResult =
  *  be tested without a database:
  *
  *  - "unknown_item": nothing on the menu matches (`matchItem`).
+ *  - "ambiguous_item": more than one thing on the menu matches, so the
+ *    caller has to say which -- "fries" where there are Hand Cut Fries
+ *    and Cheese Fries. Carries `options` (both names) rather than an
+ *    `item`, because there is no single item to name. Still a refusal to
+ *    guess; what changed is that the agent can now ask instead of
+ *    apologising for not selling fries.
  *  - "sold_out": it matches, but is flagged out right now. Re-checked
  *    here even though `get_menu` already reported it -- a manager can
  *    flag an item out from the dashboard while this very call is still
@@ -286,9 +341,10 @@ export type OrderLinesResult =
  *    line, than a phone order is allowed to be (`MAX_ORDER_LINES`,
  *    `MAX_ITEM_QUANTITY`).
  *
- *  "unknown_item" and "sold_out" are ordinary outcomes the agent speaks
- *  to the caller (`agentOk({placed: false, reason, item})`), the same
- *  way a full house is an ordinary outcome for a booking.
+ *  "unknown_item", "ambiguous_item" and "sold_out" are ordinary outcomes
+ *  the agent speaks to the caller (`agentOk({placed: false, reason,
+ *  item})`), the same way a full house is an ordinary outcome for a
+ *  booking.
  *  "bad_quantity" and "bad_note" are not menu decisions -- they mean the
  *  request itself could not be understood, so the route is expected to
  *  treat them like a missing name or phone number and answer with
@@ -304,10 +360,21 @@ export function buildOrderLines(menu: PricedItem[], requested: RequestedItem[]):
   const lines: OrderLine[] = [];
 
   for (const requestedItem of requested) {
-    const match = matchItem(menu, requestedItem.name ?? "");
-    if (!match) {
+    const matched = matchItem(menu, requestedItem.name ?? "");
+    if (!matched.ok) {
+      // Two outcomes, two answers. Both still refuse to put a guess on
+      // the ticket; only one of them is worth asking a question about.
+      if (matched.reason === "ambiguous_item") {
+        return {
+          ok: false,
+          reason: "ambiguous_item",
+          item: requestedItem.name,
+          options: matched.candidates.map((c) => c.name),
+        };
+      }
       return { ok: false, reason: "unknown_item", item: requestedItem.name };
     }
+    const match = matched.item;
     if (match.sold_out_until !== null) {
       return { ok: false, reason: "sold_out", item: match.name };
     }

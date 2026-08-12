@@ -19,89 +19,170 @@ const items: PricedItem[] = [
   { id: "i3", name: "Squid Ink Tonnarelli", price_cents: 2900, sold_out_until: "close" },
 ];
 
+/** The burger shop this whole distinction came from: "fries" is what a
+ *  caller says on most calls, and it is two items. */
+const friesMenu: PricedItem[] = [
+  { id: "f1", name: "Hand Cut Fries", price_cents: 500, sold_out_until: null },
+  { id: "f2", name: "Cheese Fries", price_cents: 700, sold_out_until: null },
+  { id: "f3", name: "Double Cheeseburger", price_cents: 1300, sold_out_until: null },
+];
+
+/** The id of the item a match resolved to. Asserting through this rather
+ *  than on the whole union keeps a test that is about *which item*
+ *  readable; the tests that are about *which outcome* assert on the whole
+ *  value, because that is exactly what they are pinning down. */
+const matchedId = (menu: PricedItem[], spoken: string) => {
+  const result = matchItem(menu, spoken);
+  return result.ok ? result.item.id : null;
+};
+
 describe("matching spoken item names", () => {
   it("matches exactly, ignoring case and spacing", () => {
-    expect(matchItem(items, "  lasagne verdi ")?.id).toBe("i2");
+    expect(matchedId(items, "  lasagne verdi ")).toBe("i2");
   });
 
   it("matches a partial name the way a caller would say it", () => {
-    expect(matchItem(items, "bucatini")?.id).toBe("i1");
+    expect(matchedId(items, "bucatini")).toBe("i1");
   });
 
-  it("returns null rather than guessing between two matches", () => {
+  it("reports ambiguity, with both candidates, rather than guessing between two matches", () => {
     const ambiguous: PricedItem[] = [
       { id: "a", name: "Cheese Pizza", price_cents: 1200, sold_out_until: null },
       { id: "b", name: "Cheese Bread", price_cents: 800, sold_out_until: null },
     ];
-    expect(matchItem(ambiguous, "cheese")).toBeNull();
+    expect(matchItem(ambiguous, "cheese")).toEqual({
+      ok: false,
+      reason: "ambiguous_item",
+      candidates: ambiguous,
+    });
   });
 
-  it("returns null for something not on the menu", () => {
-    expect(matchItem(items, "chicken tikka")).toBeNull();
+  it("reports unknown, not ambiguity, for something not on the menu", () => {
+    expect(matchItem(items, "chicken tikka")).toEqual({ ok: false, reason: "unknown_item" });
   });
 
   it("matches a word prefix the way a caller would shorten a name", () => {
     const menu: PricedItem[] = [
       { id: "m1", name: "Margherita", price_cents: 1800, sold_out_until: null },
     ];
-    expect(matchItem(menu, "marg")?.id).toBe("m1");
+    expect(matchedId(menu, "marg")).toBe("m1");
   });
 
   it("does not match a needle that only appears mid-word (cola vs chocolate)", () => {
     const menu: PricedItem[] = [
       { id: "c1", name: "Chocolate Cake", price_cents: 900, sold_out_until: null },
     ];
-    expect(matchItem(menu, "cola")).toBeNull();
+    expect(matchItem(menu, "cola")).toEqual({ ok: false, reason: "unknown_item" });
   });
 
   it("does not match a needle that only appears mid-word (apple vs pineapple)", () => {
     const menu: PricedItem[] = [
       { id: "c2", name: "Pineapple Upside-Down Cake", price_cents: 950, sold_out_until: null },
     ];
-    expect(matchItem(menu, "apple")).toBeNull();
+    expect(matchItem(menu, "apple")).toEqual({ ok: false, reason: "unknown_item" });
   });
 
   it("does not match a needle that only appears mid-word (melon vs watermelon)", () => {
     const menu: PricedItem[] = [
       { id: "c3", name: "Watermelon Salad", price_cents: 700, sold_out_until: null },
     ];
-    expect(matchItem(menu, "melon")).toBeNull();
+    expect(matchItem(menu, "melon")).toEqual({ ok: false, reason: "unknown_item" });
   });
 
-  it("still returns null rather than guessing when a word-prefix match is ambiguous", () => {
+  it("still refuses to guess when a word-prefix match is ambiguous, and says which two", () => {
     const ambiguous: PricedItem[] = [
       { id: "p1", name: "Margherita Pizza", price_cents: 1400, sold_out_until: null },
       { id: "p2", name: "Marganza Sandwich", price_cents: 1100, sold_out_until: null },
     ];
-    expect(matchItem(ambiguous, "marg")).toBeNull();
+    expect(matchItem(ambiguous, "marg")).toEqual({
+      ok: false,
+      reason: "ambiguous_item",
+      candidates: ambiguous,
+    });
   });
 
   it("does not let a short word prefix-match into a longer unrelated word (ham vs hamburger)", () => {
     const menu: PricedItem[] = [
       { id: "h1", name: "Hamburger", price_cents: 1000, sold_out_until: null },
     ];
-    expect(matchItem(menu, "ham")).toBeNull();
+    expect(matchItem(menu, "ham")).toEqual({ ok: false, reason: "unknown_item" });
   });
 
   it("does not let a short word prefix-match into a longer unrelated word (pie vs pierogi)", () => {
     const menu: PricedItem[] = [
       { id: "pr1", name: "Pierogi", price_cents: 1100, sold_out_until: null },
     ];
-    expect(matchItem(menu, "pie")).toBeNull();
+    expect(matchItem(menu, "pie")).toEqual({ ok: false, reason: "unknown_item" });
   });
 
   it("still matches a short word exactly against an item actually named that word", () => {
     const menu: PricedItem[] = [
       { id: "hc1", name: "Ham & Cheese", price_cents: 900, sold_out_until: null },
     ];
-    expect(matchItem(menu, "ham")?.id).toBe("hc1");
+    expect(matchedId(menu, "ham")).toBe("hc1");
   });
 
   it("still allows a longer word to prefix-match (marg for Margherita)", () => {
     const menu: PricedItem[] = [
       { id: "m2", name: "Margherita", price_cents: 1800, sold_out_until: null },
     ];
-    expect(matchItem(menu, "marg")?.id).toBe("m2");
+    expect(matchedId(menu, "marg")).toBe("m2");
+  });
+});
+
+/** The failure that put this distinction in: at a burger restaurant,
+ *  ordering "fries" matched Hand Cut Fries and Cheese Fries, came back as
+ *  `unknown_item`, and the agent apologised for not selling fries and
+ *  handed the call over -- on most calls. */
+describe("telling 'which one did you mean' apart from 'we don't have that'", () => {
+  it("answers 'fries' with ambiguity and BOTH candidates, not with unknown", () => {
+    const result = matchItem(friesMenu, "fries");
+    expect(result).toEqual({
+      ok: false,
+      reason: "ambiguous_item",
+      candidates: [friesMenu[0], friesMenu[1]],
+    });
+    // The names are the point: without them the agent cannot ask "hand
+    // cut or cheese fries?", which is the entire fix.
+    if (result.ok || result.reason !== "ambiguous_item") throw new Error("expected ambiguity");
+    expect(result.candidates.map((c) => c.name)).toEqual(["Hand Cut Fries", "Cheese Fries"]);
+  });
+
+  it("still answers a genuinely unknown item with unknown, not ambiguity", () => {
+    expect(matchItem(friesMenu, "onion rings")).toEqual({ ok: false, reason: "unknown_item" });
+  });
+
+  it("lets an exact full name win over the partial match it collides with", () => {
+    // An exact whole-name hit is an order, never a question, even
+    // though the word "fries" on its own is ambiguous on this menu.
+    expect(matchedId(friesMenu, "Cheese Fries")).toBe("f2");
+    expect(matchedId(friesMenu, "  hand cut fries ")).toBe("f1");
+  });
+
+  it("still resolves a single partial match without asking anything", () => {
+    expect(matchedId(friesMenu, "double")).toBe("f3");
+    expect(matchedId(friesMenu, "hand")).toBe("f1");
+  });
+
+  it("prefers an exact-name tie's own rows as the candidates", () => {
+    // Two rows literally sharing a name is a menu-data fault, not a
+    // spoken-word one -- still a tie, still asked about rather than
+    // guessed at, and the candidates are the rows that were actually
+    // named rather than everything the words could have reached.
+    const duplicated: PricedItem[] = [
+      { id: "d1", name: "Fries", price_cents: 400, sold_out_until: null },
+      { id: "d2", name: "Fries", price_cents: 450, sold_out_until: null },
+      { id: "d3", name: "Fries and Gravy", price_cents: 600, sold_out_until: null },
+    ];
+    expect(matchItem(duplicated, "fries")).toEqual({
+      ok: false,
+      reason: "ambiguous_item",
+      candidates: [duplicated[0], duplicated[1]],
+    });
+  });
+
+  it("treats a blank spoken name as unknown, never as every item at once", () => {
+    expect(matchItem(friesMenu, "   ")).toEqual({ ok: false, reason: "unknown_item" });
   });
 });
 
@@ -237,6 +318,37 @@ describe("buildOrderLines", () => {
   it("reports unknown_item for something not on the menu, rather than throwing", () => {
     const result = buildOrderLines(items, [{ name: "chicken tikka" }]);
     expect(result).toEqual({ ok: false, reason: "unknown_item", item: "chicken tikka" });
+  });
+
+  it("reports ambiguous_item, carrying every name it could have been, instead of unknown_item", () => {
+    // The whole order used to be refused as unknown_item here, so the
+    // agent said the restaurant has no fries and handed the call over.
+    const result = buildOrderLines(friesMenu, [{ name: "fries", quantity: 2 }]);
+    expect(result).toEqual({
+      ok: false,
+      reason: "ambiguous_item",
+      // What the caller said -- there is no one menu name to give.
+      item: "fries",
+      options: ["Hand Cut Fries", "Cheese Fries"],
+    });
+  });
+
+  it("keeps ambiguity distinct from unknown all the way out of buildOrderLines", () => {
+    const ambiguous = buildOrderLines(friesMenu, [{ name: "fries" }]);
+    const unknown = buildOrderLines(friesMenu, [{ name: "onion rings" }]);
+    if (ambiguous.ok || unknown.ok) throw new Error("expected both to be refused");
+    expect(ambiguous.reason).not.toBe(unknown.reason);
+    expect(unknown).toEqual({ ok: false, reason: "unknown_item", item: "onion rings" });
+  });
+
+  it("takes an unambiguous line from the same menu without asking anything", () => {
+    // The ambiguity answer must not become a new way to refuse orders
+    // that were always fine.
+    const result = buildOrderLines(friesMenu, [{ name: "cheese fries", quantity: 2 }]);
+    expect(result).toEqual({
+      ok: true,
+      lines: [{ item: friesMenu[1], quantity: 2, note: null }],
+    });
   });
 
   it("reports sold_out for an item flagged out, even though get_menu already said so once", () => {
