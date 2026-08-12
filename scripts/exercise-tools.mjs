@@ -636,6 +636,13 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
     JSON.stringify(pastReservation.body),
   );
 
+  // An over-max party used to get the same generic 400 a garbled party
+  // size gets ("I didn't catch how many people"), while check_availability
+  // -- asked about the same party a moment earlier -- already answered
+  // `large_party`. The two endpoints now agree: this is an ordinary
+  // answer with a speakable reason, not a failure to hear, so the agent
+  // can say "that's a big party, let me put you through" instead of
+  // asking again and hearing the same number again.
   const oversizedReservation = await call("reservation", {
     requested_at: reservationWhen,
     party_size: 99,
@@ -643,8 +650,10 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
     customer_phone: "+15105551014",
   });
   check(
-    "reservation for an over-max party is refused before booking",
-    oversizedReservation.status === 400 && oversizedReservation.body?.ok === false,
+    "reservation for an over-max party is refused with the same large_party reason check_availability gives",
+    oversizedReservation.status === 200 &&
+      oversizedReservation.body?.booked === false &&
+      oversizedReservation.body?.reason === "large_party",
     JSON.stringify(oversizedReservation.body),
   );
 

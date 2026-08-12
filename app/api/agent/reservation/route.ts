@@ -62,8 +62,22 @@ export async function POST(request: Request) {
   if (isRequestInPast(when, new Date())) {
     return agentFail("That time has already passed.");
   }
-  if (!Number.isInteger(party) || party < 1 || party > location.max_party_size) {
+  // A party size that could not be understood at all.
+  if (!Number.isInteger(party) || party < 1) {
     return agentFail("I didn't catch how many people.");
+  }
+  // A party size that was understood perfectly and is simply too big.
+  // These used to be the same answer: a caller asking for a table for
+  // twelve was told "I didn't catch how many people", so the agent asked
+  // again, heard twelve again, and refused again -- while
+  // check_availability, asked the same question a moment earlier, had
+  // already answered `large_party`. Two endpoints disagreeing about one
+  // party is a loop the caller cannot get out of. Same shape as
+  // app/api/agent/availability/route.ts: an ordinary answer with a reason
+  // the agent can speak ("that's a big party, let me put you through"),
+  // not a failure to hear.
+  if (party > location.max_party_size) {
+    return agentOk({ booked: false, reason: "large_party" });
   }
   if (!body.customer_name || !body.customer_phone) {
     return agentFail("I still need a name and a number for the booking.");

@@ -145,7 +145,7 @@ parse.
 | `get_menu` | `/api/agent/menu` | `{item?: string}` | `{categories, sold_out: string[], alternative: string \| null}`. Prices are **pre-tax** dollar strings (`"$12.00"`) -- see the tax gap below. `alternative` is filled only when `item` matches something sold out. |
 | `get_hours` | `/api/agent/hours` | `{}` | `{open_now, today, next_open}`. `today` is `"5:00 PM to 10:00 PM"` or `"closed"`. Hours that cross midnight cannot be represented -- see the gap below. |
 | `check_availability` | `/api/agent/availability` | `{requested_at: ISO 8601, party_size: number}` | `{available, alternatives}`, or `{available:false, reason:"large_party", alternatives:[]}` for a party over `max_party_size`. Refuses (400) a past `requested_at` (2-minute clock-skew tolerance) or an unparseable date/party size, rather than answering `available:false` for either. |
-| `create_reservation` | `/api/agent/reservation` | `{requested_at, party_size, customer_name, customer_phone, provider_call_id?}` | `{booked:true, booking_id, when}` or `{booked:false, reason:"full"}`. An over-max party gets the **same** generic 400 as a garbled party size ("I didn't catch how many people") -- unlike `check_availability`, this route does not distinguish "too big" from "didn't understand." Idempotent per `provider_call_id` -- see below. |
+| `create_reservation` | `/api/agent/reservation` | `{requested_at, party_size, customer_name, customer_phone, provider_call_id?}` | `{booked:true, booking_id, when}`, `{booked:false, reason:"full"}`, or `{booked:false, reason:"large_party"}` for a party over `max_party_size` -- the same reason `check_availability` gives, so the two agree about one party. Refuses (400) a past `requested_at` or an unparseable date/party size. Idempotent per `provider_call_id` -- see below. |
 | `place_order` | `/api/agent/order` | `{items:[{name, quantity}], type?: "pickup"\|"delivery" (default "pickup"), customer_name, customer_phone, address?, provider_call_id?}` | See below -- this one has real edges. |
 | `transfer_to_human` | `/api/agent/transfer` | `{reason?: string, provider_call_id?}` | `{number}` -- always `location.fallback_human_number`. Fails (500) if the location has no fallback number configured at all; make sure every live location has one before go-live. Logging the transfer is fire-and-forget (`after()`) so this responds even if the database is unhealthy. |
 
@@ -277,9 +277,9 @@ row), two different calls booking the same slot still creating two, and
 the same pair of calls *without* a `provider_call_id` correctly not
 deduplicating, tax rounding pinned against two quantities chosen to land
 on opposite sides of a half cent, past-time refusals on both
-`check_availability` and `create_reservation`, an oversized party
-refused before booking, and the assistant endpoint failing closed on the
-kill switch and on "not live" independently.
+`check_availability` and `create_reservation`, an oversized party answered
+with `large_party` by both, and the assistant endpoint failing closed on
+the kill switch and on "not live" independently.
 
 **It must pass, completely, against the environment you're about to point
 Vapi at, before that environment takes a real call.** A failure here is
