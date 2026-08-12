@@ -2,6 +2,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
 import { agentFail, agentOk } from "@/lib/agent/respond";
 import { isRequestInPast } from "@/lib/agent/availability";
+import { hasUsableCallerName, hasUsableCallerPhone } from "@/lib/agent/caller";
 
 /** What `public.cancel_booking` answers with. */
 type CancelBookingResult = {
@@ -75,11 +76,24 @@ export async function POST(request: Request) {
   if (isRequestInPast(when, new Date())) {
     return agentFail("That booking has already passed.");
   }
-  // Both, always. The whole safety of this endpoint is that a phone
+  // Both, always -- and each has to be something app.caller_name_key /
+  // app.caller_phone_key can actually turn into a key, not merely a
+  // non-empty string. The whole safety of this endpoint is that a phone
   // number on its own identifies nobody -- see the migration -- so a
   // request carrying only one of the two is the agent not having
   // finished asking, and must not reach the matcher at all.
-  if (!body.customer_name || !body.customer_phone) {
+  //
+  // A name the transcript reduced to "22", or a phone number heard as
+  // six digits, is the same problem wearing a different shape: both
+  // normalise to NULL in SQL, and cancel_booking answers that with
+  // `missing_details` -- which is not in SPEAKABLE_REFUSALS below and so
+  // would otherwise fall straight into the log-and-500 branch, telling a
+  // caller "I can't get to the book right now" for something as ordinary
+  // as a misheard name. Caught here instead, before the call, and
+  // answered the way every other unheard field in this route is: ask
+  // again. See lib/agent/caller.ts for why this check does not have to
+  // reproduce the SQL normalisation exactly to do that job.
+  if (!hasUsableCallerName(body.customer_name) || !hasUsableCallerPhone(body.customer_phone)) {
     return agentFail("I still need the name and number the booking's under.");
   }
 

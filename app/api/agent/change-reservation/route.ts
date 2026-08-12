@@ -3,6 +3,7 @@ import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
 import { agentFail, agentOk } from "@/lib/agent/respond";
 import { isRequestInPast } from "@/lib/agent/availability";
 import { openAt, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
+import { hasUsableCallerName, hasUsableCallerPhone } from "@/lib/agent/caller";
 
 /** What `public.change_booking` answers with. */
 type ChangeBookingResult = {
@@ -89,7 +90,19 @@ export async function POST(request: Request) {
   if (isRequestInPast(newWhen, now)) {
     return agentFail("That time has already passed.");
   }
-  if (!body.customer_name || !body.customer_phone) {
+  // Not merely non-empty -- each has to be something app.caller_name_key
+  // / app.caller_phone_key can actually turn into a key. A name the
+  // transcript reduced to "22", or a phone number heard as six digits,
+  // normalises to NULL in SQL, and change_booking answers that with
+  // `missing_details` -- which is not in SPEAKABLE_REFUSALS below, so it
+  // would otherwise fall into the log-and-500 branch and tell a caller
+  // "I can't get to the book right now" over something as ordinary as a
+  // misheard name. Caught here instead, before the call, and answered
+  // the way every other unheard field in this route is: ask again. Same
+  // check, same reasoning, as cancel-reservation/route.ts; see
+  // lib/agent/caller.ts for why it does not have to reproduce the SQL
+  // normalisation exactly to do that job.
+  if (!hasUsableCallerName(body.customer_name) || !hasUsableCallerPhone(body.customer_phone)) {
     return agentFail("I still need the name and number the booking's under.");
   }
 
