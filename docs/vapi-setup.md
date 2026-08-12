@@ -12,6 +12,16 @@ against the product spec -- read `app/api/agent/*/route.ts` yourself before
 trusting a detail that matters to you, especially anything about Vapi's own
 wire format, which is outside this repo and can change under us.
 
+`scripts/provision-vapi.mjs` (step 3 below) does the Vapi-side wiring --
+creating or updating the assistant and registering all eight tools --
+against a real Vapi account, from the command line, idempotently. The
+"Tool reference" and "Assistant reference" sections below still describe
+every request/response shape and every value that goes on the assistant in
+full, both because that is the spec the script implements and because it
+is the fastest way to test one tool in isolation with `curl` or to
+understand what a failure means -- read them whether or not you run the
+script.
+
 ## 1. Give the location a tool secret
 
 ```bash
@@ -120,7 +130,85 @@ Twilio path. `fallback_number` rides along in both the enabled and
 disabled shapes specifically so you never have to make a second request to
 find out where to send a call the AI can't take.
 
-## 3. Create the eight conversational tools
+## 3. Provision the assistant and its tools
+
+```bash
+set -a && . ./.env.local && set +a
+AGENT_SECRET=<secret from step 1> \
+  node scripts/provision-vapi.mjs <location-id> <public-https-base-url>
+```
+
+This is the automated version of everything below in this section and in
+"Assistant reference: what goes where" -- it fetches the config from step 2
+with the secret from step 1, then creates or updates a Vapi assistant carrying the
+system prompt, the greeting as `firstMessage`, temperature 0.3, and a
+transfer destination, and registers all eight tools against
+`<public-https-base-url>`, each with the `x-dialtone-secret` header and a
+parameter schema matched against the routes themselves, not against prose.
+It prints the assistant id at the end -- put that in `VAPI_ASSISTANT_ID`.
+
+It needs `VAPI_PRIVATE_KEY` (from `.env.local`) to talk to Vapi, and
+`AGENT_SECRET` -- the same plaintext step 1 printed -- as an environment
+variable, never a CLI argument, so it never ends up in shell history or a
+`ps` listing. Neither that secret nor `VAPI_PRIVATE_KEY` is ever printed,
+by this script or into any log line, including inside `--dry-run` output.
+
+**Idempotent.** Running it twice for the same location updates the same
+Vapi assistant instead of creating a second one. "The assistant for this
+location" means the one whose `metadata.dialtone_location_id` equals
+`<location-id>` -- not its name, which a restaurant can rename and which
+two locations could share, and not a locally-cached id, since this script
+keeps no state of its own between runs. All eight tools (plus the native
+transfer destination below) live inline on the assistant object itself and
+are fully replaced on every run, so there is nothing separate to
+deduplicate.
+
+**Refuses a non-HTTPS or `localhost` base URL** with an explanation, unless
+you pass `--dry-run`: Vapi places every one of these HTTP calls from its
+own servers, not from wherever this script runs, so a `localhost` URL is
+not reachable no matter how confidently `npm run dev` is running, and a
+plain `http://` URL would put the tenant secret -- sent to fetch the
+config in step 2 -- on the wire unencrypted. This is the single most
+likely way to lose an hour here, so it is refused loudly up front instead
+of failing silently the first time Vapi tries to call a tool.
+
+**Refuses to provision a disabled location.** If step 2's response comes
+back `assistant_enabled: false` (the kill switch is on, or the location
+isn't live), this script stops rather than wiring Vapi to an assistant for
+a location that has deliberately been told to keep calls off the AI --
+pointing a working assistant at a live number would defeat that switch,
+not merely leave it unused. It also refuses a location with no
+`fallback_human_number` set, since `transfer_to_human` fails outright
+without one and the assistant's transfer destination (below) would have
+nowhere to point.
+
+**`--dry-run`** prints the exact assistant payload it would send -- the
+full system prompt, all eight tools, the transfer destination -- with the
+secret redacted, and calls none of Vapi's write endpoints. It still fetches
+the real config from step 2, so it is a genuine preview, not a mock; it
+also still refuses a plain `http://` URL (the config fetch really happens
+and really sends the secret), but it does allow `localhost`, specifically
+so you can run this against `npm run dev` before a public URL exists.
+Omit the flag to actually create or update the assistant; that is the
+default.
+
+**Two mechanisms move the call, not one.** `transfer_to_human` (below) is
+a `function` tool like the other seven -- it hits `/api/agent/transfer`
+and returns `{number}`, which is what the route's own docstring describes:
+best-effort logging, with the number handed back first. A `function` tool
+cannot itself move a live phone call; only Vapi's native `transferCall`
+tool type can, and that type has no `function.name` to bind to
+"transfer_to_human" (checked against Vapi's own OpenAPI schema while
+writing this script -- `CreateTransferCallToolDTO` has no `function`
+field). So this script also adds a second, unnamed `transferCall` tool
+with a **static** destination -- `fallback_number` from step 2, baked in
+at provisioning time rather than looked up from this app during the call.
+That is deliberate, not a shortcut: the one thing this assistant does that
+absolutely must still work when the rest of this app is degraded is
+getting a caller to a person, so the mechanism that actually does that
+must not itself depend on a webhook to this app succeeding mid-call.
+
+## Tool reference: request and response shapes
 
 Each is a tool with `POST` to your public base URL and the header
 `x-dialtone-secret: <the secret from step 1>`. Every endpoint below speaks
@@ -421,18 +509,29 @@ what the agent believes an item costs" has to mean once the write lives in
 the database. `get_menu`'s prices are **pre-tax**. See the tax gap below
 for what that difference means for the prompt's read-back step.
 
-## 4. Set the assistant up
+## Assistant reference: what goes where
+
+`scripts/provision-vapi.mjs` (step 3) sets all four of these on every run.
+By hand, in the Vapi dashboard or API:
 
 - **System prompt:** `system_prompt` from step 2, fetched fresh every call.
-- **First message:** `greeting` from the same response, as a pre-recorded
-  audio file. Do not let the model generate it -- a generated greeting
-  costs a second of silence at the top of every call. (`buildGreeting` in
+- **First message:** `greeting` from the same response, spoken exactly as
+  fetched -- do not let the model generate it, a generated greeting costs
+  a second of silence at the top of every call (`buildGreeting` in
   `lib/agent/prompt.ts` is the text of record; it falls back to a generic
-  greeting if the location hasn't set `greeting_text`.)
+  greeting if the location hasn't set `greeting_text`). The script sets
+  Vapi's `firstMessageMode` to `assistant-speaks-first` to guarantee this
+  half; turning the text into a **pre-recorded audio file** so it starts
+  instantly rather than waiting on Vapi's own TTS is a further
+  optimisation the script does not do, since it would need a separate
+  TTS-and-hosting step of its own.
 - **Temperature:** 0.3. Boring and consistent, not creative.
-- **Transfer destination:** `fallback_number` from the same response.
+- **Transfer destination:** `fallback_number` from the same response. See
+  "Two mechanisms move the call, not one" in step 3 for why this is a
+  second, native Vapi tool alongside `transfer_to_human` below, not the
+  same tool wired twice.
 
-## 5. Point the number at it
+## 4. Point the number at it
 
 Twilio number → Vapi phone number import → assign the assistant (or the
 dynamic-assistant wiring from step 2, if that's how you set it up).
@@ -442,7 +541,7 @@ the two paths do not conflict -- that route still greets, optionally
 records, and forwards straight to a human, unconditionally, with no AI
 involved at all.
 
-## 6. Prove it before a real caller does: `scripts/exercise-tools.mjs`
+## 5. Prove it before a real caller does: `scripts/exercise-tools.mjs`
 
 ```bash
 node scripts/set-agent-secret.mjs a10c0000-0000-0000-0000-00000000000a
@@ -603,7 +702,7 @@ you onboard one.
   problem from the staff ticket and must not be built** on the strength of
   this line.
 - **Two identical bookings inside one call collapse into one.**
-  `create_reservation`'s fingerprint (step 3) cannot distinguish a
+  `create_reservation`'s fingerprint ("Tool reference" above) cannot distinguish a
   retried tool call from a caller genuinely asking for a second table at
   the same time, for the same party size, under the same name and number,
   in the same phone call -- the two requests are byte-identical, so the
@@ -660,6 +759,7 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Try to make it quote a wrong price. If you can, so can a customer.
 - [ ] Ask it something outside the four things it does. It must transfer.
 - [ ] Run `scripts/exercise-tools.mjs` against the environment Vapi will actually hit, and confirm all 71 checks pass. Don't onboard on top of a red run.
+- [ ] Run `scripts/provision-vapi.mjs <location-id> <base-url>` (no `--dry-run`) against that same environment, put the printed assistant id in `VAPI_ASSISTANT_ID`, and attach that assistant to this location's number.
 - [ ] Confirm your Vapi wiring fetches `/api/agent/assistant` **fresh at the start of every call**, not once at setup. Leave the integration alone overnight and call it again the next morning; it must state the correct date and today's real hours, not yesterday's.
 - [ ] Flip the location's kill switch on the dashboard mid-session and call again immediately. The very next call must not reach the AI -- confirm it lands on a human, not just that `/api/agent/assistant` reports `assistant_enabled:false` in isolation.
 - [ ] Set the location live to `false` and confirm the same thing happens for that condition independently of the kill switch.
@@ -679,6 +779,6 @@ Work through this list. Every line is a way these break in the field.
 - [ ] **Change a booking to a time that is full, to a time the restaurant is shut, and to a party bigger than `max_party_size`.** All three must be refused with the booking left exactly where it was -- then check the row to be sure it did not move. A change is a capacity decision, not an edit, and a move that half-happened costs a table twice.
 - [ ] **Change a booking to a genuinely open time and confirm it moved rather than duplicated.** One row, new time, and the old slot bookable again by someone else.
 - [ ] Ask about parking, and ask it to text you a payment link. Both are now outside the four things it does, so it must transfer rather than answer -- there is no parking data anywhere in this system and nothing that texts a customer. If it names a car park or promises a link, the prompt has drifted back.
-- [ ] Confirm your Vapi tool configuration actually sends `provider_call_id` on `create_reservation` and `place_order`. It is the whole of the retry protection on both: without it a retried booking holds a second table, which costs the restaurant real capacity for that slot. If your configuration can force a retry (timeout, network blip), force one against `create_reservation` and confirm the dashboard shows one booking, not two.
-- [ ] Rotate the location's secret (`--force`) once, on purpose, during a maintenance window, so whoever runs this in production has done it before they have to do it under pressure. Confirm calls fail during the gap and recover once Vapi's headers are updated.
+- [ ] Confirm your Vapi tool configuration actually sends `provider_call_id` on `create_reservation`, `place_order` and `transfer_to_human`. It is the whole of the retry protection on the first two, and how a transfer gets logged against the right call on the third: without it a retried booking holds a second table, which costs the restaurant real capacity for that slot. `scripts/provision-vapi.mjs` sends it as a static parameter (`{{call.id}}`) on all three, so this should already be true if you provisioned with the script -- confirm it anyway. If your configuration can force a retry (timeout, network blip), force one against `create_reservation` and confirm the dashboard shows one booking, not two.
+- [ ] Rotate the location's secret (`--force`) once, on purpose, during a maintenance window, so whoever runs this in production has done it before they have to do it under pressure. Confirm calls fail during the gap, then re-run `node scripts/provision-vapi.mjs <location-id> <base-url>` with the new `AGENT_SECRET` to push it into every tool's header, and confirm calls recover.
 - [ ] Set `locations.pickup_promise_minutes` and `locations.delivery_promise_minutes` to numbers this kitchen can actually hit -- ask whoever runs the pass, not the owner guessing from a good night. Every location starts on the defaults (25 / 45) until someone changes them; an owner who leaves the defaults is promising times they cannot keep, and the customer who believed it shows up angry at the restaurant, not at this checklist. Neither number adjusts for how backed up the kitchen is right now -- see the gap above -- so revisit both if this location's actual ticket times change.
