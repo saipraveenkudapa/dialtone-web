@@ -342,11 +342,15 @@ to treat them differently:
   the route and the function have drifted apart, not that the caller did
   anything wrong -- that's why it's a 500 and not a spoken sentence.
 
-`total` in a successful response (`"$14.30"`) **includes tax** --
-`place_order` computes `subtotal + round(subtotal * tax_rate_bps / 10000)`
-server-side, the same as `check_availability`'s and the menu's pricing is
-never sent by the client. `get_menu`'s prices do not include tax. See the
-tax gap below for what that means for the prompt's read-back step.
+`total` in a successful response (`"$14.30"`) **includes tax**.
+`place_order` works it out server-side, in integer cents, as `subtotal +
+round(subtotal * tax_rate_bps / 10000)`, from prices it reads out of
+`menu_items` itself and a rate it reads off the `locations` row. Neither a
+price nor a tax rate is ever sent by the client -- the function has no
+argument for either, which is what "prices from the live menu, never from
+what the agent believes an item costs" has to mean once the write lives in
+the database. `get_menu`'s prices are **pre-tax**. See the tax gap below
+for what that difference means for the prompt's read-back step.
 
 ## 4. Set the assistant up
 
@@ -388,17 +392,26 @@ against numbers it computes itself, independently, from the same database
 rows.
 
 This is not a smoke test against a mock. It is self-contained: it
-provisions its own three throwaway locations (one for cross-tenant
-isolation, one with the kill switch on, one not live), drives every tool
-through them and the demo location, and deletes them again in a
+provisions its own five throwaway locations (one for cross-tenant
+isolation, one with the kill switch on, one not live, one shut every day
+of the week, and one open 9 to 5 with exactly two seats), drives every
+tool through them and the demo location, and deletes them again in a
 `try/finally` that runs even if a check throws partway through -- so
-running it twice in a row starts from the same state both times. It
+running it twice in a row starts from the same state both times.
+
+The last two exist because the routes read opening hours before taking a
+booking or an order, and an assertion about that has to be pinned to hours
+the script controls rather than to what time of day it happens to run. The
+demo location's own hours are used for what they really say: its bookings
+are made inside them, and the one check that must happen "now" -- placing
+an order -- asserts the route agrees with those hours either way, so a run
+at 3 AM proves the refusal and a run at 7 PM proves the order. It
 finishes by snapshotting the demo location's orders, order_items,
 bookings, calls, order_status_events, and menu_items before and after and
 asserting they are byte-for-byte identical, proving its own writes were
 fully cleaned up.
 
-It runs 39 checks, including: auth (missing/wrong secret, on both a read
+It runs 52 checks, including: auth (missing/wrong secret, on both a read
 and both write endpoints), cross-tenant isolation on both `get_menu` and
 `place_order` (a second tenant's secret can see only its own menu and
 cannot order off another tenant's menu), sold-out vs. unknown-item as
@@ -413,6 +426,19 @@ on opposite sides of a half cent, past-time refusals on both
 `check_availability` and `create_reservation`, an oversized party answered
 with `large_party` by both, and the assistant endpoint failing closed on
 the kill switch and on "not live" independently.
+
+It also covers, since the review that produced them: a per-item change
+landing in `order_items.modifiers` on the line it belongs to and on no
+other, a card number spoken into that change being redacted before it is
+stored, an over-long change refused as a sentence, a corrected order not
+being swallowed as a retry of the uncorrected one, `staff_notified: false`
+on an order nobody could be texted about (with the row agreeing), a
+booking and an order both refused at a closed restaurant with nothing
+written, alternatives for a closed time being the nearest times the place
+is really open, alternatives for a full slot excluding the times that are
+full, the offered alternative actually being bookable, the booking
+confirmation naming the date, and `get_menu` answering a spoken word
+("squid") with an in-stock alternative.
 
 **It must pass, completely, against the environment you're about to point
 Vapi at, before that environment takes a real call.** A failure here is
@@ -499,14 +525,21 @@ you onboard one.
   Worth repeating here: there is no code path in this system that rotates
   a live location's secret without some number of calls failing auth in
   between.
-- **Card-number redaction covers one write path.** `redactCardNumbers`
-  (`lib/agent/redact.ts`) scrubs `transfer_reason` before it's written.
-  Nothing else -- not order notes, not a future `calls.transcript` column
-  (the schema already has a comment promising this will be redacted; no
-  writer for that column exists yet) -- is scanned. If you enable Twilio
-  call recording or any transcript storage for a Vapi-held call, a caller
-  who reads a card number out loud during an order (not a transfer) is
-  not protected by anything in this codebase today.
+- **Card-number redaction covers two write paths, and the SMS is not one
+  of them.** `redactCardNumbers` (`lib/agent/redact.ts`) scrubs
+  `transfer_reason` and each item's `note` before either is written.
+  Nothing else is scanned -- and the fields that are not scanned still
+  **leave this system**: `customer_name`, `customer_phone` and the
+  delivery `address` go into the body of the staff SMS exactly as the
+  agent sent them, which means they go to Twilio, and from there to a
+  phone. A caller who reads a card number out while giving their name or
+  their address ("it's 4111 1111 1111 1111 — sorry, wrong thing") has it
+  stored on the order and texted out, unredacted. A future
+  `calls.transcript` column is in the same position (the schema already
+  has a comment promising redaction; no writer for that column exists
+  yet). If you enable Twilio call recording or any transcript storage for
+  a Vapi-held call, a caller who reads a card number out loud during an
+  order rather than a transfer is not protected by anything here today.
 - **Recording retention is not enforced.** `recording_retention_days`
   exists on `locations` but nothing deletes a recording once it's past
   that many days.
@@ -535,7 +568,7 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Toggle an item sold out mid-call on the manager screen, then call again and confirm the next call knows.
 - [ ] Try to make it quote a wrong price. If you can, so can a customer.
 - [ ] Ask it something outside the four things it does. It must transfer.
-- [ ] Run `scripts/exercise-tools.mjs` against the environment Vapi will actually hit, and confirm all 39 checks pass. Don't onboard on top of a red run.
+- [ ] Run `scripts/exercise-tools.mjs` against the environment Vapi will actually hit, and confirm all 52 checks pass. Don't onboard on top of a red run.
 - [ ] Confirm your Vapi wiring fetches `/api/agent/assistant` **fresh at the start of every call**, not once at setup. Leave the integration alone overnight and call it again the next morning; it must state the correct date and today's real hours, not yesterday's.
 - [ ] Flip the location's kill switch on the dashboard mid-session and call again immediately. The very next call must not reach the AI -- confirm it lands on a human, not just that `/api/agent/assistant` reports `assistant_enabled:false` in isolation.
 - [ ] Set the location live to `false` and confirm the same thing happens for that condition independently of the kill switch.
