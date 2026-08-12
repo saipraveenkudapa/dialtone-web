@@ -70,6 +70,24 @@ the way Twilio does.
 node scripts/twilio-post.mjs /api/twilio/voice '{"CallSid":"CAtest","From":"+15105550119","To":"+15105550177"}'
 ```
 
+## Voice agent
+
+Vapi holds the call and calls our tool endpoints. See
+[docs/vapi-setup.md](docs/vapi-setup.md) for wiring a restaurant, and
+`lib/agent/prompt.ts` for the system prompt of record.
+
+Tools authenticate with a per-location secret in `x-dialtone-secret`,
+stored as a SHA-256 hash. A tool call can only ever touch the location
+its secret belongs to — a `location_id` in a request body is never
+trusted.
+
+`POST /api/agent/assistant` assembles that prompt fresh per call and fails
+closed: a location with its kill switch on, or not marked live, gets
+`assistant_enabled: false` and a null prompt back, never a stale or
+disabled one served from a cache. Whatever holds the call must check that
+field before using anything else in the response — see
+[docs/vapi-setup.md](docs/vapi-setup.md) for what that means in practice.
+
 ## Database
 
 This repo owns the schema. The Python agent reads it and never migrates.
