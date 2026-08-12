@@ -1618,6 +1618,97 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
     `${JSON.stringify(changeWrongName.body)} / ${JSON.stringify(changeWrongTenant.body)}, row at ${blockerFinal[0]?.requested_at}`,
   );
 
+  // ── a misheard caller gets asked again, not a 500 ──────────────────
+  //
+  // app.caller_name_key and app.caller_phone_key
+  // (supabase/migrations/20260812000800_cancel_change_reservation.sql)
+  // reduce a name to its letters and a phone number to its digits, and
+  // return NULL -- which cancel_booking/change_booking then answer with
+  // `missing_details` -- when nothing usable survives: a name
+  // transcribed as "22", a phone heard as five digits. Before this check
+  // existed, both routes only guarded `!body.customer_name ||
+  // !body.customer_phone`, which a non-empty garbled string sails past;
+  // the request then reached the database, came back `missing_details`,
+  // and fell through to the log-and-500 branch -- a caller who was just
+  // misheard hearing "I can't get to the book right now" instead of
+  // being asked again. lib/agent/caller.ts::hasUsableCallerName /
+  // hasUsableCallerPhone now catch this in the route, before the call,
+  // and answer it the way every other unheard field is answered.
+  //
+  // "Blocker" is reused deliberately: its booking is still sitting at
+  // 9:00 from the change checks just above, so this also proves an
+  // unusable-detail attempt never reaches far enough to touch it.
+  const unusableNameCancel = await call(
+    "cancel-reservation",
+    { customer_name: "22", customer_phone: "4155550606", booking_time: resAt(9 * 60) },
+    canaries.reservationsSecret,
+  );
+  check(
+    "cancel-reservation asks again, not a 500, when the name transcribed to nothing usable",
+    unusableNameCancel.status === 400 &&
+      unusableNameCancel.body?.ok === false &&
+      typeof unusableNameCancel.body?.error === "string",
+    JSON.stringify(unusableNameCancel.body),
+  );
+
+  const unusablePhoneCancel = await call(
+    "cancel-reservation",
+    { customer_name: "Blocker", customer_phone: "55511", booking_time: resAt(9 * 60) },
+    canaries.reservationsSecret,
+  );
+  check(
+    "cancel-reservation asks again, not a 500, when the phone was heard as fewer than seven digits",
+    unusablePhoneCancel.status === 400 &&
+      unusablePhoneCancel.body?.ok === false &&
+      typeof unusablePhoneCancel.body?.error === "string",
+    JSON.stringify(unusablePhoneCancel.body),
+  );
+
+  const unusableNameChange = await call(
+    "change-reservation",
+    {
+      customer_name: "###",
+      customer_phone: "4155550606",
+      booking_time: resAt(9 * 60),
+      new_requested_at: resAt(10 * 60 + 30),
+    },
+    canaries.reservationsSecret,
+  );
+  check(
+    "change-reservation asks again, not a 500, when the name transcribed to nothing usable",
+    unusableNameChange.status === 400 &&
+      unusableNameChange.body?.ok === false &&
+      typeof unusableNameChange.body?.error === "string",
+    JSON.stringify(unusableNameChange.body),
+  );
+
+  const unusablePhoneChange = await call(
+    "change-reservation",
+    {
+      customer_name: "Blocker",
+      customer_phone: "12345",
+      booking_time: resAt(9 * 60),
+      new_requested_at: resAt(10 * 60 + 30),
+    },
+    canaries.reservationsSecret,
+  );
+  check(
+    "change-reservation asks again, not a 500, when the phone was heard as fewer than seven digits",
+    unusablePhoneChange.status === 400 &&
+      unusablePhoneChange.body?.ok === false &&
+      typeof unusablePhoneChange.body?.error === "string",
+    JSON.stringify(unusablePhoneChange.body),
+  );
+
+  const blockerAfterUnusableAttempts = await resBookings("Blocker");
+  check(
+    "none of the unusable-detail attempts above wrote or moved anything",
+    blockerAfterUnusableAttempts.length === 1 &&
+      blockerAfterUnusableAttempts[0].status === "confirmed" &&
+      new Date(blockerAfterUnusableAttempts[0].requested_at).toISOString() === resAt(9 * 60),
+    `row ${JSON.stringify(blockerAfterUnusableAttempts[0])}`,
+  );
+
   // ── Order ───────────────────────────────────────────────────────────
 
   const order = await call("order", {
