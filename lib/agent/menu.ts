@@ -32,8 +32,13 @@ export function shapeMenu(categories: MenuCategoryWithItems[]): AgentMenu {
 }
 
 /** The nearest available item in the same category, which is what saves
- *  the sale when something runs out. */
-export function suggestAlternative(menu: AgentMenu, itemName: string) {
+ *  the sale when something runs out. `itemName` ultimately comes from the
+ *  JSON body of a request made by an external voice platform, so its
+ *  shape is not ours to assume -- `unknown` here (rather than `string`)
+ *  is the honest type, and a non-string is treated the same as no item
+ *  at all instead of throwing out of `.trim()`. */
+export function suggestAlternative(menu: AgentMenu, itemName: unknown) {
+  if (typeof itemName !== "string") return null;
   const needle = itemName.trim().toLowerCase();
 
   for (const category of menu.categories) {

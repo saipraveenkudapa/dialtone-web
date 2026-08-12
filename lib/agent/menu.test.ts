@@ -59,4 +59,15 @@ describe("menu shaping", () => {
     const allOut = shapeMenu(category([buffalo]));
     expect(suggestAlternative(allOut, "Buffalo Wings")).toBeNull();
   });
+
+  it("treats a non-string item as if none was given, instead of throwing", () => {
+    // The route hands this whatever `item` a request body contained,
+    // typed and all -- a hostile or buggy voice-platform caller can send
+    // a number, an object, or an array here just as easily as a string.
+    const menu = shapeMenu(categories);
+    expect(suggestAlternative(menu, 42)).toBeNull();
+    expect(suggestAlternative(menu, { name: "Buffalo Wings" })).toBeNull();
+    expect(suggestAlternative(menu, ["Buffalo Wings"])).toBeNull();
+    expect(suggestAlternative(menu, null)).toBeNull();
+  });
 });
