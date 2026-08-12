@@ -182,8 +182,22 @@ export async function POST(request: Request) {
   return agentOk({
     booked: true,
     booking_id: data.booking_id,
+    // The date, not just the weekday. This read back "Friday at 7:00 PM",
+    // which is the same sentence for this Friday and for a Friday
+    // seventeen days out -- so a caller who said "Friday" meaning
+    // tomorrow, and an agent that resolved it against a stale prompt date
+    // (or simply picked the wrong week), both hear a confirmation that
+    // sounds exactly right. The month and day are the only thing in that
+    // sentence a caller can catch the mistake in, and they cost about a
+    // second of speech.
+    //
+    // Still rendered in the location's timezone, like every other time
+    // this system speaks: `when` is a UTC instant, and a booking read back
+    // in the server's timezone is a different evening.
     when: new Intl.DateTimeFormat("en-US", {
       weekday: "long",
+      month: "long",
+      day: "numeric",
       hour: "numeric",
       minute: "2-digit",
       timeZone: location.timezone,
