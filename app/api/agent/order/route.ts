@@ -138,6 +138,18 @@ export async function POST(request: Request) {
           : "I didn't catch how many of that you wanted.",
       );
     }
+    // Not dropped and not cooked as-is: a change the caller heard
+    // confirmed back is the whole reason `note` exists, so one that
+    // arrived as something other than plain text, or ran on far past
+    // anything a person says at a counter, is asked about again rather
+    // than quietly thrown away.
+    if (built.reason === "bad_note") {
+      return agentFail(
+        built.item
+          ? `I didn't catch the change you wanted on the ${built.item}.`
+          : "I didn't catch the change you wanted on that.",
+      );
+    }
     if (built.reason === "too_many_items") {
       return agentFail(
         `That's more than ${MAX_ORDER_LINES} different items -- that's too big to take over the phone. Let me put you through to someone.`,
@@ -182,6 +194,12 @@ export async function POST(request: Request) {
       // is what makes a retried tool call recognisable as a retry.
       p_provider_call_id: body.provider_call_id ?? null,
       p_promised_minutes: promisedMinutes,
+      // Parallel to the two arrays above, same length and same order:
+      // "no onions" belongs to one line, and an off-by-one here puts it
+      // on somebody else's pasta. Free text, never priced -- place_order
+      // reads no money out of it (see
+      // supabase/migrations/20260812000650_place_order_item_notes.sql).
+      p_notes: lines.map((line) => line.note),
     })
     .single<PlaceOrderResult>();
 
@@ -232,7 +250,11 @@ export async function POST(request: Request) {
       customerName: body.customer_name,
       customerPhone: body.customer_phone,
       address: type === "delivery" ? body.address : null,
-      lines: lines.map((l) => ({ quantity: l.quantity, name: l.item.name })),
+      lines: lines.map((l) => ({
+        quantity: l.quantity,
+        name: l.item.name,
+        note: l.note,
+      })),
       totalCents: data.total_cents ?? 0,
       promisedMinutes,
     }),

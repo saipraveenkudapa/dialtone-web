@@ -146,7 +146,7 @@ parse.
 | `get_hours` | `/api/agent/hours` | `{}` | `{open_now, today, next_open}`. `today` is `"5:00 PM to 10:00 PM"` or `"closed"`. Hours that cross midnight cannot be represented -- see the gap below. |
 | `check_availability` | `/api/agent/availability` | `{requested_at: ISO 8601, party_size: number}` | `{available, alternatives}`, or `{available:false, reason:"large_party", alternatives:[]}` for a party over `max_party_size`. Refuses (400) a past `requested_at` (2-minute clock-skew tolerance) or an unparseable date/party size, rather than answering `available:false` for either. |
 | `create_reservation` | `/api/agent/reservation` | `{requested_at, party_size, customer_name, customer_phone, provider_call_id?}` | `{booked:true, booking_id, when}`, `{booked:false, reason:"full"}`, or `{booked:false, reason:"large_party"}` for a party over `max_party_size` -- the same reason `check_availability` gives, so the two agree about one party. Refuses (400) a past `requested_at` or an unparseable date/party size. Idempotent per `provider_call_id` -- see below. |
-| `place_order` | `/api/agent/order` | `{items:[{name, quantity}], type?: "pickup"\|"delivery" (default "pickup"), customer_name, customer_phone, address?, provider_call_id?}` | See below -- this one has real edges. |
+| `place_order` | `/api/agent/order` | `{items:[{name, quantity, note?}], type?: "pickup"\|"delivery" (default "pickup"), customer_name, customer_phone, address?, provider_call_id?}` | See below -- this one has real edges. |
 | `transfer_to_human` | `/api/agent/transfer` | `{reason?: string, provider_call_id?}` | `{number}` -- always `location.fallback_human_number`. Fails (500) if the location has no fallback number configured at all; make sure every live location has one before go-live. Logging the transfer is fire-and-forget (`after()`) so this responds even if the database is unhealthy. |
 
 `requested_at` must be a full ISO 8601 timestamp. The system prompt is
@@ -210,6 +210,29 @@ three places, always. It comes from the location's own
 order's `type`, never a constant. Set both to a number this kitchen can
 actually hit -- see the checklist item below.
 
+**Per-item changes.** Each item may carry a `note`: the change the caller
+asked for on that line, as they said it ("no onions", "sauce on the
+side"). It is free text and it is **not priced** -- see the sizes and
+modifiers gap below, which this does not close. It is stored on the line
+it belongs to (`order_items.modifiers`, as a one-element JSON array) and
+printed under that line on the kitchen ticket:
+
+```
+#1002 PICKUP - 25 min
+1x Margherita
+  * no onions
+2x Bucatini Amatriciana
+Total $44.00
+```
+
+Send it per item, never pooled onto the order: a note without a line is a
+cook guessing which plate it meant. A note that is not a string, or is
+longer than 200 characters, is refused (`agentFail`, 400) rather than
+dropped -- the caller heard the agent confirm that change back, so
+quietly cooking without it is the one outcome that must not happen.
+Card-number-like digit runs in a note are redacted before it is stored or
+texted (`lib/agent/redact.ts`).
+
 Refusals fall into three shapes, and the model needs
 to treat them differently:
 
@@ -222,13 +245,14 @@ to treat them differently:
   missing/empty `items`, missing `customer_name`/`customer_phone`, an
   unparseable `type`, delivery with no `address`, a quantity that isn't a
   positive whole number ("two" is not accepted -- only a number or a
-  numeric string), more than 40 distinct line items, or more than 50 of
-  one item. The last two refusals also tell the agent to offer a transfer,
-  since that's a catering order, not a phone order.
+  numeric string), a `note` that isn't text or runs past 200 characters,
+  more than 40 distinct line items, or more than 50 of one item. The last
+  two refusals also tell the agent to offer a transfer, since that's a
+  catering order, not a phone order.
 - **A drift bug**, `agentFail`, 500, logged server-side: `public.place_order`
   can return other reasons (`unknown_location`, `invalid_type`,
   `missing_address`, `missing_customer`, `no_items`, `mismatched_lines`,
-  `bad_quantity`, `bad_promise`) that the route's own validation is
+  `bad_quantity`, `bad_note`, `bad_promise`) that the route's own validation is
   supposed to catch before ever calling it. Seeing one in production means
   the route and the function have drifted apart, not that the caller did
   anything wrong -- that's why it's a 500 and not a spoken sentence.
@@ -389,11 +413,16 @@ you onboard one.
 - **Recording retention is not enforced.** `recording_retention_days`
   exists on `locations` but nothing deletes a recording once it's past
   that many days.
-- **Sizes and modifiers aren't priced.** They're in the menu schema but
-  neither `get_menu` nor `place_order` exposes them. A caller who orders
-  "a large" gets the base-size price. Do not onboard a menu where size or
-  modifiers change the price -- most pizza and coffee menus -- until this
-  ships.
+- **Sizes and modifiers aren't priced.** `place_order` now carries a
+  free-text `note` per item through to `order_items.modifiers` and onto
+  the kitchen ticket, so a change the caller asked for reaches the cook --
+  but it is text, and nothing else. No note changes the subtotal, the tax,
+  or the total; `get_menu` still exposes neither sizes nor priced
+  modifiers, and the menu schema's own size/modifier structures are still
+  unread by any endpoint. A caller who orders "a large" is charged the
+  base-size price and the kitchen sees the word "large" on the ticket. Do
+  not onboard a menu where size or modifiers change the price -- most
+  pizza and coffee menus -- until pricing for them ships.
 
 ## Before you go live with a real restaurant
 
@@ -416,6 +445,7 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Confirm `fallback_human_number` is set and correct for this location. `transfer_to_human` fails outright without one, and it's the destination for both the kill switch and every AI-initiated transfer.
 - [ ] Check the location's hours don't cross midnight (e.g. open past 12am). If they do, `get_hours` and the assistant will report the location closed at every hour, forever -- see the gaps above.
 - [ ] Confirm the menu at this location doesn't depend on size or modifiers for price (no "small/large", no "add bacon +$2"). If it does, don't launch until that's supported -- today it prices everything at the base rate.
+- [ ] **Order something modified, then read the ticket that comes out.** Say "no onions" (or "sauce on the side") on one item of a two-item order, let the agent confirm it back, and then look at the SMS that lands on the staff phone. The change must be on the ticket, under the item it belongs to and not under the other one. This is the one thing no automated check can prove end-to-end: whether the model actually put what it heard into that item's `note` instead of narrating it and moving on. If the ticket says `1x Margherita` and the caller was told "got it, no onions", the caller gets the wrong food and nobody finds out until they're eating it.
 - [ ] Place a real test order and confirm the SMS ticket actually lands on the staff phone (`order_sms_to`) from the right Twilio number (`twilio_number`). A missing or wrong value here fails silently -- the order still succeeds, the caller still hears it worked, and the kitchen never finds out.
 - [ ] Order something at a location with a nonzero tax rate and listen for whether the spoken total (read back before you confirm) matches the total in the confirmation / on the dashboard. If they differ, decide whether that's acceptable for this restaurant before launch -- see the tax gap above.
 - [ ] Ask it to change or cancel an existing reservation. Confirm it transfers cleanly rather than pretending to handle it -- the prompt claims this capability but no tool backs it.

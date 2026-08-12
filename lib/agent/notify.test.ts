@@ -47,6 +47,33 @@ describe("order message", () => {
     expect(message).not.toMatch(CARD_NUMBER_PATTERN);
   });
 
+  // The ticket said `1x Margherita` while the caller had heard "got it,
+  // no onions" confirmed back a minute earlier -- the change was
+  // confirmed aloud and then discarded, so the kitchen cooked the wrong
+  // food on every modified order.
+  it("prints the change the caller asked for under the item it belongs to", () => {
+    const withNote = orderMessage({
+      ...baseOrder,
+      lines: [
+        { quantity: 1, name: "Margherita", note: "no onions" },
+        { quantity: 1, name: "Lasagne Verdi" },
+      ],
+    });
+    expect(withNote).toContain("1x Margherita\n  * no onions");
+    // The unmodified line stays a single line -- no empty marker under
+    // every item on a ticket read at a pass during service.
+    expect(withNote).toContain("1x Lasagne Verdi\nTotal");
+  });
+
+  it("treats a blank change as no change", () => {
+    const blank = orderMessage({
+      ...baseOrder,
+      lines: [{ quantity: 1, name: "Margherita", note: "   " }],
+    });
+    expect(blank).toContain("1x Margherita\nTotal");
+    expect(blank).not.toContain("*");
+  });
+
   // A caller who reads out a card number thinking they're giving their
   // name or address has it land, verbatim, in a free-text field that ends
   // up in this message. The guard above is only worth anything if it

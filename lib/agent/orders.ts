@@ -1,3 +1,5 @@
+import { redactCardNumbers } from "@/lib/agent/redact";
+
 export type PricedItem = {
   id: string;
   name: string;
@@ -44,6 +46,24 @@ const wordAwareMatch = (itemName: string, needleWords: string[]) => {
   );
 };
 
+/** Does this menu item answer what the caller said? The predicate above,
+ *  exported so there is exactly one definition of "the caller said this
+ *  item" in the codebase.
+ *
+ *  `suggestAlternative` (lib/agent/menu.ts) needed an exact, whole-name
+ *  match -- "Buffalo Wings", said perfectly -- while this file matched a
+ *  spoken word against the name's words. Two matchers for one question
+ *  drift, and these had: a caller who said "wings" got an order line
+ *  (`matchItem` below finds Buffalo Wings) but no alternative when it was
+ *  sold out, because nothing on the menu is literally called "wings". The
+ *  prompt's "offer the closest thing that is available" then had nothing
+ *  behind it at the one moment it exists for. */
+export function matchesSpokenName(itemName: string, spoken: string) {
+  const needleWords = wordsOf(spoken);
+  if (needleWords.length === 0) return false;
+  return wordAwareMatch(itemName, needleWords);
+}
+
 /** Find the one item a caller meant.
  *
  *  Returns null when two items could match rather than picking one: a
@@ -56,8 +76,7 @@ export function matchItem(items: PricedItem[], spoken: string) {
   const exact = items.filter((i) => normalise(i.name) === needle);
   if (exact.length === 1) return exact[0];
 
-  const needleWords = wordsOf(needle);
-  const partial = items.filter((i) => wordAwareMatch(i.name, needleWords));
+  const partial = items.filter((i) => matchesSpokenName(i.name, needle));
   return partial.length === 1 ? partial[0] : null;
 }
 
@@ -156,6 +175,50 @@ export function priceOrder(
 export const MAX_ORDER_LINES = 40;
 export const MAX_ITEM_QUANTITY = 50;
 
+/** How long a spoken change to one item may be.
+ *
+ *  "No onions", "sauce on the side, well done" -- a real modification is
+ *  a handful of words. Anything past this is a transcript that ran away,
+ *  and it has to be bounded for the same reasons the quantity is: it is
+ *  written to a column, printed on a ticket a cook reads at a pass, and
+ *  put in the body of an SMS. Kept in step with c_max_note_length in
+ *  supabase/migrations/20260812000650_place_order_item_notes.sql, which
+ *  is the authority; this one exists so the caller hears a sentence
+ *  instead of an error. */
+export const MAX_ITEM_NOTE_LENGTH = 200;
+
+export type ItemNoteResult = { ok: true; note: string | null } | { ok: false };
+
+/** What the caller wants done differently to one item, or nothing.
+ *
+ *  Free text by design: we do not price modifiers (see the gap in
+ *  docs/vapi-setup.md), so this is a message to the kitchen, not a menu
+ *  decision. It still gets cleaned up on the way in:
+ *
+ *   - a non-string is refused, not ignored. Ignoring is what this whole
+ *     change exists to stop -- a modification the caller heard confirmed
+ *     back and the kitchen never saw. A number or an object here means
+ *     the tool call is malformed, and the agent should ask again rather
+ *     than cook the wrong food.
+ *   - whitespace, including newlines, collapses to single spaces. A
+ *     newline would break the kitchen ticket's line-per-item layout
+ *     (lib/agent/notify.ts) into something a pass cannot read.
+ *   - card-like digit runs are redacted, because this is a new free-text
+ *     write path for words a caller actually said, and it egresses
+ *     further than any other one: to a column, to the ticket, and out to
+ *     Twilio in the SMS body. `redactCardNumbers` (lib/agent/redact.ts)
+ *     is meant to be the one place that promise is kept.
+ *   - absent, null, or blank after all that is simply no note. */
+export function normaliseItemNote(value: unknown): ItemNoteResult {
+  if (value === undefined || value === null) return { ok: true, note: null };
+  if (typeof value !== "string") return { ok: false };
+
+  const cleaned = redactCardNumbers(value.replace(/\s+/g, " ").trim());
+  if (cleaned === "") return { ok: true, note: null };
+  if (cleaned.length > MAX_ITEM_NOTE_LENGTH) return { ok: false };
+  return { ok: true, note: cleaned };
+}
+
 export type OrderType = "pickup" | "delivery";
 
 /** What the caller's `type` actually means, or null if it cannot be told.
@@ -184,9 +247,9 @@ export function normaliseOrderType(value: unknown): OrderType | null {
   return null;
 }
 
-export type OrderLine = { item: PricedItem; quantity: number };
+export type OrderLine = { item: PricedItem; quantity: number; note: string | null };
 
-export type RequestedItem = { name?: string; quantity?: unknown };
+export type RequestedItem = { name?: string; quantity?: unknown; note?: unknown };
 
 export type OrderLinesResult =
   | { ok: true; lines: OrderLine[] }
@@ -196,6 +259,7 @@ export type OrderLinesResult =
         | "unknown_item"
         | "sold_out"
         | "bad_quantity"
+        | "bad_note"
         | "too_many_items"
         | "too_many_of_item";
       item: string | undefined;
@@ -215,16 +279,20 @@ export type OrderLinesResult =
  *    written.
  *  - "bad_quantity": `normaliseQuantity` could not make sense of the
  *    quantity at all (missing, "two", fractional, zero, negative...).
+ *  - "bad_note": the change asked for on that item was not text, or was
+ *    longer than a spoken modification can plausibly be
+ *    (`MAX_ITEM_NOTE_LENGTH`).
  *  - "too_many_items" / "too_many_of_item": more lines, or more of one
  *    line, than a phone order is allowed to be (`MAX_ORDER_LINES`,
  *    `MAX_ITEM_QUANTITY`).
  *
  *  "unknown_item" and "sold_out" are ordinary outcomes the agent speaks
  *  to the caller (`agentOk({placed: false, reason, item})`), the same
- *  way a full house is an ordinary outcome for a booking. "bad_quantity"
- *  is not a menu decision -- it means the request itself could not be
- *  understood, so the route is expected to treat it like a missing name
- *  or phone number and answer with `agentFail` instead. Because every
+ *  way a full house is an ordinary outcome for a booking.
+ *  "bad_quantity" and "bad_note" are not menu decisions -- they mean the
+ *  request itself could not be understood, so the route is expected to
+ *  treat them like a missing name or phone number and answer with
+ *  `agentFail` instead. Because every
  *  quantity that reaches a returned line has already passed
  *  `normaliseQuantity`, `priceOrder`'s own invariant-guard throw is
  *  unreachable for lines built here. */
@@ -247,12 +315,20 @@ export function buildOrderLines(menu: PricedItem[], requested: RequestedItem[]):
     if (quantity === null) {
       return { ok: false, reason: "bad_quantity", item: requestedItem.name };
     }
+    // Refused rather than dropped. A change the caller heard confirmed
+    // back ("got it, no onions") and the kitchen never saw is the exact
+    // failure this field was added for; silently discarding one that
+    // arrived in the wrong shape would reintroduce it one level down.
+    const note = normaliseItemNote(requestedItem.note);
+    if (!note.ok) {
+      return { ok: false, reason: "bad_note", item: match.name };
+    }
     // Named with the item the caller actually asked for, so the refusal
     // can say which one was too many rather than "that".
     if (quantity > MAX_ITEM_QUANTITY) {
       return { ok: false, reason: "too_many_of_item", item: match.name };
     }
-    lines.push({ item: match, quantity });
+    lines.push({ item: match, quantity, note: note.note });
   }
 
   return { ok: true, lines };

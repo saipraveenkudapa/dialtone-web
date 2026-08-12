@@ -19,11 +19,25 @@ export function orderMessage({
   customerName: string;
   customerPhone: string;
   address?: string | null;
-  lines: { quantity: number; name: string }[];
+  lines: { quantity: number; name: string; note?: string | null }[];
   totalCents: number;
   promisedMinutes: number;
 }) {
-  const items = lines.map((l) => `${l.quantity}x ${l.name}`).join("\n");
+  // The change the caller asked for, on its own indented line under the
+  // item it belongs to. It was not printed at all: the agent confirmed
+  // "no onions" out loud, `place_order` had nowhere to put it, and the
+  // ticket at the pass said `1x Margherita` -- so the caller got the
+  // wrong food every time they changed anything. A cook reads this
+  // column-first down the left edge, so the marker has to break that
+  // column to be seen at all; appending it to the item line ("1x
+  // Margherita (no onions)") hides it at the end of a line that scans as
+  // already understood.
+  const items = lines
+    .map((l) => {
+      const note = typeof l.note === "string" ? l.note.trim() : "";
+      return note === "" ? `${l.quantity}x ${l.name}` : `${l.quantity}x ${l.name}\n  * ${note}`;
+    })
+    .join("\n");
 
   // The address was missing entirely, so a DELIVERY ticket reached the
   // pass naming a customer, a total and a 25-minute promise with nowhere

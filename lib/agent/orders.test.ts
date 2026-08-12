@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildOrderLines,
+  matchesSpokenName,
   matchItem,
   normaliseOrderType,
+  normaliseItemNote,
   normaliseQuantity,
   priceOrder,
+  MAX_ITEM_NOTE_LENGTH,
   MAX_ITEM_QUANTITY,
   MAX_ORDER_LINES,
   type PricedItem,
@@ -190,8 +193,8 @@ describe("buildOrderLines", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
     expect(result.lines).toEqual([
-      { item: items[1], quantity: 1 },
-      { item: items[0], quantity: 2 },
+      { item: items[1], quantity: 1, note: null },
+      { item: items[0], quantity: 2, note: null },
     ]);
   });
 
@@ -199,7 +202,36 @@ describe("buildOrderLines", () => {
     const result = buildOrderLines(items, [{ name: "bucatini", quantity: "3" }]);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
-    expect(result.lines).toEqual([{ item: items[0], quantity: 3 }]);
+    expect(result.lines).toEqual([{ item: items[0], quantity: 3, note: null }]);
+  });
+
+  it("carries a per-item change through onto the line it belongs to", () => {
+    const result = buildOrderLines(items, [
+      { name: "bucatini", quantity: 1, note: "  no  onions\nextra crispy " },
+      { name: "lasagne verdi" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    // Whitespace collapsed, and only the line the caller changed carries
+    // it -- a note pooled onto the order (or onto every line) is a cook
+    // guessing which plate it meant.
+    expect(result.lines).toEqual([
+      { item: items[0], quantity: 1, note: "no onions extra crispy" },
+      { item: items[1], quantity: 1, note: null },
+    ]);
+  });
+
+  it("reports bad_note rather than silently dropping a change it cannot use", () => {
+    // Dropping it is the bug this field exists to fix: the caller hears
+    // "got it, no onions" and the kitchen never sees it.
+    expect(buildOrderLines(items, [{ name: "bucatini", note: 42 }])).toEqual({
+      ok: false,
+      reason: "bad_note",
+      item: "Bucatini Amatriciana",
+    });
+    expect(
+      buildOrderLines(items, [{ name: "bucatini", note: "x".repeat(MAX_ITEM_NOTE_LENGTH + 1) }]),
+    ).toEqual({ ok: false, reason: "bad_note", item: "Bucatini Amatriciana" });
   });
 
   it("reports unknown_item for something not on the menu, rather than throwing", () => {
@@ -343,5 +375,79 @@ describe("the size of a phone order", () => {
   it("keeps the limits the database enforces", () => {
     expect(MAX_ORDER_LINES).toBe(40);
     expect(MAX_ITEM_QUANTITY).toBe(50);
+  });
+});
+
+describe("normaliseItemNote", () => {
+  it("keeps a spoken change as free text, whitespace collapsed", () => {
+    expect(normaliseItemNote("no onions")).toEqual({ ok: true, note: "no onions" });
+    // A newline would break the kitchen ticket's line-per-item layout
+    // (lib/agent/notify.ts) into something a pass cannot read.
+    expect(normaliseItemNote(" sauce on the side,\n  well done ")).toEqual({
+      ok: true,
+      note: "sauce on the side, well done",
+    });
+  });
+
+  it("treats absent, null and blank as no change at all", () => {
+    expect(normaliseItemNote(undefined)).toEqual({ ok: true, note: null });
+    expect(normaliseItemNote(null)).toEqual({ ok: true, note: null });
+    expect(normaliseItemNote("   ")).toEqual({ ok: true, note: null });
+  });
+
+  it("refuses a non-string instead of ignoring it", () => {
+    // Ignoring is what this whole field exists to stop: a change the
+    // caller heard confirmed back that the kitchen never saw.
+    expect(normaliseItemNote(42)).toEqual({ ok: false });
+    expect(normaliseItemNote({ note: "no onions" })).toEqual({ ok: false });
+    expect(normaliseItemNote(["no onions"])).toEqual({ ok: false });
+  });
+
+  it("refuses a note longer than a spoken modification can plausibly be", () => {
+    expect(normaliseItemNote("x".repeat(MAX_ITEM_NOTE_LENGTH))).toEqual({
+      ok: true,
+      note: "x".repeat(MAX_ITEM_NOTE_LENGTH),
+    });
+    expect(normaliseItemNote("x".repeat(MAX_ITEM_NOTE_LENGTH + 1))).toEqual({ ok: false });
+  });
+
+  it("redacts a card number a caller reads into the change field", () => {
+    // This is a new free-text write path for words a caller actually
+    // said, and it egresses further than any other one: a column, the
+    // kitchen ticket, and out to Twilio in the SMS body.
+    expect(normaliseItemNote("charge it to 4111 1111 1111 1111 please")).toEqual({
+      ok: true,
+      note: "charge it to [redacted] please",
+    });
+    expect(normaliseItemNote("4111111111111111")).toEqual({ ok: true, note: "[redacted]" });
+  });
+
+  it("leaves the length check to look at what will actually be stored", () => {
+    // Redaction shortens the text, so a long card number does not push an
+    // otherwise ordinary note over the limit.
+    const long = `${"x".repeat(MAX_ITEM_NOTE_LENGTH - 20)} 4111 1111 1111 1111`;
+    expect(normaliseItemNote(long)).toEqual({
+      ok: true,
+      note: `${"x".repeat(MAX_ITEM_NOTE_LENGTH - 20)} [redacted]`,
+    });
+  });
+});
+
+describe("matchesSpokenName", () => {
+  // One matcher, shared with lib/agent/menu.ts's suggestAlternative --
+  // "wings" has to mean the same thing to the thing that builds the order
+  // line and the thing that offers an alternative when it is sold out.
+  it("matches a spoken word against the item's words", () => {
+    expect(matchesSpokenName("Buffalo Wings", "wings")).toBe(true);
+    expect(matchesSpokenName("Boneless Wings", "wings")).toBe(true);
+    expect(matchesSpokenName("Bucatini Amatriciana", "bucatini")).toBe(true);
+    expect(matchesSpokenName("Margherita", "marg")).toBe(true);
+  });
+
+  it("does not match across word boundaries or on nothing at all", () => {
+    expect(matchesSpokenName("Chocolate Cake", "cola")).toBe(false);
+    expect(matchesSpokenName("Hamburger", "ham")).toBe(false);
+    expect(matchesSpokenName("Buffalo Wings", "")).toBe(false);
+    expect(matchesSpokenName("Buffalo Wings", "   ")).toBe(false);
   });
 });
