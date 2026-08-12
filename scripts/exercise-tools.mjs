@@ -196,7 +196,24 @@ function seatsTakenJS(bookings, slotStart, slotMinutes) {
 // created row tracked for teardown.
 const canaryLocationIds = [];
 
-async function createCanaryLocation(orgId, { name, is_live, kill_switch_on }) {
+// The demo location's tax_rate_bps is 0 -- real seeded data, left
+// untouched (see the module header) -- so nothing else in this script
+// ever exercises place_order's `round(subtotal * tax_bps / 10000)`. A
+// wrong divisor, truncation instead of rounding, or tax applied to the
+// wrong base would all still pass every other check here. This rate and
+// price are chosen so two different quantities of one item land the
+// pre-rounding tax on opposite sides of a half cent: qty 5 gives a raw
+// tax of 3.25 (below half, must round DOWN to 3) and qty 10 gives exactly
+// 6.5 (a genuine tie, must round AWAY FROM ZERO to 7, matching Postgres'
+// round() and place_order's own comment on it). A bug that rounds each
+// unit's tax before summing instead of taxing the whole subtotal is
+// caught too: round(13 * 500 / 10000) = 1 per unit, so 5x1=5 and
+// 10x1=10 -- neither matches either case.
+const TAX_CANARY_RATE_BPS = 500; // 5% -- nonzero, unlike the demo location
+const TAX_CANARY_ITEM_PRICE_CENTS = 13;
+const TAX_CANARY_ITEM_NAME = "Zzyzx Tax Canary";
+
+async function createCanaryLocation(orgId, { name, is_live, kill_switch_on, tax_rate_bps = 0 }) {
   const plaintextSecret = crypto.randomBytes(32).toString("base64url");
   const row = await mustOk(
     admin
@@ -206,6 +223,7 @@ async function createCanaryLocation(orgId, { name, is_live, kill_switch_on }) {
         name,
         is_live,
         kill_switch_on,
+        tax_rate_bps,
         agent_secret_hash: hashAgentSecret(plaintextSecret),
       })
       .select("id")
@@ -218,13 +236,18 @@ async function createCanaryLocation(orgId, { name, is_live, kill_switch_on }) {
 
 async function provisionCanaries(orgId) {
   // Isolated: proves get_menu AND place_order never cross a secret
-  // boundary. Its one item deliberately shares no name with anything on
+  // boundary. Its first item deliberately shares no name with anything on
   // the demo menu, so a name-based order lookup has nothing to
-  // accidentally collide with either.
+  // accidentally collide with either. It also carries this run's only
+  // nonzero tax_rate_bps (TAX_CANARY_RATE_BPS above) and a second item
+  // priced to pin place_order's rounding -- reusing this location rather
+  // than provisioning a fourth one, since nothing about the tax check
+  // needs a location of its own.
   const isolated = await createCanaryLocation(orgId, {
     name: "Task14 Canary Isolated (exercise-tools, ephemeral)",
     is_live: true,
     kill_switch_on: false,
+    tax_rate_bps: TAX_CANARY_RATE_BPS,
   });
   const category = await mustOk(
     admin.from("menu_categories").insert({ location_id: isolated.id, name: "Canary" }).select("id").single(),
@@ -238,6 +261,15 @@ async function provisionCanaries(orgId) {
       price_cents: 999,
     }),
     "insert canary menu item",
+  );
+  await mustOk(
+    admin.from("menu_items").insert({
+      category_id: category.id,
+      location_id: isolated.id,
+      name: TAX_CANARY_ITEM_NAME,
+      price_cents: TAX_CANARY_ITEM_PRICE_CENTS,
+    }),
+    "insert canary tax item",
   );
 
   // Kill-switch and not-live: prove the assistant route fails closed on
@@ -256,6 +288,7 @@ async function provisionCanaries(orgId) {
   });
 
   return {
+    isolatedLocationId: isolated.id,
     isolatedSecret: isolated.secret,
     killSwitchSecret: killSwitch.secret,
     notLiveSecret: notLive.secret,
@@ -264,7 +297,9 @@ async function provisionCanaries(orgId) {
 
 async function teardownCanaries() {
   if (!canaryLocationIds.length) return;
-  // menu_categories/menu_items cascade from locations via
+  // menu_categories/menu_items/orders (and, from orders, order_items and
+  // order_status_events -- the tax canary checks below place real orders
+  // against the isolated location) all cascade from locations via
   // ON DELETE CASCADE (confirmed in supabase/migrations/20260807000100_
   // schema.sql), so deleting the location is the whole teardown.
   const { error } = await admin.from("locations").delete().in("id", canaryLocationIds);
@@ -647,6 +682,57 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
     order.body?.total === expectedTotal,
     `expected ${expectedTotal} (subtotal ${expectedSubtotalCents}c + tax ${expectedTaxCents}c), got ${order.body?.total}`,
   );
+
+  // The check above never exercises place_order's tax arithmetic at all
+  // -- the demo location's tax_rate_bps is 0 -- so it would pass unchanged
+  // through a wrong divisor, truncation instead of rounding, or tax
+  // applied to the wrong base. The isolated canary carries this run's
+  // only nonzero rate (TAX_CANARY_RATE_BPS) and its own item
+  // (TAX_CANARY_ITEM_PRICE_CENTS), priced so two quantities land the
+  // pre-rounding tax on opposite sides of a half cent -- see the constant
+  // definitions above provisionCanaries for the full case-by-case math.
+  // The route's HTTP response only carries a formatted total string, so
+  // subtotal_cents/tax_cents/total_cents are read back from the orders
+  // row itself, the same way this run already looks up orders for
+  // cleanup.
+  for (const quantity of [5, 10]) {
+    const expectedSubtotal = TAX_CANARY_ITEM_PRICE_CENTS * quantity;
+    const expectedTax = Math.round((expectedSubtotal * TAX_CANARY_RATE_BPS) / 10_000);
+    const expectedRowTotal = expectedSubtotal + expectedTax;
+    const expectedHttpTotal = `$${(expectedRowTotal / 100).toFixed(2)}`;
+
+    const taxOrder = await call(
+      "order",
+      {
+        items: [{ name: TAX_CANARY_ITEM_NAME, quantity }],
+        type: "pickup",
+        customer_name: "Task14 Tax Canary",
+        customer_phone: "+15105559998",
+      },
+      canaries.isolatedSecret,
+    );
+    const row =
+      taxOrder.body?.placed === true && taxOrder.body?.order_number != null
+        ? await mustOk(
+            admin
+              .from("orders")
+              .select("subtotal_cents, tax_cents, total_cents")
+              .eq("location_id", canaries.isolatedLocationId)
+              .eq("order_number", taxOrder.body.order_number)
+              .single(),
+            `read back tax canary order (qty ${quantity})`,
+          )
+        : null;
+    check(
+      `tax canary order (qty ${quantity}, subtotal ${expectedSubtotal}c, raw tax ${(expectedSubtotal * TAX_CANARY_RATE_BPS) / 10_000}c) prices subtotal/tax/total exactly, pinning place_order's rounding`,
+      taxOrder.body?.placed === true &&
+        taxOrder.body?.total === expectedHttpTotal &&
+        row?.subtotal_cents === expectedSubtotal &&
+        row?.tax_cents === expectedTax &&
+        row?.total_cents === expectedRowTotal,
+      `expected subtotal=${expectedSubtotal} tax=${expectedTax} total=${expectedRowTotal} (${expectedHttpTotal}), got http_total=${taxOrder.body?.total} row=${JSON.stringify(row)}`,
+    );
+  }
 
   const soldOut = await call("order", {
     items: [{ name: "Squid Ink Tonnarelli", quantity: 1 }],
