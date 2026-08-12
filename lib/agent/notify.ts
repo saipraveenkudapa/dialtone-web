@@ -46,17 +46,29 @@ export async function sendOrderSms(location: LocationRow, message: string) {
     return false;
   }
 
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: "Basic " + Buffer.from(`${sid}:${token}`).toString("base64"),
-        "Content-Type": "application/x-www-form-urlencoded",
+  // The order is already committed by the time this runs -- a DNS
+  // failure, connection reset, or timeout here must never become an
+  // uncaught rejection. This function's signature promises Promise<boolean>;
+  // a caller who awaits it and gets a thrown error instead of `false` will
+  // turn a successful order into a 500, and the voice agent will tell the
+  // caller their order failed when it is already in the kitchen queue.
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Basic " + Buffer.from(`${sid}:${token}`).toString("base64"),
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ To: to, From: from, Body: message }),
       },
-      body: new URLSearchParams({ To: to, From: from, Body: message }),
-    },
-  );
+    );
+  } catch (err) {
+    console.error("[agent] order sms request failed", err);
+    return false;
+  }
 
   if (!res.ok) {
     console.error("[agent] order sms failed", res.status, await res.text());
