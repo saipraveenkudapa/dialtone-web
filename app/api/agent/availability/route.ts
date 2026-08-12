@@ -1,7 +1,11 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
 import { agentFail, agentOk } from "@/lib/agent/respond";
-import { nearestTimes, seatsTaken } from "@/lib/agent/availability";
+import {
+  isRequestInPast,
+  nearestTimes,
+  seatsTaken,
+} from "@/lib/agent/availability";
 
 /** check_availability. The agent must call this before promising a time.
  *  It answers from real bookings, never from a guess. */
@@ -19,6 +23,9 @@ export async function POST(request: Request) {
 
   if (!when || Number.isNaN(when.getTime())) {
     return agentFail("I didn't catch the date and time for that.");
+  }
+  if (isRequestInPast(when, new Date())) {
+    return agentFail("That time has already passed.");
   }
   if (!Number.isInteger(party) || party < 1) {
     return agentFail("I didn't catch how many people.");
