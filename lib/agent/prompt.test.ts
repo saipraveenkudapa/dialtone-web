@@ -46,6 +46,17 @@ describe("system prompt", () => {
     expect(prompt).toContain("You do not know the menu. You never know the menu.");
   });
 
+  // place_order answers `staff_notified: false` when the order committed
+  // but the staff SMS did not go out -- and that text is the only path
+  // from a phone order to a human, since the orders dashboard is still a
+  // stub. Without this line the agent reads a successful `placed: true`
+  // and signs off with "you're all set" on an order nobody will ever see.
+  it("tells the agent not to sign off when the kitchen was not reached", () => {
+    expect(prompt).toContain(
+      "If it goes through but says the kitchen was not reached, do not sign off.",
+    );
+  });
+
   it("stays short enough to keep latency down", () => {
     // The spec's tuning note: keep the prompt this length or shorter.
     expect(prompt.length).toBeLessThan(6000);
@@ -115,7 +126,7 @@ describe("template", () => {
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "3b6a7638181cf2c898d106b8032219324fa3de0fa34181c08a9594c946f04a41",
+      "5b80f3620334b48041cb7193e13aad4867f9ed34f6889dbbb440708ab16d0923",
     );
   });
 

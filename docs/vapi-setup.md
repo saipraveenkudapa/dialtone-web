@@ -195,11 +195,59 @@ with no food on it.
   "ok": true,
   "placed": true,
   "order_number": 1002,
-  "total": "$44.00",       // tax-inclusive, see below
-  "promised_minutes": 25   // location.pickup_promise_minutes or
-                            // location.delivery_promise_minutes, by type
+  "total": "$44.00",         // tax-inclusive, see below
+  "promised_minutes": 25,    // location.pickup_promise_minutes or
+                             // location.delivery_promise_minutes, by type
+  "staff_notified": true     // did the ticket actually reach a human?
 }
 ```
+
+**`staff_notified: false` is the one success you must not treat as one.**
+The order is committed and real -- that is what `placed: true` means, and
+it stays true. What failed is the only path from that order to a person:
+the staff SMS (`lib/agent/notify.ts`), which returns false when
+`order_sms_to` or `twilio_number` is unset for the location, when Twilio
+rejects the message, and when the request to Twilio never completes. There
+is no second channel behind it -- `app/dashboard/orders/page.tsx` is still
+a stub ("Not built yet"), so nothing else is watching. The kitchen does
+not know this order exists.
+
+**What the agent must do:** do not sign off. The order is in, so it must
+not be placed again -- retrying writes nothing new anyway (the
+`provider_call_id` fingerprint dedupes it) but the caller must not be
+asked to reorder either. Tell them the order is in and that you want
+someone there to confirm it, then call `transfer_to_human`. The system
+prompt carries exactly this instruction ("If it goes through but says the
+kitchen was not reached, do not sign off. Say the order is in and you want
+someone to confirm it, then transfer.") -- your tool wiring only has to
+put the response in front of the model.
+
+Handing the call to a person is the only answer that is true at that
+moment: the order exists, and the person who has to cook it has not been
+told. Ending on "you're all set" is a promise nobody at the restaurant is
+in a position to keep, and the caller finds out when they arrive for food
+that was never started. Ending on "sorry, that didn't work" would be the
+opposite lie -- the order is in the database and will be cooked the moment
+anyone looks -- and would send the caller off to order again somewhere
+else, or to place a second order that the fingerprint would then have to
+untangle.
+
+The outcome is also written to the order itself, so it outlives the call:
+`orders.staff_notified` / `orders.staff_notified_at`
+(`supabase/migrations/20260812000700_staff_notification.sql`). That is the
+query to run when someone asks what the restaurant has missed:
+
+```sql
+select order_number, placed_at, customer_name, total_cents
+  from orders
+ where location_id = '<location>' and not staff_notified
+ order by placed_at desc;
+```
+
+Rows written by anything other than this route (the dashboard, the Python
+agent) stay `false`, because nothing tells them otherwise -- read it as
+"no staff SMS was confirmed for this order", not as "this order is
+broken".
 
 `promised_minutes` is what gets spoken to the caller, written to
 `orders.promised_at`, and printed on the kitchen ticket
@@ -380,6 +428,15 @@ you onboard one.
   actual fulfillment time to adjust the promise automatically -- an owner
   has to notice they're running behind and change the two columns by
   hand.
+- **The staff SMS is still the only channel, and nothing retries it.**
+  `staff_notified` (above) makes a failed ticket visible in the response,
+  on the order row, and to the caller -- who gets handed to a person. What
+  it does not do is deliver the order: there is no retry, no queue, no
+  second notification path, and no orders dashboard to fall back on
+  (`app/dashboard/orders/page.tsx` is a stub). A location whose
+  `order_sms_to` is wrong will transfer every single food call to a human,
+  which is safe and completely useless. Check that column before go-live,
+  not after.
 - **The prompt answers questions about parking and offers to text a
   payment link. Neither has anything behind it.** There's no parking data
   anywhere in the schema, and no payment-link tool or SMS-to-customer
@@ -446,7 +503,7 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Check the location's hours don't cross midnight (e.g. open past 12am). If they do, `get_hours` and the assistant will report the location closed at every hour, forever -- see the gaps above.
 - [ ] Confirm the menu at this location doesn't depend on size or modifiers for price (no "small/large", no "add bacon +$2"). If it does, don't launch until that's supported -- today it prices everything at the base rate.
 - [ ] **Order something modified, then read the ticket that comes out.** Say "no onions" (or "sauce on the side") on one item of a two-item order, let the agent confirm it back, and then look at the SMS that lands on the staff phone. The change must be on the ticket, under the item it belongs to and not under the other one. This is the one thing no automated check can prove end-to-end: whether the model actually put what it heard into that item's `note` instead of narrating it and moving on. If the ticket says `1x Margherita` and the caller was told "got it, no onions", the caller gets the wrong food and nobody finds out until they're eating it.
-- [ ] Place a real test order and confirm the SMS ticket actually lands on the staff phone (`order_sms_to`) from the right Twilio number (`twilio_number`). A missing or wrong value here fails silently -- the order still succeeds, the caller still hears it worked, and the kitchen never finds out.
+- [ ] Place a real test order and confirm the SMS ticket actually lands on the staff phone (`order_sms_to`) from the right Twilio number (`twilio_number`). The order itself still succeeds if this fails -- but the response now says `staff_notified: false`, `orders.staff_notified` stays false, and the agent is supposed to hand the caller to a person rather than sign off. Confirm both halves: that the text arrives when the config is right, and (unset `order_sms_to` on a throwaway location and order again) that the agent transfers instead of saying "you're all set" when it doesn't.
 - [ ] Order something at a location with a nonzero tax rate and listen for whether the spoken total (read back before you confirm) matches the total in the confirmation / on the dashboard. If they differ, decide whether that's acceptable for this restaurant before launch -- see the tax gap above.
 - [ ] Ask it to change or cancel an existing reservation. Confirm it transfers cleanly rather than pretending to handle it -- the prompt claims this capability but no tool backs it.
 - [ ] Ask about parking, and ask it to text you a payment link. Confirm it doesn't invent a specific, wrong answer (a lot next door that doesn't exist, a link that never arrives) -- both are unimplemented and it may improvise from the prompt's wording alone.

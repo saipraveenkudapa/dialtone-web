@@ -229,12 +229,21 @@ export async function POST(request: Request) {
     return agentFail("I couldn't get that order in.", 500);
   }
 
-  // Best effort, by design: the order row is already committed and on the
-  // dashboard by this point, so a failed text must never turn into a
-  // failure response -- that would tell a caller their food is not coming
-  // when the kitchen already has the ticket. sendOrderSms logs its own
-  // failure and never throws; this route's only job is to not treat
-  // `false` as an error and to leave its own trace of the miss.
+  // Best effort, by design: the order row is already committed by this
+  // point, so a failed text must never turn into a failure response --
+  // that would tell a caller their food is not coming when the order is
+  // already in the database. sendOrderSms logs its own failure and never
+  // throws; this route's job is to not treat `false` as an error, and to
+  // make the miss outlive the request instead of leaving it in a log line
+  // nobody reads during service.
+  //
+  // "Committed" is NOT "somebody knows about it". This text is the only
+  // path from a phone order to a human: app/dashboard/orders/page.tsx is
+  // still a stub ("Not built yet"), so the dashboard is not a second
+  // channel and there is nothing else watching. That is why the outcome
+  // is recorded on the row below and reported to the caller-side in the
+  // response -- an order the kitchen has never seen must not be answered
+  // with "you're all set".
   //
   // Sent on a deduped retry too, deliberately. Suppressing it would mean
   // a retry that happened between the commit and the text -- the widest
@@ -259,7 +268,25 @@ export async function POST(request: Request) {
       promisedMinutes,
     }),
   );
-  if (!smsSent) {
+  if (smsSent && data.order_id) {
+    // Scoped by location as well as id: every query in this file is
+    // scoped to the location the secret resolved to, and a write is not
+    // the place to make an exception. Best effort in its own right -- if
+    // this update fails the ticket still reached the kitchen, so the
+    // caller is told the truth (`staff_notified: true` below) and the
+    // failure to write it down is a log line, not a refusal.
+    const { error: markError } = await supabase
+      .from("orders")
+      .update({ staff_notified: true, staff_notified_at: new Date().toISOString() })
+      .eq("id", data.order_id)
+      .eq("location_id", location.id);
+    if (markError) {
+      console.error("[agent] could not record staff notification", {
+        location_id: location.id,
+        code: markError.code,
+      });
+    }
+  } else if (!smsSent) {
     console.error("[agent] order placed but staff sms not sent", {
       order_id: data.order_id,
       order_number: data.order_number,
@@ -272,5 +299,12 @@ export async function POST(request: Request) {
     order_number: data.order_number,
     total: `$${((data.total_cents ?? 0) / 100).toFixed(2)}`,
     promised_minutes: promisedMinutes,
+    // The one field that says whether a human knows this order exists.
+    // False means the order is real and committed but the ticket went
+    // nowhere -- the agent must not sign off with "you're all set"; it
+    // hands the caller to a person instead (see docs/vapi-setup.md and
+    // the "Taking an order" section of lib/agent/prompt.ts). Deliberately
+    // not an error: the order is fine, the notification is not.
+    staff_notified: smsSent,
   });
 }
