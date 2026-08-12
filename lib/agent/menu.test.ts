@@ -71,3 +71,39 @@ describe("menu shaping", () => {
     expect(suggestAlternative(menu, null)).toBeNull();
   });
 });
+
+describe("suggesting an alternative for a word a caller actually said", () => {
+  // The matcher here and the one that builds an order line were two
+  // different matchers, and they had drifted: "wings" is enough to order
+  // Buffalo Wings, but asking about "wings" when they were sold out
+  // matched nothing at all, because no item is literally named "wings".
+  it("matches a spoken word, not just the exact menu name", () => {
+    const menu = shapeMenu(categories);
+    expect(suggestAlternative(menu, "wings")).toBe("Boneless Wings");
+  });
+
+  it("prefers an available item that still answers what the caller asked for", () => {
+    const soup = item("i3", "Minestrone", 900, null);
+    const menu = shapeMenu(category([buffalo, soup, boneless]));
+    // Minestrone comes first in the category and is available, but
+    // "boneless wings" is what the caller will actually accept.
+    expect(suggestAlternative(menu, "wings")).toBe("Boneless Wings");
+  });
+
+  it("falls back to anything available in the category when nothing else matches the words", () => {
+    const soup = item("i3", "Minestrone", 900, null);
+    const menu = shapeMenu(category([buffalo, soup]));
+    expect(suggestAlternative(menu, "buffalo")).toBe("Minestrone");
+  });
+
+  it("never offers the item the caller just asked for back to them", () => {
+    const menu = shapeMenu(category([boneless]));
+    expect(suggestAlternative(menu, "Boneless Wings")).toBeNull();
+  });
+
+  it("treats a blank or whitespace item as no item at all", () => {
+    const menu = shapeMenu(categories);
+    expect(suggestAlternative(menu, "")).toBeNull();
+    expect(suggestAlternative(menu, "   ")).toBeNull();
+  });
+});
