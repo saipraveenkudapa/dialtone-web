@@ -17,8 +17,9 @@
 
    This script is self-contained: every canary location it needs (one
    for cross-tenant isolation, one with the kill switch on, one that is
-   not live, one that is shut every day of the week, and one open 9 to 5
-   with exactly two seats) is created here, used here, and deleted here,
+   not live, one that is shut every day of the week, one open 9 to 5
+   with exactly two seats, and one more of those for the cancel/change
+   checks) is created here, used here, and deleted here,
    in a try/finally that runs even if a check throws partway through --
    so a second run of this script starts from exactly the same database
    state as the first.
@@ -278,7 +279,7 @@ function openDaysAhead(hoursRows, holidayRows, timezone, count) {
 
 // ── canary tenant lifecycle ─────────────────────────────────────────
 //
-// Five throwaway locations this run owns start to finish, replacing
+// Six throwaway locations this run owns start to finish, replacing
 // the ad hoc SQL a human used to run outside the repo (see the task-14
 // report) with something `node scripts/exercise-tools.mjs` can redo on
 // its own, in CI, forever. Ids are pushed into `canaryLocationIds` the
@@ -310,6 +311,16 @@ const TAX_CANARY_ITEM_NAME = "Zzyzx Tax Canary";
 // have to be filtered by capacity as well as by the clock. Both numbers
 // are picked so every expectation below is a fixed string, not something
 // recomputed from whatever the demo location happens to be doing.
+// A second location on exactly the hours canary's terms -- open 9 to 5,
+// two seats, 90-minute slots -- kept separate from it so the cancel and
+// change checks can fill, empty and move tables without disturbing the
+// fixed strings the alternatives checks assert against. Two seats is
+// what makes "a change that would exceed capacity" a one-line fixture
+// rather than a dozen bookings.
+const RES_CANARY_TZ = "America/Los_Angeles";
+const RES_CANARY_SEATS = 2;
+const RES_CANARY_SLOT_MINUTES = 90;
+
 const HOURS_CANARY_OPEN = "09:00:00";
 const HOURS_CANARY_CLOSE = "17:00:00";
 const HOURS_CANARY_TZ = "America/Los_Angeles";
@@ -465,6 +476,24 @@ async function provisionCanaries(orgId) {
     close_time: HOURS_CANARY_CLOSE,
   });
 
+  // The book the cancel/change checks rewrite. Same shape as the hours
+  // canary and deliberately not the same location: those checks assert
+  // fixed alternative strings that depend on exactly which of its two
+  // seats are held at 9:00, and cancelling a table is precisely the
+  // thing that would move them.
+  const reservations = await createCanaryLocation(orgId, {
+    name: "Task17 Canary Reservations (exercise-tools, ephemeral)",
+    is_live: true,
+    kill_switch_on: false,
+    timezone: RES_CANARY_TZ,
+    seats: RES_CANARY_SEATS,
+    reservation_slot_minutes: RES_CANARY_SLOT_MINUTES,
+  });
+  await giveCanaryHours(reservations.id, {
+    open_time: HOURS_CANARY_OPEN,
+    close_time: HOURS_CANARY_CLOSE,
+  });
+
   return {
     isolatedLocationId: isolated.id,
     isolatedSecret: isolated.secret,
@@ -474,6 +503,8 @@ async function provisionCanaries(orgId) {
     closedSecret: closed.secret,
     hoursLocationId: hoursWindow.id,
     hoursSecret: hoursWindow.secret,
+    reservationsLocationId: reservations.id,
+    reservationsSecret: reservations.secret,
   };
 }
 
@@ -637,6 +668,20 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
   check("unauthenticated reservation is rejected", noAuthReservation.status === 401);
   const badAuthReservation = await call("reservation", {}, "wrong-secret");
   check("wrong secret is rejected on reservation", badAuthReservation.status === 401);
+
+  // The two newest write endpoints get the same pair. These two are the
+  // only tools in the product that can destroy something a caller
+  // already has, so "the shared auth gate is tested elsewhere" is not
+  // good enough for either.
+  const noAuthCancel = await call("cancel-reservation", {}, null);
+  check("unauthenticated cancel is rejected", noAuthCancel.status === 401);
+  const badAuthCancel = await call("cancel-reservation", {}, "wrong-secret");
+  check("wrong secret is rejected on cancel", badAuthCancel.status === 401);
+
+  const noAuthChange = await call("change-reservation", {}, null);
+  check("unauthenticated change is rejected", noAuthChange.status === 401);
+  const badAuthChange = await call("change-reservation", {}, "wrong-secret");
+  check("wrong secret is rejected on change", badAuthChange.status === 401);
 
   // ── Menu ──────────────────────────────────────────────────────────
 
@@ -1119,6 +1164,458 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
       noIdFirst.body?.booking_id !== noIdSecond.body?.booking_id &&
       noIdRowCount === 2,
     `${noIdFirst.body?.booking_id} vs ${noIdSecond.body?.booking_id}, ${noIdRowCount} row(s) in bookings`,
+  );
+
+  // ── Cancelling and changing a booking ───────────────────────────────
+  //
+  // Everything here runs against the reservations canary: open 9 to 5,
+  // two seats, 90-minute slots, its own book to wreck. The demo
+  // location is never asked to cancel or change anything -- its one
+  // seeded booking is real data this run must leave byte-for-byte
+  // alone, and the audit at the end proves it did.
+  //
+  // What is being proven is not "the happy path works". It is the list
+  // of things the matching rule REFUSES, because those are what stand
+  // between a phone number -- which is not a secret -- and a stranger's
+  // table.
+
+  const resDay = addDays(localDateOf(new Date(), RES_CANARY_TZ), 1);
+  const resAt = (minutesOfDay) =>
+    instantAtLocal(resDay, minutesOfDay, RES_CANARY_TZ).toISOString();
+
+  /** The booking rows at the reservations canary under one first name.
+   *  Read straight from the table, because a response saying "cancelled"
+   *  and a row still marked confirmed is exactly the failure worth
+   *  catching -- and, for every refusal below, the row is the only
+   *  evidence that nothing was written. */
+  const resBookings = async (name) => {
+    const rows = await mustOk(
+      admin
+        .from("bookings")
+        .select("id, customer_name, requested_at, party_size, status")
+        .eq("location_id", canaries.reservationsLocationId)
+        .ilike("customer_name", `${name}%`),
+      `read bookings named ${name} at the reservations canary`,
+    );
+    return rows;
+  };
+
+  const bookAtRes = (body) => call("reservation", body, canaries.reservationsSecret);
+
+  // ── it works at all, and it works on what a person actually says ────
+  //
+  // Booked with "+1 (415) 555-0101" and a full name; cancelled with
+  // "4155550101", the bare first name, and a time twenty minutes off the
+  // real one. That is the shape of a real call: nobody reads their
+  // booking back in the format it was stored in, and a matcher that
+  // demanded it would refuse every genuine caller.
+  const cancelBooking = await bookAtRes({
+    requested_at: resAt(9 * 60),
+    party_size: 2,
+    customer_name: "Cancelbee Nightingale",
+    customer_phone: "+1 (415) 555-0101",
+  });
+
+  const seatsHeldBefore = await call(
+    "availability",
+    { requested_at: resAt(9 * 60), party_size: 2 },
+    canaries.reservationsSecret,
+  );
+
+  const cancelHint = {
+    customer_name: "cancelbee",
+    customer_phone: "4155550101",
+    booking_time: resAt(9 * 60 + 20),
+  };
+  const cancelled = await call("cancel-reservation", cancelHint, canaries.reservationsSecret);
+  const cancelledRows = await resBookings("Cancelbee");
+  check(
+    "a booking is cancelled from the first name, the number as spoken, and roughly when it is",
+    cancelBooking.body?.booked === true &&
+      cancelled.status === 200 &&
+      cancelled.body?.cancelled === true &&
+      typeof cancelled.body?.when === "string" &&
+      cancelledRows.length === 1 &&
+      cancelledRows[0].status === "cancelled",
+    `${JSON.stringify(cancelled.body)}, row status ${cancelledRows[0]?.status}`,
+  );
+
+  // A timeout is what makes an LLM call a tool twice, and the second
+  // call must not tell a caller "I can't find that booking" two seconds
+  // after cancelling it. public.cancel_booking answers a retry with the
+  // cancellation that already exists; the route says the same sentence
+  // either way, so the two responses have to be identical.
+  const cancelledAgain = await call("cancel-reservation", cancelHint, canaries.reservationsSecret);
+  check(
+    "a retried cancel says exactly the same thing and writes nothing new",
+    cancelledAgain.body?.cancelled === true &&
+      cancelledAgain.body?.booking_id === cancelled.body?.booking_id &&
+      cancelledAgain.body?.when === cancelled.body?.when &&
+      (await resBookings("Cancelbee")).length === 1,
+    `${JSON.stringify(cancelledAgain.body)}`,
+  );
+
+  // Cancelling has to give the seats back, or it is only a status
+  // column. Two seats, one party of two: the slot goes from full to open
+  // and the tool that decides that is the same occupancy sweep
+  // create_reservation uses.
+  const seatsHeldAfter = await call(
+    "availability",
+    { requested_at: resAt(9 * 60), party_size: 2 },
+    canaries.reservationsSecret,
+  );
+  check(
+    "cancelling actually frees the seats, not just the row's status",
+    seatsHeldBefore.body?.available === false && seatsHeldAfter.body?.available === true,
+    `before ${seatsHeldBefore.body?.available}, after ${seatsHeldAfter.body?.available}`,
+  );
+
+  // ── the abuse case this was designed against ────────────────────────
+  //
+  // A phone number is not a secret. It is on a business card, in a group
+  // chat, on a delivery receipt, and in the caller ID of everyone this
+  // person has ever rung. If the number plus a rough time were the key,
+  // anyone holding one could empty a stranger's table -- silently, with
+  // the restaurant believing the guest cancelled. So the number alone
+  // must find nobody.
+  const victim = await bookAtRes({
+    requested_at: resAt(10 * 60 + 30),
+    party_size: 2,
+    customer_name: "Sofia Marchetti",
+    customer_phone: "+14155550202",
+  });
+  const wrongName = await call(
+    "cancel-reservation",
+    {
+      customer_name: "Marcus",
+      customer_phone: "4155550202",
+      booking_time: resAt(10 * 60 + 30),
+    },
+    canaries.reservationsSecret,
+  );
+  const victimAfterWrongName = await resBookings("Sofia");
+  check(
+    "knowing the number is not enough: the wrong name finds nobody and the table is untouched",
+    victim.body?.booked === true &&
+      wrongName.status === 200 &&
+      wrongName.body?.cancelled === false &&
+      wrongName.body?.reason === "not_found" &&
+      victimAfterWrongName.length === 1 &&
+      victimAfterWrongName[0].status === "confirmed",
+    `${JSON.stringify(wrongName.body)}, row status ${victimAfterWrongName[0]?.status}`,
+  );
+
+  // The other half of the same abuse: everything right -- name, number,
+  // time -- but dialled at a different restaurant. The location comes
+  // only from the secret (lib/agent/auth.ts::locationForSecret), never
+  // from anything the caller said, so a booking at another tenant is not
+  // merely refused, it is invisible.
+  const wrongTenant = await call(
+    "cancel-reservation",
+    {
+      customer_name: "Sofia",
+      customer_phone: "+14155550202",
+      booking_time: resAt(10 * 60 + 30),
+    },
+    canaries.isolatedSecret,
+  );
+  const victimAfterWrongTenant = await resBookings("Sofia");
+  check(
+    "another restaurant's secret cannot cancel this restaurant's booking, however well described",
+    wrongTenant.status === 200 &&
+      wrongTenant.body?.cancelled === false &&
+      wrongTenant.body?.reason === "not_found" &&
+      victimAfterWrongTenant.length === 1 &&
+      victimAfterWrongTenant[0].status === "confirmed",
+    `${JSON.stringify(wrongTenant.body)}, row status ${victimAfterWrongTenant[0]?.status}`,
+  );
+
+  // ── two bookings that could both be the one meant ───────────────────
+  //
+  // The whole design of this agent is that it hands the call to a person
+  // rather than picking. Here picking would cancel a table belonging to
+  // someone who is not on the phone, so the answer is a reason the agent
+  // can transfer on, and NOTHING is written.
+  const ambigOne = await bookAtRes({
+    requested_at: resAt(12 * 60),
+    party_size: 1,
+    customer_name: "Ambrose Kelly",
+    customer_phone: "+14155550303",
+  });
+  const ambigTwo = await bookAtRes({
+    requested_at: resAt(12 * 60 + 30),
+    party_size: 1,
+    customer_name: "Ambrose Kelly",
+    customer_phone: "+14155550303",
+  });
+  const ambiguous = await call(
+    "cancel-reservation",
+    {
+      customer_name: "Ambrose",
+      customer_phone: "4155550303",
+      booking_time: resAt(12 * 60),
+    },
+    canaries.reservationsSecret,
+  );
+  const ambigRows = await resBookings("Ambrose");
+  check(
+    "when two bookings could both be theirs, nothing is cancelled and the agent is told to hand over",
+    ambigOne.body?.booked === true &&
+      ambigTwo.body?.booked === true &&
+      ambiguous.status === 200 &&
+      ambiguous.body?.cancelled === false &&
+      ambiguous.body?.reason === "ambiguous" &&
+      ambigRows.length === 2 &&
+      ambigRows.every((r) => r.status === "confirmed"),
+    `${JSON.stringify(ambiguous.body)}, rows ${JSON.stringify(ambigRows.map((r) => r.status))}`,
+  );
+
+  // ── a booking that has already happened ─────────────────────────────
+  //
+  // Written directly, because no endpoint here will take a booking in
+  // the past -- which is the point. The seats were either used or lost;
+  // rewriting the night afterwards only corrupts the restaurant's own
+  // record of it.
+  //
+  // The hint given is half an hour into the FUTURE, so the route's
+  // past-time gate lets it through and the question actually reaches the
+  // matcher. The booking is thirty minutes old and well inside the
+  // 90-minute window either side of that hint, so the only thing keeping
+  // it out of reach is `requested_at > now()` inside
+  // app.matching_bookings.
+  await mustOk(
+    admin.from("bookings").insert({
+      location_id: canaries.reservationsLocationId,
+      customer_name: "Pastor Gone",
+      customer_phone: "+14155550404",
+      party_size: 1,
+      requested_at: new Date(Date.now() - 30 * 60_000).toISOString(),
+      status: "confirmed",
+    }),
+    "insert a past booking at the reservations canary",
+  );
+  const pastBooking = await call(
+    "cancel-reservation",
+    {
+      customer_name: "Pastor",
+      customer_phone: "4155550404",
+      booking_time: new Date(Date.now() + 30 * 60_000).toISOString(),
+    },
+    canaries.reservationsSecret,
+  );
+  const pastRows = await resBookings("Pastor");
+  check(
+    "a booking that has already happened is invisible to cancel, and stays exactly as it was",
+    pastBooking.status === 200 &&
+      pastBooking.body?.cancelled === false &&
+      pastBooking.body?.reason === "not_found" &&
+      pastRows.length === 1 &&
+      pastRows[0].status === "confirmed",
+    `${JSON.stringify(pastBooking.body)}, row status ${pastRows[0]?.status}`,
+  );
+
+  // And the front door: a caller who names a time already gone hears
+  // "that one's already past", not "I can't find it". Two different
+  // sentences, because they lead to two different next questions.
+  const pastHint = await call(
+    "cancel-reservation",
+    {
+      customer_name: "Pastor",
+      customer_phone: "4155550404",
+      booking_time: new Date(Date.now() - 30 * 60_000).toISOString(),
+    },
+    canaries.reservationsSecret,
+  );
+  check(
+    "a cancel for a time already gone is refused as a sentence, before any lookup",
+    pastHint.status === 400 &&
+      pastHint.body?.ok === false &&
+      typeof pastHint.body?.error === "string",
+    JSON.stringify(pastHint.body),
+  );
+
+  // ── changing a booking ──────────────────────────────────────────────
+
+  // 2:00 PM, not earlier: the ambiguity pair above sits at 12:00 and
+  // 12:30 and each holds a seat for a full 90-minute slot, so this
+  // location's two seats are not both free again until 2:00. A fixture
+  // that ignored that was refused as full, and every change check after
+  // it was then asserting against a booking that did not exist.
+  const mover = await bookAtRes({
+    requested_at: resAt(14 * 60),
+    party_size: 2,
+    customer_name: "Mover Quintana",
+    customer_phone: "+14155550505",
+  });
+  const moved = await call(
+    "change-reservation",
+    {
+      customer_name: "Mover",
+      customer_phone: "4155550505",
+      booking_time: resAt(14 * 60),
+      new_requested_at: resAt(15 * 60 + 30),
+      new_party_size: 2,
+    },
+    canaries.reservationsSecret,
+  );
+  const movedRows = await resBookings("Mover");
+  check(
+    "a change moves the one booking rather than writing a second one",
+    mover.body?.booked === true &&
+      moved.status === 200 &&
+      moved.body?.changed === true &&
+      moved.body?.party_size === 2 &&
+      movedRows.length === 1 &&
+      movedRows[0].status === "confirmed" &&
+      new Date(movedRows[0].requested_at).toISOString() === resAt(15 * 60 + 30),
+    `${JSON.stringify(moved.body)}, row at ${movedRows[0]?.requested_at}`,
+  );
+
+  // The confirmation has to name the date in the restaurant's timezone,
+  // like every other time this system reads a booking back: "Friday at
+  // 3:30 PM" is the same sentence for this Friday and one seventeen days
+  // out, and a caller can only catch a move to the wrong week if the
+  // month and day are in it.
+  const expectedMovedWhen = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: RES_CANARY_TZ,
+  }).format(new Date(resAt(15 * 60 + 30)));
+  check(
+    "the change is read back with the date, in the restaurant's timezone",
+    moved.body?.when === expectedMovedWhen,
+    `expected ${expectedMovedWhen}, got ${JSON.stringify(moved.body?.when)}`,
+  );
+
+  // ── a change is a capacity question, not an edit ────────────────────
+  //
+  // Two seats, and the party of two that just moved to 3:30 is holding
+  // both of them. A naive UPDATE would write the new time onto this row
+  // and the book would now promise four seats in a two-seat room. The
+  // booking must come back from this exactly where it started.
+  const blocked = await bookAtRes({
+    requested_at: resAt(9 * 60),
+    party_size: 2,
+    customer_name: "Blocker Rossi",
+    customer_phone: "+14155550606",
+  });
+  const intoFullSlot = await call(
+    "change-reservation",
+    {
+      customer_name: "Blocker",
+      customer_phone: "4155550606",
+      booking_time: resAt(9 * 60),
+      new_requested_at: resAt(15 * 60 + 30),
+      new_party_size: 2,
+    },
+    canaries.reservationsSecret,
+  );
+  const blockedAfterFull = await resBookings("Blocker");
+  check(
+    "a change into a slot with no seats is refused, and the booking stays exactly where it was",
+    blocked.body?.booked === true &&
+      intoFullSlot.status === 200 &&
+      intoFullSlot.body?.changed === false &&
+      intoFullSlot.body?.reason === "full" &&
+      blockedAfterFull.length === 1 &&
+      new Date(blockedAfterFull[0].requested_at).toISOString() === resAt(9 * 60),
+    `${JSON.stringify(intoFullSlot.body)}, row at ${blockedAfterFull[0]?.requested_at}`,
+  );
+
+  // The same three gates create_reservation applies to a new booking,
+  // applied to a moved one: the restaurant has to be open then, the time
+  // has to be in the future, and the party has to fit the house's own
+  // limit. Each leaves the booking untouched.
+  const intoClosedHours = await call(
+    "change-reservation",
+    {
+      customer_name: "Blocker",
+      customer_phone: "4155550606",
+      booking_time: resAt(9 * 60),
+      new_requested_at: resAt(3 * 60),
+    },
+    canaries.reservationsSecret,
+  );
+  check(
+    "a change to a time the restaurant is shut is refused with that day's real hours",
+    intoClosedHours.status === 200 &&
+      intoClosedHours.body?.changed === false &&
+      intoClosedHours.body?.reason === "closed" &&
+      intoClosedHours.body?.hours_that_day === "9:00 AM to 5:00 PM",
+    JSON.stringify(intoClosedHours.body),
+  );
+
+  const intoPast = await call(
+    "change-reservation",
+    {
+      customer_name: "Blocker",
+      customer_phone: "4155550606",
+      booking_time: resAt(9 * 60),
+      new_requested_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+    },
+    canaries.reservationsSecret,
+  );
+  check(
+    "a change to a time already gone is refused as a sentence",
+    intoPast.status === 400 && intoPast.body?.ok === false,
+    JSON.stringify(intoPast.body),
+  );
+
+  const intoBigParty = await call(
+    "change-reservation",
+    {
+      customer_name: "Blocker",
+      customer_phone: "4155550606",
+      booking_time: resAt(9 * 60),
+      new_requested_at: resAt(10 * 60 + 30),
+      new_party_size: 99,
+    },
+    canaries.reservationsSecret,
+  );
+  check(
+    "a change to a party over the house limit gets the same large_party reason booking does",
+    intoBigParty.status === 200 &&
+      intoBigParty.body?.changed === false &&
+      intoBigParty.body?.reason === "large_party",
+    JSON.stringify(intoBigParty.body),
+  );
+
+  // The abuse case again, on the endpoint that moves tables rather than
+  // destroying them -- a stranger who could move somebody's table to
+  // 3:00 has taken it away just as effectively.
+  const changeWrongName = await call(
+    "change-reservation",
+    {
+      customer_name: "Marcus",
+      customer_phone: "4155550606",
+      booking_time: resAt(9 * 60),
+      new_requested_at: resAt(10 * 60 + 30),
+    },
+    canaries.reservationsSecret,
+  );
+  const changeWrongTenant = await call(
+    "change-reservation",
+    {
+      customer_name: "Blocker",
+      customer_phone: "+14155550606",
+      booking_time: resAt(9 * 60),
+      new_requested_at: resAt(10 * 60 + 30),
+    },
+    canaries.isolatedSecret,
+  );
+  const blockerFinal = await resBookings("Blocker");
+  check(
+    "neither the wrong name nor another restaurant's secret can move this booking, and it has not moved",
+    changeWrongName.body?.changed === false &&
+      changeWrongName.body?.reason === "not_found" &&
+      changeWrongTenant.body?.changed === false &&
+      changeWrongTenant.body?.reason === "not_found" &&
+      blockerFinal.length === 1 &&
+      new Date(blockerFinal[0].requested_at).toISOString() === resAt(9 * 60),
+    `${JSON.stringify(changeWrongName.body)} / ${JSON.stringify(changeWrongTenant.body)}, row at ${blockerFinal[0]?.requested_at}`,
   );
 
   // ── Order ───────────────────────────────────────────────────────────
