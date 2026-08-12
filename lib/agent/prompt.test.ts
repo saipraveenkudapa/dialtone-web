@@ -57,6 +57,50 @@ describe("system prompt", () => {
     );
   });
 
+  // The ambiguity answer is `agentOk({placed: false, reason:
+  // "ambiguous_item", options})` -- a 200 the agent only ever sees as a
+  // reply to place_order (lib/agent/orders.ts, app/api/agent/order/route.ts).
+  // The instruction therefore has to sit at that call site: while it lived
+  // up in the menu section, the nearest line to the actual answer was "If
+  // place_order fails, take a message," so a caller who said "fries" at a
+  // shop with Hand Cut Fries and Cheese Fries got a message taken instead
+  // of the one question this whole path exists to ask. The second call
+  // matters as much as the first -- an agent that asks which one and then
+  // never re-sends the order has still not fed the kitchen.
+  it("handles an ambiguous item where place_order is called, not up in the menu section", () => {
+    const orderSection = prompt.slice(
+      prompt.indexOf("## Taking an order"),
+      prompt.indexOf("## Taking a reservation"),
+    );
+    expect(orderSection).toContain(
+      "If place_order says more than one thing could be what they said, it names them: ask which one, then call place_order again.",
+    );
+    expect(orderSection).toContain("Never pick for them.");
+
+    // And the failure line right after it must not swallow that case:
+    // "If place_order fails, take a message" read as the instruction for
+    // every placed:false answer is the bug itself.
+    expect(orderSection).toContain(
+      "If it fails otherwise, tell them honestly and take a message.",
+    );
+    expect(prompt).not.toContain("If place_order fails,");
+
+    const menuSection = prompt.slice(
+      prompt.indexOf("## The menu"),
+      prompt.indexOf("## Taking an order"),
+    );
+    expect(menuSection).not.toContain("place_order");
+  });
+
+  // Dropped once as a "flavour clause". It is not flavour: the calls this
+  // prompt now routes to take_message are exactly the upset-caller calls
+  // -- a complaint about a past order, someone asking for a manager --
+  // and with this line gone nothing stops the agent from agreeing that
+  // the food was terrible while it takes the caller's number down.
+  it("keeps the agent from disparaging the restaurant", () => {
+    expect(prompt).toContain("Never say anything bad about the restaurant.");
+  });
+
   it("stays short enough to keep latency down", () => {
     // The spec's tuning note: keep the prompt this length or shorter.
     //
@@ -140,7 +184,7 @@ describe("template", () => {
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "e0c58aa9b92fd2506738a2b60252b97a3b5773727e15630b3235d329525cccb0",
+      "19d6dbc153ad28984a1ca3962da1a807879e017df24ac30232328322cf247e00",
     );
   });
 
