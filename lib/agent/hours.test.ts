@@ -55,4 +55,49 @@ describe("open state", () => {
     expect(state.open_now).toBe(false);
     expect(state.today).toBe("closed");
   });
+
+  it("after today's closing time, says when it opens tomorrow", () => {
+    const state = openState({
+      // 2026-08-12 (Wed) closes at 10:30 PM Los Angeles; this is 11:00 PM.
+      now: new Date("2026-08-13T06:00:00Z"),
+      timezone: tz,
+      hours: week,
+      holidays: [],
+    });
+    expect(state.open_now).toBe(false);
+    expect(state.today).toBe("5:00 PM to 10:30 PM");
+    expect(state.next_open).toBe("tomorrow at 5:00 PM");
+  });
+
+  it("on a run of closed weekdays, names the next open day", () => {
+    const mondayAndTuesdayClosed = Array.from({ length: 7 }, (_, day) => ({
+      day_of_week: day,
+      open_time: "17:00:00",
+      close_time: "22:30:00",
+      is_closed: day === 1 || day === 2,
+    }));
+    const state = openState({
+      now: new Date("2026-08-11T02:00:00Z"), // Monday 7pm Los Angeles
+      timezone: tz,
+      hours: mondayAndTuesdayClosed,
+      holidays: [],
+    });
+    expect(state.open_now).toBe(false);
+    expect(state.today).toBe("closed");
+    expect(state.next_open).toBe("Wednesday at 5:00 PM");
+  });
+
+  it("skips a holiday closure while searching forward", () => {
+    const state = openState({
+      now: new Date("2026-08-11T02:00:00Z"), // Monday 7pm Los Angeles, closed
+      timezone: tz,
+      hours: week,
+      // Tuesday (2026-08-11) would normally be the next open day; the
+      // holiday closes it, so the search should skip to Wednesday.
+      holidays: [{ date: "2026-08-11", is_closed: true, open_time: null, close_time: null }],
+    });
+    expect(state.open_now).toBe(false);
+    expect(state.today).toBe("closed");
+    expect(state.next_open).toBe("Wednesday at 5:00 PM");
+  });
 });
