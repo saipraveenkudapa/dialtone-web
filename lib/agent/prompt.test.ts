@@ -59,7 +59,21 @@ describe("system prompt", () => {
 
   it("stays short enough to keep latency down", () => {
     // The spec's tuning note: keep the prompt this length or shorter.
-    expect(prompt.length).toBeLessThan(6000);
+    //
+    // Raised once, from 6000, and only by the size of one new section.
+    // The prompt now has to describe cancel_reservation and
+    // change_reservation: an endpoint the prompt never mentions is an
+    // endpoint the agent never calls, so leaving the ceiling where it
+    // was would have meant shipping two tools no caller could reach --
+    // while the prompt went on listing "Book, change, or cancel a table
+    // reservation" as something it can do. The other three edits in that
+    // same change (dropping parking, dropping the payment link, saying
+    // the total is before tax) are net-neutral to slightly shorter. Do
+    // not treat this number as a budget to spend: it is a latency guard,
+    // every character of it is spoken-word instructions the model reads
+    // before it can answer, and the next person to need more room should
+    // cut something first.
+    expect(prompt.length).toBeLessThan(6500);
   });
 
   it("falls back to 'not on file' when the address is empty or blank", () => {
@@ -126,7 +140,7 @@ describe("template", () => {
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "5b80f3620334b48041cb7193e13aad4867f9ed34f6889dbbb440708ab16d0923",
+      "1eb53ffa473d739aa85c29716cf5a7df39a8cf4a14fbd86689acc9bacb2d3102",
     );
   });
 
@@ -134,8 +148,17 @@ describe("template", () => {
   // compile -- it's a string. It just silently breaks every call the
   // agent makes to it at runtime. This asserts the exact set of
   // tool-shaped names (snake_case words) mentioned in the prompt matches
-  // the six tools that actually exist as routes under app/api/agent/.
-  it("only mentions the six tools that actually exist", () => {
+  // the eight tools that actually exist as routes under app/api/agent/.
+  //
+  // It catches the reverse too, which is the failure this product
+  // actually shipped: for months the prompt listed "Book, change, or
+  // cancel a table reservation" among the four things the agent can do
+  // while only create_reservation existed. Because cancelling was inside
+  // that list, the prompt's own "transfer anything outside these" rule
+  // never fired for it, and a caller ringing to cancel met an agent that
+  // believed it could help and had nothing to call. A capability named
+  // in prose is not a capability; only a tool name in this set is.
+  it("only mentions the eight tools that actually exist", () => {
     const withoutPlaceholders = SYSTEM_PROMPT_TEMPLATE.replace(
       /\{\{[a-z_]+\}\}/g,
       "",
@@ -151,6 +174,8 @@ describe("template", () => {
         "get_hours",
         "check_availability",
         "create_reservation",
+        "change_reservation",
+        "cancel_reservation",
         "place_order",
         "transfer_to_human",
       ]),
