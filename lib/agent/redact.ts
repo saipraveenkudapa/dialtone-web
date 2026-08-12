@@ -48,3 +48,62 @@ const CARD_NUMBER_RUN = /\b\d(?:\s*[,-]?\s*\d){12,18}\b/g;
 export function redactCardNumbers(text: string): string {
   return text.replace(CARD_NUMBER_RUN, "[redacted]");
 }
+
+/** Whether `text` contains something that is actually a card number,
+ *  rather than merely a long run of digits.
+ *
+ *  `redactCardNumbers` above is deliberately trigger-happy, and that is
+ *  right for free text: scrubbing an innocent 13-digit reference number
+ *  out of a complaint costs nothing, because every other word the caller
+ *  said survives around it. It is exactly wrong for a field whose entire
+ *  value is the digits -- a callback number. There, replacing the run
+ *  with `[redacted]` does not damage the text, it destroys the field,
+ *  and the caller is asked for a number they already gave correctly.
+ *  International numbers reach the 13-digit floor easily once a dial-out
+ *  prefix is spoken ("011 44 20 7946 0958" is fifteen digits, "00 91
+ *  98765 43210" is fourteen), so that is not a rare case, it is every
+ *  overseas caller.
+ *
+ *  So this asks the stricter question, using the two things that are
+ *  true of a payment card and not of a phone number:
+ *
+ *   - it carries a Luhn check digit, which a number picked for any other
+ *     reason passes only about one time in ten; and
+ *   - it starts with a major industry identifier in 2-6 (Amex 3, Visa 4,
+ *     Mastercard 2 and 5, Discover/UnionPay/Maestro 6), while a spoken
+ *     phone number leads with a trunk, exit or country prefix -- 0, 00,
+ *     011, 1, or a `+` that strips to one of those.
+ *
+ *  Both together, on a run in the 13-19 digit card range. A caller
+ *  reading a real card out is caught; the overseas caller is not.
+ *
+ *  This is a "should I refuse this field?" question, not a scrubber:
+ *  nothing it flags may be stored in any form, so callers of it drop the
+ *  whole value and ask again rather than writing a masked version. */
+export function looksLikeCardNumber(text: string): boolean {
+  for (const run of text.match(CARD_NUMBER_RUN) ?? []) {
+    const digits = run.replace(/\D/g, "");
+    if (digits.length < 13 || digits.length > 19) continue;
+    if (!/^[2-6]/.test(digits)) continue;
+    if (passesLuhn(digits)) return true;
+  }
+  return false;
+}
+
+/** The card industry's own checksum (ISO/IEC 7812): double every second
+ *  digit from the right, subtract 9 from anything over 9, and the total
+ *  is a multiple of ten. `digits` must already be digits only. */
+function passesLuhn(digits: string): boolean {
+  let sum = 0;
+  let double = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let value = digits.charCodeAt(i) - 48;
+    if (double) {
+      value *= 2;
+      if (value > 9) value -= 9;
+    }
+    sum += value;
+    double = !double;
+  }
+  return sum % 10 === 0;
+}

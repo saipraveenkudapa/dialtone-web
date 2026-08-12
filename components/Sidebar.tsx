@@ -8,6 +8,7 @@ import { signOut } from "@/app/login/actions";
 const NAV = [
   { href: "/dashboard", label: "Today" },
   { href: "/dashboard/calls", label: "Calls" },
+  { href: "/dashboard/messages", label: "Messages" },
   { href: "/dashboard/orders", label: "Orders" },
   { href: "/dashboard/menu", label: "Menu" },
   { href: "/dashboard/menu/live", label: "Manager screen" },

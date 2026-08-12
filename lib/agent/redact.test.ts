@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactCardNumbers } from "./redact";
+import { looksLikeCardNumber, redactCardNumbers } from "./redact";
 
 describe("redacting card numbers", () => {
   it("redacts an unbroken 16-digit run", () => {
@@ -165,5 +165,64 @@ describe("redacting card numbers", () => {
     expect(redactCardNumbers(reason)).toBe(
       "card [redacted] declined, callback 510-555-0119, order #4829",
     );
+  });
+});
+
+/** The stricter question, asked by the one field whose whole value is
+ *  digits. `redactCardNumbers` above may over-match and cost nothing;
+ *  here an over-match costs the caller their callback number and the
+ *  restaurant the call. */
+describe("telling a card number from a number to ring back", () => {
+  it("catches a card read out into the callback field", () => {
+    for (const card of [
+      "4111 1111 1111 1111", // Visa, spoken in groups
+      "4111111111111111", // the same, unbroken
+      "4111-1111-1111-1111", // the same, typed
+      "378282246310005", // Amex, 15 digits
+      "5555555555554444", // Mastercard
+      "6011111111111117", // Discover
+      "4222222222222", // 13-digit Visa, the shortest card there is
+      "my card is 4111 1111 1111 1111", // said, not just given
+    ]) {
+      expect(looksLikeCardNumber(card)).toBe(true);
+    }
+  });
+
+  it("leaves an international callback number alone -- the loop this fixes", () => {
+    // Every one of these is thirteen digits or more, so
+    // `redactCardNumbers` scrubs it to "[redacted]" and the caller is
+    // asked for a number they already gave correctly, forever.
+    for (const number of [
+      "011 44 20 7946 0958", // US dial-out to London
+      "00 91 98765 43210", // dial-out to India
+      "011 33 1 42 68 53 00", // dial-out to Paris
+      "011 61 2 9374 4000", // dial-out to Sydney
+      "011442079460958x22", // and one with an extension, no spaces
+    ]) {
+      expect(looksLikeCardNumber(number)).toBe(false);
+    }
+  });
+
+  it("leaves an ordinary domestic number alone", () => {
+    for (const number of ["+15105550119", "(510) 555-0119", "510.555.0119 x24"]) {
+      expect(looksLikeCardNumber(number)).toBe(false);
+    }
+  });
+
+  it("does not flag a long digit run that is not a card", () => {
+    // Right length, wrong checksum: a reference number a caller reads
+    // out is not a card and must not cost them the field.
+    expect(looksLikeCardNumber("4111 1111 1111 1112")).toBe(false);
+    // Right length AND right checksum by coincidence -- one dialled
+    // number in ten satisfies Luhn -- but no payment card starts with a
+    // 0, and every number spoken with a dial-out prefix does.
+    expect(looksLikeCardNumber("00 44 7911 123456")).toBe(false);
+    // Too short to be a card at all.
+    expect(looksLikeCardNumber("411111111111")).toBe(false);
+  });
+
+  it("says nothing about text without a card in it", () => {
+    expect(looksLikeCardNumber("")).toBe(false);
+    expect(looksLikeCardNumber("wants the manager to ring her back")).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { hasUsableCallerName, hasUsableCallerPhone } from "@/lib/agent/caller";
-import { redactCardNumbers } from "@/lib/agent/redact";
+import { looksLikeCardNumber, redactCardNumbers } from "@/lib/agent/redact";
 
 /** Everything `take_message` (app/api/agent/message/route.ts) decides
  *  about a message before it is written, pulled out here so it can be
@@ -84,26 +84,39 @@ function spokenPhone(value: unknown): string {
  *     `redactCardNumbers` to recognise. Scrub while the text is whole
  *     and there is nothing left to leak by the time it is cut to size.
  *
- *     Validating after redaction rather than before is what makes a card
- *     number said into the wrong field self-correcting: a caller
- *     answering "what's a good number for you?" by reading out a card
- *     leaves `[redacted]`, which has no digits, so `hasUsableCallerPhone`
- *     rejects it and the agent simply asks again. Nothing is stored and
- *     nobody is told why.
+ *     Validating after redaction rather than before means the checks
+ *     below judge the exact text that will be written, not a version of
+ *     it that redaction is about to change underneath them. It applies
+ *     to the two text fields; the callback number is not scrubbed at all
+ *     (see 2).
  *
- *  2. The callback number is redacted too, not just the message.
+ *  2. The callback number is checked, not scrubbed.
  *
- *     `redactCardNumbers`' own docstring notes that a phone number is
- *     short of its 13-digit floor, which is true of every ordinary one
- *     -- but a long international number read out with an extension and
- *     no punctuation can reach thirteen digits, and such a number would
- *     be redacted here and then refused as unusable, so the caller is
- *     asked again. That is the trade being made deliberately: this
- *     project's no-card-numbers rule is absolute and applies to every
- *     column, while an unusual callback number costs one more question
- *     on a call where the caller is already being asked to repeat
- *     themselves -- and the restaurant still has the caller ID on the
- *     call row either way.
+ *     Redaction is for text -- the message body, and the name in case a
+ *     card is read into it. Running it over the callback number as well
+ *     used to look like the same rule applied evenly, and it was a trap:
+ *     `redactCardNumbers` matches thirteen or more digits with
+ *     whitespace between them, which is what an international callback
+ *     number sounds like once the dial-out prefix is spoken ("011 44 20
+ *     7946 0958", "00 91 98765 43210"). Both became `[redacted]`, which
+ *     has no digits, so `hasUsableCallerPhone` failed and the agent said
+ *     "I didn't catch the best number to call you back on" -- and the
+ *     caller, having been asked for the number, said the same number
+ *     again, and heard the same sentence again, with the name and the
+ *     whole message thrown away each time. A refusal a caller cannot
+ *     answer is the loop `app/api/agent/reservation/route.ts` documents
+ *     avoiding for a party of twelve, arrived at from the other side.
+ *
+ *     So the number keeps its digits, and the no-card-numbers rule is
+ *     kept here by `looksLikeCardNumber` instead: a run in the card
+ *     length range that also carries the card checksum and starts with a
+ *     card issuer's digit is a card, and the whole field is refused --
+ *     nothing masked, nothing stored, the agent asks again, which is the
+ *     right question to ask somebody who just read out a card. An
+ *     ordinary number, domestic or overseas, is none of those things and
+ *     is written down as said, the same way `bookings.customer_phone` is
+ *     and for the same reason: it is how the restaurant reaches a
+ *     person, not something the caller said in passing.
  *
  *  3. Usability is `hasUsableCallerName` / `hasUsableCallerPhone`
  *     (lib/agent/caller.ts) -- the same two questions the cancel and
@@ -118,13 +131,17 @@ export function buildMessage(input: {
   message?: unknown;
 }): MessageResult {
   const name = redactCardNumbers(spokenText(input.caller_name));
-  const phone = redactCardNumbers(spokenPhone(input.callback_number));
+  const phone = spokenPhone(input.callback_number);
   const body = redactCardNumbers(spokenText(input.message));
 
   if (!hasUsableCallerName(name) || name.length > MAX_CALLER_NAME_LENGTH) {
     return { ok: false, reason: "no_name" };
   }
-  if (!hasUsableCallerPhone(phone) || phone.length > MAX_CALLBACK_PHONE_LENGTH) {
+  if (
+    looksLikeCardNumber(phone) ||
+    !hasUsableCallerPhone(phone) ||
+    phone.length > MAX_CALLBACK_PHONE_LENGTH
+  ) {
     return { ok: false, reason: "no_callback" };
   }
   // Nothing to pass on. Not the same failure as a message that rambles:

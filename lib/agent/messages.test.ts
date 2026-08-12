@@ -168,12 +168,69 @@ describe("card numbers in what a caller said", () => {
   });
 
   it("asks again -- and stores nothing -- when a card number is given as the callback number", () => {
-    // Redaction runs before the usability check, so this leaves
-    // "[redacted]", which has no digits in it. The caller is asked for a
-    // number again and no part of the card ever reaches a column.
-    expect(buildMessage(payload({ callback_number: "4111 1111 1111 1111" }))).toEqual({
-      ok: false,
-      reason: "no_callback",
+    // The whole field is dropped rather than masked: a caller who answers
+    // "what's a good number for you?" by reading out a card is asked for
+    // a number again, and no part of the card reaches a column, a payload
+    // or a log line.
+    for (const card of ["4111 1111 1111 1111", "378282246310005", 4111111111111111]) {
+      expect(buildMessage(payload({ callback_number: card }))).toEqual({
+        ok: false,
+        reason: "no_callback",
+      });
+    }
+  });
+
+  it("keeps an international callback number instead of scrubbing it into a refusal loop", () => {
+    // These are the numbers that broke this. Each is past the 13-digit
+    // floor `redactCardNumbers` matches on, so running the message
+    // scrubber over this field turned every one of them into
+    // "[redacted]" -- no digits, so `hasUsableCallerPhone` said no, so
+    // the agent said "I didn't catch the best number to call you back
+    // on", so the caller said it again, and the name and the message
+    // were thrown away every time. The caller could not get out of it by
+    // answering the question correctly, which is the definition of the
+    // loop reservation/route.ts refuses to build.
+    for (const number of [
+      "011 44 20 7946 0958",
+      "00 91 98765 43210",
+      "011 33 1 42 68 53 00",
+      "011442079460958x22",
+    ]) {
+      expect(buildMessage(payload({ callback_number: number }))).toEqual({
+        ok: true,
+        message: expect.objectContaining({ callback_phone: number }),
+      });
+    }
+  });
+
+  it("keeps the name and the message when the callback number is a long one", () => {
+    // The loop did not only cost the number: everything the caller had
+    // already said went with it, every time round.
+    expect(buildMessage(payload({ callback_number: "011 44 20 7946 0958" }))).toEqual({
+      ok: true,
+      message: {
+        caller_name: "Dana Whitlock",
+        callback_phone: "011 44 20 7946 0958",
+        body: "She's unhappy about last Friday's order and wants the manager to ring her.",
+      },
+    });
+  });
+
+  it("still redacts a card number the caller reads into the message body", () => {
+    // The body is text, and text is still scrubbed -- only the callback
+    // number changed.
+    const result = buildMessage(
+      payload({
+        callback_number: "011 44 20 7946 0958",
+        message: "You charged 4111 1111 1111 1111 twice",
+      }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      message: expect.objectContaining({
+        callback_phone: "011 44 20 7946 0958",
+        body: "You charged [redacted] twice",
+      }),
     });
   });
 

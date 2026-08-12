@@ -328,9 +328,12 @@ export async function getCallsPage(
   const calls = (data ?? []) as CallRow[];
   const ids = calls.map((c) => c.id);
 
-  // What came of each call, fetched in two queries rather than one per
-  // row.
-  const [orders, bookings] = ids.length
+  // What came of each call, fetched in three queries rather than one per
+  // row. Messages are here for the same reason they are a column on this
+  // screen at all: an order and a booking are finished business, while a
+  // message is somebody still waiting for the phone to ring, and the log
+  // is where staff look first.
+  const [orders, bookings, messages] = ids.length
     ? await Promise.all([
         supabase
           .from("orders")
@@ -340,8 +343,9 @@ export async function getCallsPage(
           .from("bookings")
           .select("call_id, party_size, requested_at")
           .in("call_id", ids),
+        supabase.from("messages").select("call_id, handled").in("call_id", ids),
       ])
-    : [{ data: [] }, { data: [] }];
+    : [{ data: [] }, { data: [] }, { data: [] }];
 
   const orderByCall = new Map(
     ((orders.data ?? []) as {
@@ -358,6 +362,19 @@ export async function getCallsPage(
     }[]).map((b) => [b.call_id, b]),
   );
 
+  // A call can leave more than one message (a retried tool call, or a
+  // caller who says one more thing), so this counts rather than keeping
+  // the last one -- and counts the unhandled ones separately, because
+  // that is the only number the log needs to shout about.
+  const messageByCall = new Map<string, { total: number; open: number }>();
+  for (const m of (messages.data ?? []) as { call_id: string; handled: boolean }[]) {
+    const seen = messageByCall.get(m.call_id) ?? { total: 0, open: 0 };
+    messageByCall.set(m.call_id, {
+      total: seen.total + 1,
+      open: seen.open + (m.handled ? 0 : 1),
+    });
+  }
+
   return {
     calls,
     total,
@@ -365,5 +382,92 @@ export async function getCallsPage(
     pageCount,
     orderByCall,
     bookingByCall,
+    messageByCall,
+  };
+}
+
+export type MessageFilter = "open" | "all";
+
+export const MESSAGE_FILTERS: { key: MessageFilter; label: string }[] = [
+  { key: "open", label: "Needs a callback" },
+  { key: "all", label: "All" },
+];
+
+export const MESSAGES_PER_PAGE = 50;
+
+/** The message book, read by location rather than by call.
+ *
+ *  `getCall` reads messages too, but only ever `.eq("call_id", callId)`,
+ *  and for a long time that was the only reader in the product. A
+ *  message is allowed to have no call: the tool call can arrive before
+ *  the telephony webhook has written the `calls` row, so
+ *  app/api/agent/message/route.ts writes `call_id: null` on purpose
+ *  rather than refusing to take the message, and the foreign key is ON
+ *  DELETE SET NULL so a message outlives the call it was taken on. Every
+ *  one of those rows satisfied `messages_open_idx` -- "who is still
+ *  waiting for a callback?" -- and appeared on no screen in the product.
+ *  A caller who was told somebody would ring them back, and nobody could
+ *  even find out they had rung, is the exact loss this feature exists to
+ *  prevent.
+ *
+ *  So this asks the question the table was built to answer, filtered
+ *  only by the restaurant and by whether anyone has dealt with it.
+ *  Nothing here mentions `call_id`. RLS scopes the read to locations the
+ *  signed-in user belongs to; the explicit `location_id` filter is what
+ *  picks one of theirs, exactly as `getCallsPage` does. */
+export async function getMessagesPage(
+  locationId: string,
+  { filter = "open", page = 1 }: { filter?: MessageFilter; page?: number } = {},
+) {
+  const supabase = await supabaseServer();
+
+  // Counting twice on purpose: `total` is what this page is showing,
+  // `open` is what the restaurant still owes somebody, and the header
+  // says both whichever filter is on. Both are head requests -- no rows
+  // cross the wire.
+  const [counted, openCounted] = await Promise.all([
+    filter === "open"
+      ? supabase
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .eq("location_id", locationId)
+          .eq("handled", false)
+      : supabase
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .eq("location_id", locationId),
+    supabase
+      .from("messages")
+      .select("id", { count: "exact", head: true })
+      .eq("location_id", locationId)
+      .eq("handled", false),
+  ]);
+
+  if (counted.error) throw counted.error;
+  if (openCounted.error) throw openCounted.error;
+
+  // Same guard as the call log: PostgREST answers a range past the end of
+  // the result set with PGRST103 rather than an empty page, and a stale
+  // bookmark is enough to ask for one.
+  const total = counted.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / MESSAGES_PER_PAGE));
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const from = (safePage - 1) * MESSAGES_PER_PAGE;
+
+  let rows = supabase.from("messages").select("*").eq("location_id", locationId);
+  if (filter === "open") rows = rows.eq("handled", false);
+
+  const { data, error } = await rows
+    .order("taken_at", { ascending: false })
+    .range(from, from + MESSAGES_PER_PAGE - 1);
+
+  if (error) throw error;
+
+  return {
+    messages: (data ?? []) as MessageRow[],
+    total,
+    openTotal: openCounted.count ?? 0,
+    page: safePage,
+    pageCount,
   };
 }
