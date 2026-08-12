@@ -20,6 +20,18 @@ describe("redacting card numbers", () => {
     );
   });
 
+  it("redacts a comma-separated 16-digit run -- how people group digits in writing", () => {
+    expect(redactCardNumbers("card is 4111, 1111, 1111, 1111 thanks")).toBe(
+      "card is [redacted] thanks",
+    );
+  });
+
+  it("redacts a double-space-separated 16-digit run -- a routine speech-to-text artifact", () => {
+    expect(redactCardNumbers("card is 4111  1111  1111  1111 thanks")).toBe(
+      "card is [redacted] thanks",
+    );
+  });
+
   it("redacts the shortest real card length, 13 unbroken digits", () => {
     expect(redactCardNumbers("4111111111111")).toBe("[redacted]");
   });
@@ -77,13 +89,28 @@ describe("redacting card numbers", () => {
     expect(redactCardNumbers(text)).toBe(text);
   });
 
+  it("spares an unbroken 11-digit phone number with a leading plus and country code", () => {
+    const text = "callback is +15105550119";
+    expect(redactCardNumbers(text)).toBe(text);
+  });
+
   it("spares an unbroken 11-digit phone number with country code", () => {
     const text = "callback is 15105550119";
     expect(redactCardNumbers(text)).toBe(text);
   });
 
+  it("spares a parenthesized US phone number", () => {
+    const text = "reach them at (510) 555-0119";
+    expect(redactCardNumbers(text)).toBe(text);
+  });
+
   it("spares an order number", () => {
     const text = "still waiting on order #4829";
+    expect(redactCardNumbers(text)).toBe(text);
+  });
+
+  it("spares another order number", () => {
+    const text = "checking on the status of #1043";
     expect(redactCardNumbers(text)).toBe(text);
   });
 
@@ -94,6 +121,26 @@ describe("redacting card numbers", () => {
 
   it("spares a plain dollar amount", () => {
     const text = "wants a refund for the $45.67 order";
+    expect(redactCardNumbers(text)).toBe(text);
+  });
+
+  it("spares a small plain dollar amount", () => {
+    const text = "the total came to $80.48 with tax";
+    expect(redactCardNumbers(text)).toBe(text);
+  });
+
+  it("spares a duration", () => {
+    const text = "quoted a wait of 25 min for the table";
+    expect(redactCardNumbers(text)).toBe(text);
+  });
+
+  it("spares a date -- dash-separated but nowhere near 13 digits", () => {
+    const text = "reservation moved to 2026-08-12";
+    expect(redactCardNumbers(text)).toBe(text);
+  });
+
+  it("spares a realistic order ticket line", () => {
+    const text = "2x Bucatini Amatriciana";
     expect(redactCardNumbers(text)).toBe(text);
   });
 
