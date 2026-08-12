@@ -51,6 +51,12 @@ export type LocationRow = {
   order_email_to: string | null;
   carrier_name: string | null;
   forwarding_verified_at: string | null;
+  agent_secret_hash: string | null;
+  tax_rate_bps: number;
+  seats: number;
+  reservation_slot_minutes: number;
+  max_party_size: number;
+  order_types: "pickup" | "delivery" | "both";
 };
 
 export type MenuCategoryRow = {
