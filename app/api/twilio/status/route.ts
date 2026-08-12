@@ -68,13 +68,19 @@ export async function POST(request: Request) {
   const duration = Number(params.DialCallDuration ?? params.CallDuration ?? 0);
   const finished = TERMINAL.has(next);
 
+  // A forwarded call jumps straight from ringing to completed, so
+  // "in_progress" may never arrive. Talk time is the proof a human
+  // picked up -- without this, every answered call counts as missed,
+  // which is the one number the whole product is judged on.
+  const wasAnswered =
+    next === "in_progress" || (finished && next === "completed" && duration > 0);
+
   await supabase
     .from("calls")
     .update({
       status: next,
       answered_at:
-        call.answered_at ??
-        (next === "in_progress" ? new Date().toISOString() : null),
+        call.answered_at ?? (wasAnswered ? new Date().toISOString() : null),
       ended_at: finished ? new Date().toISOString() : null,
       duration_seconds: Number.isFinite(duration) && duration > 0 ? duration : null,
       // A forwarded call that a person picked up is, for now, a transfer
