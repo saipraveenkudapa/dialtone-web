@@ -71,7 +71,13 @@ export async function sendOrderSms(location: LocationRow, message: string) {
   }
 
   if (!res.ok) {
-    console.error("[agent] order sms failed", res.status, await res.text());
+    let body: string;
+    try {
+      body = await res.text();
+    } catch {
+      body = "(body unreadable)";
+    }
+    console.error("[agent] order sms failed", res.status, body);
     return false;
   }
   return true;

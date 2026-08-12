@@ -176,4 +176,16 @@ describe("sending the order ticket", () => {
     expect(ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("returns false, without throwing, when response.text() rejects after a non-2xx status", async () => {
+    process.env.TWILIO_ACCOUNT_SID = "AC-test-sid";
+    process.env.TWILIO_AUTH_TOKEN = "test-token";
+    const mockResponse = new Response("bad request", { status: 400 });
+    mockResponse.text = vi.fn(async () => {
+      throw new TypeError("body stream error");
+    });
+    globalThis.fetch = vi.fn(async () => mockResponse) as unknown as typeof fetch;
+
+    await expect(sendOrderSms(testLocation(), "ticket body")).resolves.toBe(false);
+  });
 });
