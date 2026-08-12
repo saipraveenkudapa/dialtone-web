@@ -150,7 +150,19 @@ export async function POST(request: Request) {
     .single<BookTableResult>();
 
   if (error || !data) {
-    console.error("[agent] book_table failed", error);
+    // The SQLSTATE and the location, nothing else. A PostgrestError's
+    // `details` carries Postgres' "Failing row contains (...)" text, which
+    // for `bookings` is the caller's own name and phone number -- logging
+    // the raw error put both into the application log on every failed
+    // booking, which is the one place a caller's details have no business
+    // being. `message` and `hint` are no safer in principle. The code is
+    // enough to tell a constraint violation from a connection failure,
+    // and the booking id does not exist on this path by definition. Same
+    // shape as the order and transfer paths, which were hardened first.
+    console.error("[agent] book_table failed", {
+      location_id: location.id,
+      code: error?.code ?? null,
+    });
     return agentFail("I couldn't get that booking in.", 500);
   }
 

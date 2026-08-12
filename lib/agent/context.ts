@@ -21,7 +21,14 @@ export async function callIdForProvider(
     .maybeSingle();
 
   if (error) {
-    console.error("[agent] call lookup failed", error);
+    // `provider_call_id` is a request-body value, so it is part of this
+    // query's filter and can come back inside a PostgrestError's message
+    // or details. Only the location and the SQLSTATE are written down,
+    // the same as every other agent path.
+    console.error("[agent] call lookup failed", {
+      location_id: locationId,
+      code: error.code,
+    });
     return null;
   }
   return (data as { id: string } | null)?.id ?? null;

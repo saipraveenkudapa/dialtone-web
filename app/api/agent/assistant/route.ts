@@ -61,7 +61,10 @@ export async function POST(request: Request) {
   ]);
 
   if (hours.error || holidays.error) {
-    console.error("[agent] hours read failed", hours.error ?? holidays.error);
+    console.error("[agent] hours read failed", {
+      location_id: location.id,
+      code: (hours.error ?? holidays.error)?.code ?? null,
+    });
     return agentFail("I can't put the assistant together right now.", 500);
   }
 

@@ -44,7 +44,12 @@ export async function locationForSecret(secret: string | null) {
     .maybeSingle();
 
   if (error) {
-    console.error("[agent] secret lookup failed", error);
+    // The SQLSTATE only. This query's filter value is the SHA-256 of a
+    // live tool secret: an error that echoes the failing condition back
+    // would write that hash into the application log, and there is no
+    // reason for it to be there. There is no location to name yet --
+    // resolving one is what just failed.
+    console.error("[agent] secret lookup failed", { code: error.code });
     return null;
   }
   return (data as LocationRow) ?? null;

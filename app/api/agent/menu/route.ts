@@ -26,7 +26,12 @@ export async function POST(request: Request) {
   ]);
 
   if (categories.error || items.error) {
-    console.error("[agent] menu read failed", categories.error ?? items.error);
+    // Location and SQLSTATE only -- see app/api/agent/order/route.ts for
+    // why a raw PostgrestError is never written down on an agent path.
+    console.error("[agent] menu read failed", {
+      location_id: location.id,
+      code: (categories.error ?? items.error)?.code ?? null,
+    });
     return agentFail("I can't pull the menu up right now.", 500);
   }
 

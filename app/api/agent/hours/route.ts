@@ -15,7 +15,15 @@ export async function POST(request: Request) {
   ]);
 
   if (hours.error || holidays.error) {
-    console.error("[agent] hours read failed", hours.error ?? holidays.error);
+    // Location and SQLSTATE only, the shape every agent path uses. This
+    // particular query filters on nothing a caller supplied, so there is
+    // no caller text for a PostgrestError to echo -- but one log shape
+    // across every route is what keeps that true as routes change, rather
+    // than something each one has to be re-audited for.
+    console.error("[agent] hours read failed", {
+      location_id: location.id,
+      code: (hours.error ?? holidays.error)?.code ?? null,
+    });
     return agentFail("I can't check the hours right now.", 500);
   }
 

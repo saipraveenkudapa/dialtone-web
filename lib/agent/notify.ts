@@ -94,18 +94,37 @@ export async function sendOrderSms(location: LocationRow, message: string) {
       },
     );
   } catch (err) {
-    console.error("[agent] order sms request failed", err);
+    // The error's name and message, not the error. A rejected fetch in
+    // Node carries a `cause` that quotes the request URL, and this URL has
+    // the Twilio account SID in its path -- there is no reason for that to
+    // be sitting in an application log.
+    console.error("[agent] order sms request failed", {
+      location_id: location.id,
+      error: err instanceof Error ? `${err.name}: ${err.message}` : "unknown",
+    });
     return false;
   }
 
   if (!res.ok) {
-    let body: string;
+    // The status and Twilio's own numeric error code, never the response
+    // body. Twilio quotes rejected parameters back in its error text, and
+    // the parameter this request is mostly made of is `Body` -- the
+    // kitchen ticket, which carries the caller's name, phone number,
+    // delivery address and whatever they asked to have changed about
+    // their food. Dumping that into the log on every failed send would
+    // undo, in the failure path, exactly what the redaction on the way in
+    // is for. The code is what a Twilio error is actually diagnosed from.
+    let code: unknown = null;
     try {
-      body = await res.text();
+      code = ((await res.json()) as { code?: unknown })?.code ?? null;
     } catch {
-      body = "(body unreadable)";
+      code = null;
     }
-    console.error("[agent] order sms failed", res.status, body);
+    console.error("[agent] order sms failed", {
+      location_id: location.id,
+      status: res.status,
+      twilio_code: code,
+    });
     return false;
   }
   return true;
