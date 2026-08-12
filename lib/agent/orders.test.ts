@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchItem, priceOrder, type PricedItem } from "./orders";
+import { matchItem, normaliseQuantity, priceOrder, type PricedItem } from "./orders";
 
 const items: PricedItem[] = [
   { id: "i1", name: "Bucatini Amatriciana", price_cents: 2400, sold_out_until: null },
@@ -63,6 +63,34 @@ describe("matching spoken item names", () => {
     ];
     expect(matchItem(ambiguous, "marg")).toBeNull();
   });
+
+  it("does not let a short word prefix-match into a longer unrelated word (ham vs hamburger)", () => {
+    const menu: PricedItem[] = [
+      { id: "h1", name: "Hamburger", price_cents: 1000, sold_out_until: null },
+    ];
+    expect(matchItem(menu, "ham")).toBeNull();
+  });
+
+  it("does not let a short word prefix-match into a longer unrelated word (pie vs pierogi)", () => {
+    const menu: PricedItem[] = [
+      { id: "pr1", name: "Pierogi", price_cents: 1100, sold_out_until: null },
+    ];
+    expect(matchItem(menu, "pie")).toBeNull();
+  });
+
+  it("still matches a short word exactly against an item actually named that word", () => {
+    const menu: PricedItem[] = [
+      { id: "hc1", name: "Ham & Cheese", price_cents: 900, sold_out_until: null },
+    ];
+    expect(matchItem(menu, "ham")?.id).toBe("hc1");
+  });
+
+  it("still allows a longer word to prefix-match (marg for Margherita)", () => {
+    const menu: PricedItem[] = [
+      { id: "m2", name: "Margherita", price_cents: 1800, sold_out_until: null },
+    ];
+    expect(matchItem(menu, "marg")?.id).toBe("m2");
+  });
 });
 
 describe("pricing", () => {
@@ -115,5 +143,34 @@ describe("quantity validation", () => {
 
   it("still accepts an ordinary positive integer quantity", () => {
     expect(() => priceOrder([{ item: items[0], quantity: 3 }], 0)).not.toThrow();
+  });
+});
+
+describe("normaliseQuantity", () => {
+  it("accepts an ordinary positive integer count", () => {
+    expect(normaliseQuantity(3)).toBe(3);
+  });
+
+  it("rejects zero rather than treating it as a sane count", () => {
+    expect(normaliseQuantity(0)).toBeNull();
+  });
+
+  it("rejects a negative count", () => {
+    expect(normaliseQuantity(-1)).toBeNull();
+  });
+
+  it("rejects a fractional count", () => {
+    expect(normaliseQuantity(1.5)).toBeNull();
+  });
+
+  it("accepts a numeric string, the way a loosely-typed tool payload might send it", () => {
+    expect(normaliseQuantity("4")).toBe(4);
+  });
+
+  it("rejects a value that is not a number at all", () => {
+    expect(normaliseQuantity("two")).toBeNull();
+    expect(normaliseQuantity(undefined)).toBeNull();
+    expect(normaliseQuantity(null)).toBeNull();
+    expect(normaliseQuantity({})).toBeNull();
   });
 });
