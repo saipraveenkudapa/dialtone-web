@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { KillBanner } from "@/components/KillBanner";
 import { getCurrentLocation, getMenu } from "@/lib/data";
 import { supabaseConfigured } from "@/lib/supabase/env";
+import { signOut } from "@/app/login/actions";
 
 export default async function DashboardLayout({
   children,
@@ -37,6 +38,13 @@ export default async function DashboardLayout({
           This account is not attached to a location. Onboarding is not built
           yet — seed one with <code>supabase db reset</code> for now.
         </p>
+        {/* Without this the account is stuck: no sidebar here means no
+            other way to sign out and try a different one. */}
+        <form action={signOut}>
+          <button type="submit" className="btn btn-secondary">
+            Sign out
+          </button>
+        </form>
       </div>
     );
   }

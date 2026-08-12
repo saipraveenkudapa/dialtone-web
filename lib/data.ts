@@ -5,6 +5,7 @@ import type {
   LocationRow,
   MenuCategoryRow,
   MenuItemRow,
+  OrderItemRow,
   OrderRow,
 } from "@/lib/supabase/types";
 
@@ -174,4 +175,65 @@ export function startOfDayUtc(timezone: string, now = new Date()): string {
     (get("hour") % 24) * 3600 + get("minute") * 60 + get("second");
 
   return new Date(now.getTime() - secondsIntoLocalDay * 1000).toISOString();
+}
+
+export type TranscriptLine = { at: number; who: "caller" | "agent"; text: string };
+
+/** One call, with whatever it produced. Returns null when the id is not
+ *  visible to this user -- RLS makes "someone else's call" and "no such
+ *  call" indistinguishable, which is what we want. */
+export async function getCall(callId: string) {
+  const supabase = await supabaseServer();
+
+  const { data: call, error } = await supabase
+    .from("calls")
+    .select("*")
+    .eq("id", callId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!call) return null;
+
+  const [order, booking] = await Promise.all([
+    supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .eq("call_id", callId)
+      .maybeSingle(),
+    supabase.from("bookings").select("*").eq("call_id", callId).maybeSingle(),
+  ]);
+
+  return {
+    call: call as CallRow & {
+      recording_path: string | null;
+      transcript: { lines?: TranscriptLine[] } | null;
+      notes: string | null;
+      dialed_number: string | null;
+    },
+    order: order.data as
+      | (OrderRow & { order_items: OrderItemRow[] })
+      | null,
+    booking: booking.data as BookingRow | null,
+  };
+}
+
+/** A short-lived link to the audio.
+ *
+ *  The bucket is private and there is no public URL: playback is always a
+ *  URL that expires, so a link pasted into a group chat stops working.
+ *  Generated with the user's own session, so storage RLS decides -- the
+ *  service role is not involved. */
+export async function getRecordingUrl(path: string | null) {
+  if (!path) return null;
+
+  const supabase = await supabaseServer();
+  const { data, error } = await supabase.storage
+    .from("call-recordings")
+    .createSignedUrl(path, 300);
+
+  if (error) {
+    console.error("[calls] could not sign recording url", error);
+    return null;
+  }
+  return data.signedUrl;
 }

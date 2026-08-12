@@ -534,3 +534,85 @@ a:hover { color: var(--color-accent); }
   .admin-bar { padding: var(--space-3) 16px; flex-wrap: wrap; }
   .admin-who { width: 100%; margin-left: 0; order: 3; }
 }
+
+/* ── call detail ───────────────────────────────────────────────────── */
+
+.player { padding: var(--space-4); gap: var(--space-3); }
+.player-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.player-play { min-width: 52px; font-size: 15px; }
+.player-scrub {
+  flex: 1;
+  min-width: 140px;
+  accent-color: var(--color-accent);
+}
+.player-time { font-size: 13px; flex: none; }
+.player-rate { min-width: 52px; }
+.player-note { font-size: 12px; margin: 0; }
+
+.transcript h5 {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+.transcript ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.transcript .line button {
+  display: flex;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  font: inherit;
+  font-size: 14px;
+  color: inherit;
+  cursor: pointer;
+}
+.transcript .line button:hover {
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
+}
+/* The line being spoken right now, so the eye can follow the audio. */
+.transcript .line.is-current button {
+  border-left-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+.transcript .at {
+  flex: none;
+  width: 42px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+.transcript .who {
+  flex: none;
+  width: 52px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.transcript .who-agent { color: var(--color-accent-700); }
+.transcript .who-caller { color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+.transcript .said { flex: 1; }
+
+.timeline-delta { font-size: 12px; }
+
+.call-notes { padding: var(--space-4); gap: var(--space-2); }
+.call-notes-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 12px;
+}

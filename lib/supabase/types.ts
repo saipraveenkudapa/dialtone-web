@@ -115,3 +115,13 @@ export type BookingRow = {
   requested_at: string;
   status: string;
 };
+
+export type OrderItemRow = {
+  id: string;
+  order_id: string;
+  menu_item_id: string | null;
+  name_snapshot: string;
+  price_cents_snapshot: number;
+  quantity: number;
+  modifiers: unknown;
+};
