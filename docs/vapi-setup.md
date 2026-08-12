@@ -323,7 +323,8 @@ to treat them differently:
 
 - **Ordinary business answers**, `agentOk({placed:false, reason, item?})`,
   200: `reason` is `"unknown_item"`, `"sold_out"`, `"no_delivery"` (delivery
-  asked for at a pickup-only location), or `"no_pickup"` (the reverse).
+  asked for at a pickup-only location), `"no_pickup"` (the reverse), or
+  `"closed"` (with `hours_that_day`) when the kitchen is shut right now.
   These are things a host says out loud without anything having gone
   wrong.
 - **Requests the route can't make sense of**, `agentFail`, 400:
