@@ -35,8 +35,13 @@
    00000000000a) and its seeded rows are never written to except for the
    orders/bookings this run itself places, and those are removed at the
    end; an audit at the bottom proves it by snapshotting orders,
-   order_items, bookings, calls, order_status_events and menu_items for
-   that location before and after and asserting they are identical. */
+   order_items, bookings, calls, order_status_events, menu_items and
+   messages before and after and asserting they are identical. The other
+   real tenant (Marty's, ba110000-0000-0000-0000-00000000000c) is
+   snapshotted the same way even though nothing here has its secret or
+   ever names it in a request: everything this script writes goes through
+   the service role, which bypasses RLS, so the tenant nothing is
+   supposed to touch is the one worth watching. */
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -61,6 +66,22 @@ if (!supabaseUrl || !serviceRoleKey) {
 }
 
 const DEMO_LOCATION_ID = "a10c0000-0000-0000-0000-00000000000a";
+
+/** The other real tenant. Nothing in this script ever writes to it or
+ *  holds its secret -- it is here purely so the before/after audit at
+ *  the bottom covers it too. "The demo location is untouched" was only
+ *  ever half the promise: this script provisions tenants, places orders
+ *  and now writes messages under the service role, which bypasses RLS,
+ *  so a query that lost its location scope would land in whichever
+ *  tenant Postgres happened to hand back -- and the only tenant that
+ *  could catch that is the one nothing here is supposed to know about. */
+const MARTYS_LOCATION_ID = "ba110000-0000-0000-0000-00000000000c";
+
+/** Both real tenants, snapshotted before and after this run. */
+const SEEDED_LOCATIONS = [
+  { id: DEMO_LOCATION_ID, name: "Nonna Rosa" },
+  { id: MARTYS_LOCATION_ID, name: "Marty's" },
+];
 
 const admin = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -564,9 +585,9 @@ async function snapshotTable(table, build) {
   return mustOk(build(admin.from(table).select("*")), `snapshot ${table}`);
 }
 
-async function snapshotDemoLocation() {
+async function snapshotLocation(locationId) {
   const orders = await snapshotTable("orders", (q) =>
-    q.eq("location_id", DEMO_LOCATION_ID).order("id"),
+    q.eq("location_id", locationId).order("id"),
   );
   const orderIds = orders.map((o) => o.id);
   const orderItems = orderIds.length
@@ -576,23 +597,52 @@ async function snapshotDemoLocation() {
     ? await snapshotTable("order_status_events", (q) => q.in("order_id", orderIds).order("id"))
     : [];
   const bookings = await snapshotTable("bookings", (q) =>
-    q.eq("location_id", DEMO_LOCATION_ID).order("id"),
+    q.eq("location_id", locationId).order("id"),
   );
-  const calls = await snapshotTable("calls", (q) => q.eq("location_id", DEMO_LOCATION_ID).order("id"));
+  const calls = await snapshotTable("calls", (q) => q.eq("location_id", locationId).order("id"));
   const menuItems = await snapshotTable("menu_items", (q) =>
-    q.eq("location_id", DEMO_LOCATION_ID).order("id"),
+    q.eq("location_id", locationId).order("id"),
   );
-  return { orders, order_items: orderItems, bookings, calls, order_status_events: orderStatusEvents, menu_items: menuItems };
+  // messages is in here for the same reason menu_items is: this run now
+  // writes to that table (against its own throwaway tenants), so "no
+  // message of ours landed on a real restaurant's book" has to be
+  // something the audit can see, not something the checks assert about
+  // themselves.
+  const messages = await snapshotTable("messages", (q) =>
+    q.eq("location_id", locationId).order("id"),
+  );
+  return {
+    orders,
+    order_items: orderItems,
+    bookings,
+    calls,
+    order_status_events: orderStatusEvents,
+    menu_items: menuItems,
+    messages,
+  };
+}
+
+/** Both real tenants at once, keyed by name so the report says which one
+ *  moved rather than just that something did. */
+async function snapshotSeededTenants() {
+  const snapshots = {};
+  for (const tenant of SEEDED_LOCATIONS) {
+    snapshots[tenant.name] = await snapshotLocation(tenant.id);
+  }
+  return snapshots;
 }
 
 const tableCounts = (snapshot) =>
   Object.fromEntries(Object.entries(snapshot).map(([table, rows]) => [table, rows.length]));
 
+const tenantCounts = (snapshots) =>
+  Object.fromEntries(Object.entries(snapshots).map(([name, snap]) => [name, tableCounts(snap)]));
+
 // ── main ─────────────────────────────────────────────────────────────
 
 async function main() {
-  const before = await snapshotDemoLocation();
-  console.log("before (demo location row counts):", JSON.stringify(tableCounts(before)));
+  const before = await snapshotSeededTenants();
+  console.log("before (seeded tenant row counts):", JSON.stringify(tenantCounts(before)));
 
   const demoLocation = await mustOk(
     admin.from("locations").select("*").eq("id", DEMO_LOCATION_ID).single(),
@@ -625,21 +675,24 @@ async function main() {
     await teardownCanaries();
   }
 
-  const after = await snapshotDemoLocation();
-  const unchanged = JSON.stringify(before) === JSON.stringify(after);
-  check(
-    "demo location's orders, order_items, bookings, calls, order_status_events and menu_items are byte-for-byte unchanged",
-    unchanged,
-    unchanged
-      ? JSON.stringify(tableCounts(after))
-      : `before ${JSON.stringify(tableCounts(before))}, after ${JSON.stringify(tableCounts(after))}`,
-  );
+  const after = await snapshotSeededTenants();
+  for (const tenant of SEEDED_LOCATIONS) {
+    const wasUnchanged =
+      JSON.stringify(before[tenant.name]) === JSON.stringify(after[tenant.name]);
+    check(
+      `${tenant.name}: orders, order_items, bookings, calls, order_status_events, menu_items and messages are byte-for-byte unchanged`,
+      wasUnchanged,
+      wasUnchanged
+        ? JSON.stringify(tableCounts(after[tenant.name]))
+        : `before ${JSON.stringify(tableCounts(before[tenant.name]))}, after ${JSON.stringify(tableCounts(after[tenant.name]))}`,
+    );
+  }
 
   // ── report ────────────────────────────────────────────────────────
 
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} passed`);
-  console.log(`\nafter (demo location row counts):`, JSON.stringify(tableCounts(after)));
+  console.log(`\nafter (seeded tenant row counts):`, JSON.stringify(tenantCounts(after)));
 
   if (runError || failed.length) process.exit(1);
   process.exit(0);
@@ -682,6 +735,19 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
   check("unauthenticated change is rejected", noAuthChange.status === 401);
   const badAuthChange = await call("change-reservation", {}, "wrong-secret");
   check("wrong secret is rejected on change", badAuthChange.status === 401);
+
+  // take_message is the newest write endpoint and the one every call
+  // that used to reach a human now ends at, so it carries a caller's
+  // name, their number and what they said -- the most personal payload
+  // any tool takes. It gets the same pair, and it needs them more than
+  // the rest: it is also the only write path with no Postgres function
+  // under it, so `locationForSecret` returning null IS the entire
+  // difference between a message and an anonymous row in somebody
+  // else's book.
+  const noAuthMessage = await call("message", {}, null);
+  check("unauthenticated message is rejected", noAuthMessage.status === 401);
+  const badAuthMessage = await call("message", {}, "wrong-secret");
+  check("wrong secret is rejected on message", badAuthMessage.status === 401);
 
   // ── Menu ──────────────────────────────────────────────────────────
 
@@ -2159,6 +2225,220 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
       transfer.body.number.length > 0 &&
       transfer.body.number === demoLocation.fallback_human_number,
     `expected ${demoLocation.fallback_human_number}, got ${JSON.stringify(transfer.body?.number)}`,
+  );
+
+  // ── Messages ────────────────────────────────────────────────────────
+  //
+  // The counterweight to the transfer above. transfer_to_human is now
+  // only for catering and allergies, so every other call that used to
+  // reach a person -- an upset caller, "put me through to a manager", a
+  // complaint about last Friday's order, speech the agent still cannot
+  // make out after two tries -- ends at take_message instead. If this
+  // route quietly writes nothing, the caller is told somebody will ring
+  // them back and nobody ever does, which is worse than the transfer it
+  // replaces. So these checks read the row back from the database, not
+  // the response: the response says `{taken: true}` and nothing else, on
+  // purpose.
+  //
+  // All of them run against throwaway canary tenants. A message written
+  // to a real restaurant's book is a person the staff would try to ring.
+
+  // A message nobody can return is not a message. Missing details are
+  // the same kind of failure as a misheard name anywhere else -- a
+  // question the caller can answer -- so this is agentFail, not a
+  // business decision the agent reads out, and nothing is written.
+  const messageNoNumber = await call(
+    "message",
+    {
+      caller_name: "Task18 Message Nobody",
+      message: "Somebody should call me about last Friday.",
+    },
+    canaries.isolatedSecret,
+  );
+  const afterNoNumber = await mustOk(
+    admin.from("messages").select("id").eq("location_id", canaries.isolatedLocationId),
+    "count messages after the incomplete one",
+  );
+  check(
+    "a message with no callback number is asked about again, and nothing is written",
+    messageNoNumber.status === 400 &&
+      messageNoNumber.body?.ok === false &&
+      typeof messageNoNumber.body?.error === "string" &&
+      afterNoNumber.length === 0,
+    `${JSON.stringify(messageNoNumber.body)}, ${afterNoNumber.length} row(s)`,
+  );
+
+  // A calls row at the tenant the message is taken for, so the stored
+  // message can be checked for hanging off the right call -- and so the
+  // cross-tenant check below is not vacuously passing against a route
+  // that never attaches a call to anything.
+  const messageCallSuffix = Date.now();
+  const ownProviderCallId = `task18-own-${messageCallSuffix}`;
+  const ownCall = await mustOk(
+    admin
+      .from("calls")
+      .insert({
+        location_id: canaries.isolatedLocationId,
+        twilio_call_sid: `task18-own-sid-${messageCallSuffix}`,
+        provider_call_id: ownProviderCallId,
+      })
+      .select("id")
+      .single(),
+    "insert canary call for the message checks",
+  );
+
+  const takenName = "Task18 Message Caller";
+  const takenBody = "The order last Friday was cold and nobody called me back.";
+  const taken = await call(
+    "message",
+    {
+      caller_name: takenName,
+      callback_number: "+1 510 555 0143",
+      message: takenBody,
+      provider_call_id: ownProviderCallId,
+    },
+    canaries.isolatedSecret,
+  );
+  const takenRows = await mustOk(
+    admin.from("messages").select("*").eq("location_id", canaries.isolatedLocationId),
+    "read back the message just taken",
+  );
+  const takenRow = takenRows.find((m) => m.caller_name === takenName);
+  check(
+    "take_message stores the message against the location its secret resolved to, on that location's own call",
+    taken.status === 200 &&
+      taken.body?.ok === true &&
+      taken.body?.taken === true &&
+      takenRows.length === 1 &&
+      takenRow?.location_id === canaries.isolatedLocationId &&
+      takenRow?.call_id === ownCall.id &&
+      takenRow?.callback_phone === "+1 510 555 0143" &&
+      takenRow?.body === takenBody &&
+      takenRow?.handled === false &&
+      takenRow?.handled_at === null,
+    `${JSON.stringify(taken.body)}, row ${JSON.stringify(takenRow)}`,
+  );
+
+  // provider_call_id arrives in a request body, and this route runs
+  // under the service role with RLS bypassed, so the only thing stopping
+  // a body value from hanging a caller's name, number and complaint off
+  // another restaurant's call is that the lookup is scoped by the
+  // location the secret resolved to (lib/agent/context.ts). Proven from
+  // the outside: a real calls row at a DIFFERENT canary tenant, named in
+  // a request authenticated as this one.
+  //
+  // The message must still be written -- a caller is on the phone and
+  // has been promised a callback, and whose call row it belongs to is
+  // not their problem -- but it must land at this tenant with no call
+  // attached, and it must not appear in the other tenant's book at all.
+  const otherProviderCallId = `task18-other-${messageCallSuffix}`;
+  const otherCall = await mustOk(
+    admin
+      .from("calls")
+      .insert({
+        location_id: canaries.reservationsLocationId,
+        twilio_call_sid: `task18-other-sid-${messageCallSuffix}`,
+        provider_call_id: otherProviderCallId,
+      })
+      .select("id")
+      .single(),
+    "insert another tenant's call for the cross-tenant message check",
+  );
+
+  const crossTenantName = "Task18 Cross Tenant";
+  const crossTenant = await call(
+    "message",
+    {
+      caller_name: crossTenantName,
+      callback_number: "+15105550144",
+      message: "Hang this off somebody else's call.",
+      // Not this tenant's call. Also, deliberately, a location_id in the
+      // body -- which nothing anywhere is allowed to trust.
+      provider_call_id: otherProviderCallId,
+      location_id: canaries.reservationsLocationId,
+    },
+    canaries.isolatedSecret,
+  );
+  const crossRows = await mustOk(
+    admin.from("messages").select("*").eq("location_id", canaries.isolatedLocationId),
+    "read back messages after the cross-tenant attempt",
+  );
+  const crossRow = crossRows.find((m) => m.caller_name === crossTenantName);
+  const otherTenantMessages = await mustOk(
+    admin.from("messages").select("id, call_id").eq("location_id", canaries.reservationsLocationId),
+    "count messages at the other canary tenant",
+  );
+  check(
+    "a message naming another restaurant's call is written to its own tenant with no call attached, never to theirs",
+    crossTenant.status === 200 &&
+      crossTenant.body?.taken === true &&
+      crossRow?.location_id === canaries.isolatedLocationId &&
+      crossRow?.call_id === null &&
+      otherTenantMessages.length === 0 &&
+      !crossRows.some((m) => m.call_id === otherCall.id),
+    `${JSON.stringify(crossTenant.body)}, row ${JSON.stringify(crossRow)}, other tenant has ${otherTenantMessages.length} message(s)`,
+  );
+
+  // No card numbers in any column, payload or log line. A complaint
+  // about a charge is the likeliest way one ever reaches this database
+  // -- the caller reads the number off the card while explaining -- and
+  // this is the newest free-text write path for words a caller actually
+  // said, so it is scrubbed before it is anywhere near a column.
+  const cardName = "Task18 Card Complaint";
+  const cardMessage = await call(
+    "message",
+    {
+      caller_name: cardName,
+      callback_number: "+15105550145",
+      message: "You charged 4111 1111 1111 1111 twice on Friday.",
+      provider_call_id: ownProviderCallId,
+    },
+    canaries.isolatedSecret,
+  );
+  const cardRows = await mustOk(
+    admin.from("messages").select("*").eq("location_id", canaries.isolatedLocationId),
+    "read back the redacted message",
+  );
+  const cardRow = cardRows.find((m) => m.caller_name === cardName);
+  check(
+    "a card number read into a message is redacted before it is stored, and never echoed back",
+    cardMessage.status === 200 &&
+      cardMessage.body?.taken === true &&
+      cardRow?.body === "You charged [redacted] twice on Friday." &&
+      !JSON.stringify(cardRow).includes("4111") &&
+      !JSON.stringify(cardMessage.body ?? {}).includes("4111"),
+    `${JSON.stringify(cardMessage.body)}, row body ${JSON.stringify(cardRow?.body)}`,
+  );
+
+  // ...and the other side of that rule, which is the trap the redactor
+  // fell into once already: an overseas callback number reaches thirteen
+  // digits the moment the dial-out prefix is spoken, so scrubbing the
+  // phone field the way the body is scrubbed turned every overseas
+  // caller's number into "[redacted]" -- which has no digits, so the
+  // agent asked for it again, and again. The number keeps its digits;
+  // only a run that is actually a card is refused.
+  const overseasName = "Task18 Overseas Caller";
+  const overseasNumber = "011 44 20 7946 0958";
+  const overseasMessage = await call(
+    "message",
+    {
+      caller_name: overseasName,
+      callback_number: overseasNumber,
+      message: "Calling from London about a large booking next month.",
+    },
+    canaries.isolatedSecret,
+  );
+  const overseasRows = await mustOk(
+    admin.from("messages").select("*").eq("location_id", canaries.isolatedLocationId),
+    "read back the overseas message",
+  );
+  const overseasRow = overseasRows.find((m) => m.caller_name === overseasName);
+  check(
+    "an overseas callback number is stored as said, not redacted into a number nobody can ring",
+    overseasMessage.status === 200 &&
+      overseasMessage.body?.taken === true &&
+      overseasRow?.callback_phone === overseasNumber,
+    `${JSON.stringify(overseasMessage.body)}, stored ${JSON.stringify(overseasRow?.callback_phone)}`,
   );
 
   // ── Assistant config ────────────────────────────────────────────────
