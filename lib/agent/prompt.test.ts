@@ -49,6 +49,22 @@ describe("system prompt", () => {
     // The spec's tuning note: keep the prompt this length or shorter.
     expect(prompt.length).toBeLessThan(6000);
   });
+
+  it("falls back to 'not on file' when the address is empty or blank", () => {
+    const empty = buildSystemPrompt({
+      location: { ...location, address: "" },
+      hoursToday: "5:00 PM to 10:30 PM",
+      now: new Date("2026-08-13T02:00:00Z"),
+    });
+    expect(empty).toContain("Address: not on file");
+
+    const whitespace = buildSystemPrompt({
+      location: { ...location, address: "   " },
+      hoursToday: "5:00 PM to 10:30 PM",
+      now: new Date("2026-08-13T02:00:00Z"),
+    });
+    expect(whitespace).toContain("Address: not on file");
+  });
 });
 
 describe("greeting", () => {

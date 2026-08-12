@@ -137,7 +137,7 @@ export function buildSystemPrompt({
   }).format(now);
 
   return SYSTEM_PROMPT_TEMPLATE.replaceAll("{{business_name}}", location.name)
-    .replaceAll("{{address}}", location.address ?? "not on file")
+    .replaceAll("{{address}}", location.address?.trim() || "not on file")
     .replaceAll("{{current_datetime}}", when)
     .replaceAll("{{hours_today}}", hoursToday)
     .replaceAll(
