@@ -113,6 +113,46 @@ describe("system prompt", () => {
     expect(menuSection).not.toContain("place_order");
   });
 
+  // The owner's ask: auto-detect whatever the caller speaks and answer in
+  // it, without asking or announcing the switch, and without it reading as
+  // English translated into another language -- native numbers, money,
+  // idiom and call-closing phrasing, and a fallback to the confident
+  // language rather than guessing at one it isn't.
+  it("answers in whatever language the caller speaks, natively rather than translated", () => {
+    const languageSection = prompt.slice(
+      prompt.indexOf("## Language"),
+      prompt.indexOf("## What you can do"),
+    );
+    expect(languageSection).toContain("Answer in whatever language the caller opens with");
+    expect(languageSection).toContain("not like English translated");
+    expect(languageSection).toContain(
+      "never as digits with a spoken decimal point",
+    );
+    expect(languageSection).toContain(
+      "stay in the language you are confident in rather than guess",
+    );
+  });
+
+  // Menu item names are never translated (the owner's second decision: no
+  // translated-name data entry), and the matcher in lib/agent/orders.ts
+  // compares spoken words against the menu's own English names -- it is
+  // never rewritten to understand another language. This is the one thing
+  // that makes ordering work in any language without touching that
+  // matcher: whatever language is being spoken, only the exact name
+  // get_menu returned may ever reach place_order. This has to sit right at
+  // the place_order call site, the same reasoning as the ambiguous-item
+  // test above -- an instruction back up in "## Language" alone is exactly
+  // as easy to lose sight of as the ambiguity rule was in "## The menu".
+  it("keeps ordering language-proof: only get_menu's own name reaches place_order", () => {
+    const orderSection = prompt.slice(
+      prompt.indexOf("## Taking an order"),
+      prompt.indexOf("## Taking a reservation"),
+    );
+    expect(orderSection).toContain(
+      "Whatever language you're speaking, place_order takes only the exact English item name get_menu gave you",
+    );
+  });
+
   // Dropped once as a "flavour clause". It is not flavour: the calls this
   // prompt now routes to take_message are exactly the upset-caller calls
   // -- a complaint about a past order, someone asking for a manager --
@@ -158,12 +198,25 @@ describe("system prompt", () => {
     // was not done lightly: the two additions were trimmed for length
     // before this ceiling moved at all, and the suggestive-sell offer is
     // capped at one attempt per call specifically so it costs one extra
-    // turn on an order call, not one extra turn per item. Do not treat
-    // this number as a budget to spend: it is a latency guard, every
-    // character of it is spoken-word instructions the model reads before
-    // it can answer, and the next person to need more room should cut
-    // something first.
-    expect(prompt.length).toBeLessThan(7500);
+    // turn on an order call, not one extra turn per item.
+    //
+    // Third, from 7500 to 8500, for auto-detecting and answering in
+    // whatever language the caller speaks (the owner's explicit ask: "I
+    // don't want the customer to notice the agent was a foreigner").
+    // The new "## Language" section is what makes that native rather
+    // than translated -- natural numbers, money and phone numbers,
+    // local idiom instead of literal English, a fallback to the
+    // confident language rather than broken output -- and a second,
+    // short reinforcement sits at the place_order call site itself:
+    // whatever language is being spoken, only the exact English name
+    // get_menu gave an item may ever reach place_order, never a
+    // translation of it, since that tool has no other way to know which
+    // menu row was meant. Both were trimmed for length before this
+    // ceiling moved. Do not treat this number as a budget to spend: it
+    // is a latency guard, every character of it is spoken-word
+    // instructions the model reads before it can answer, and the next
+    // person to need more room should cut something first.
+    expect(prompt.length).toBeLessThan(8500);
   });
 
   it("falls back to 'not on file' when the address is empty or blank", () => {
@@ -230,7 +283,7 @@ describe("template", () => {
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "7b6ebb3231a446e850a8bc45e330a31e9e7bd90db40fcb7d5b5be8d4f3172389",
+      "52a3fe069d404d32bb7bc29eb86f0d09c7853ad4ec1897ce89f9735eca758ffb",
     );
   });
 

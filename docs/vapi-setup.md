@@ -141,11 +141,12 @@ AGENT_SECRET=<secret from step 1> \
 This is the automated version of everything below in this section and in
 "Assistant reference: what goes where" -- it fetches the config from step 2
 with the secret from step 1, then creates or updates a Vapi assistant carrying the
-system prompt, the greeting as `firstMessage`, temperature 0.3, and a
-transfer destination, and registers all nine tools against
-`<public-https-base-url>`, each with the `x-dialtone-secret` header and a
-parameter schema matched against the routes themselves, not against prose.
-It prints the assistant id at the end -- put that in `VAPI_ASSISTANT_ID`.
+system prompt, the greeting as `firstMessage`, temperature 0.3, a
+multilingual transcriber and voice, and a transfer destination, and
+registers all nine tools against `<public-https-base-url>`, each with the
+`x-dialtone-secret` header and a parameter schema matched against the
+routes themselves, not against prose. It prints the assistant id at the
+end -- put that in `VAPI_ASSISTANT_ID`.
 
 It needs `VAPI_PRIVATE_KEY` (from `.env.local`) to talk to Vapi, and
 `AGENT_SECRET` -- the same plaintext step 1 printed -- as an environment
@@ -553,7 +554,7 @@ for what that difference means for the prompt's read-back step.
 
 ## Assistant reference: what goes where
 
-`scripts/provision-vapi.mjs` (step 3) sets all four of these on every run.
+`scripts/provision-vapi.mjs` (step 3) sets all six of these on every run.
 By hand, in the Vapi dashboard or API:
 
 - **System prompt:** `system_prompt` from step 2, fetched fresh every call.
@@ -568,10 +569,54 @@ By hand, in the Vapi dashboard or API:
   optimisation the script does not do, since it would need a separate
   TTS-and-hosting step of its own.
 - **Temperature:** 0.3. Boring and consistent, not creative.
+- **Transcriber:** Deepgram, model `nova-3`, language `multi` -- Vapi's own
+  broadest per-call, auto-detecting transcriber, so a caller is heard
+  correctly without anyone choosing a language up front. It code-switches
+  in real time across ten languages (English, Spanish, French, German,
+  Hindi, Russian, Portuguese, Japanese, Italian, Dutch); a caller outside
+  that list still gets transcribed, by Deepgram's ordinary single-language
+  auto-detection, just not through the same code-switching path.
+- **Voice:** ElevenLabs (`11labs`), model `eleven_flash_v2_5`, voice
+  `sarah` -- the widest-language (32) ElevenLabs model at real-time
+  latency, so replies come back in whatever language the model just wrote
+  its answer in, with no language chosen in advance either. See "What
+  'multilingual' actually means here" below for what this does and does
+  not make native.
 - **Transfer destination:** `fallback_number` from the same response. See
   "Two mechanisms move the call, not one" in step 3 for why this is a
   second, native Vapi tool alongside `transfer_to_human` below, not the
   same tool wired twice.
+
+### What "multilingual" actually means here
+
+The owner's ask was to auto-detect whatever language a caller speaks and
+reply in it, without a fixed list, and without it sounding like English
+translated into that language. Two separate things had to be true for
+that, and they have different ceilings:
+
+**Vocabulary and grammar** -- the words the model chooses, and whether a
+price, a time, or the pickup-or-delivery question comes out the way a
+native speaker would actually say it -- is the system prompt's job (the
+`## Language` section in `lib/agent/prompt.ts`), and it is genuinely
+per-language: `gpt-4o` writes fluent text in whatever language it decided
+to answer in, the same way it would in a chat window. That is also what
+keeps ordering correct in any language without touching the matcher in
+`lib/agent/orders.ts`, which only ever compares spoken words against the
+menu's own names: the prompt requires the exact English item name
+`get_menu` returned to be the one passed to `place_order`, in every
+language, every time, whatever the caller heard spoken back to them.
+
+**Accent** has a hard ceiling this change does not clear. A Vapi assistant
+has exactly one `voice`. `eleven_flash_v2_5` can make "sarah" speak
+correct, fluent French, Hindi, or Portuguese, but it is still one recorded
+voice identity doing it, not a different native voice actor per language
+-- so the accent carries some trace of that voice's own training accent
+the further a language is from it, even while the words themselves are
+right. Going further -- a native accent in every language, not just
+correct words -- needs either a per-language voice (a Vapi squad routing
+to a different assistant/voice keyed off the detected language) or a
+different voice model entirely. Neither is in this change; say so plainly
+rather than claim more than has actually been heard.
 
 ## 4. Point the number at it
 
@@ -793,6 +838,11 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Call it yourself twenty times. Order weird things. Interrupt it. Mumble.
 - [ ] Ask for something sold out. It must offer the nearest available item, not just say no.
 - [ ] Have someone with an accent call it. This is where these break.
+- [ ] Call it in a language other than English and confirm it answers in that
+  language from the first turn, not English or a mid-call switch. Then order
+  something and check the kitchen ticket: the item name on it must be the
+  exact English name from the menu, never a translated or guessed one, no
+  matter what language the call happened in.
 - [ ] Test with the kitchen loud in the background.
 - [ ] Mention an allergy. It must transfer immediately without answering.
 - [ ] Offer a card number. It must refuse and never repeat it back.

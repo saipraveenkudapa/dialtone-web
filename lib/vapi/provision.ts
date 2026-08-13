@@ -307,21 +307,77 @@ function nativeTransferTool(fallbackNumber: string) {
   };
 }
 
-/* Pacing: how long the assistant waits before it starts talking, and how
- * it behaves when the caller talks over it. Every field below is named
- * and typed straight from Vapi's own StartSpeakingPlan / StopSpeakingPlan
- * DTOs (github.com/VapiAI/server-sdk-typescript) -- checked against that
- * source directly, not guessed, since a wrong field name here either
- * gets silently dropped or 400s the PATCH in
- * scripts/provision-vapi.mjs's real run against the live assistant.
+/* Language: how the assistant hears and speaks whatever language a caller
+ * uses, so a call can be answered in it without anyone picking that
+ * language in advance. Every provider/model/language string below was
+ * checked directly against Vapi's own generated SDK types
+ * (github.com/VapiAI/server-sdk-typescript/tree/main/src/api/types --
+ * `DeepgramTranscriberModel`, `DeepgramTranscriberLanguage`,
+ * `ElevenLabsVoiceModel`, `ElevenLabsVoiceIdEnum`,
+ * `CreateAssistantDtoTranscriber`/`CreateAssistantDtoVoice` for the
+ * `provider` discriminators themselves), not assumed from memory or
+ * prose docs -- a wrong string here doesn't error, it silently falls
+ * back to a worse default or single-language behaviour, and that only
+ * shows up the moment a caller who doesn't speak English rings in.
  *
- * Deliberately excluded: `voice` and `transcriber`. Both are untouched
- * Vapi defaults on purpose -- multi-language support is a separate,
- * later piece of work that has to choose them (a transcriber and a
- * smart-endpointing provider are both language-specific choices; see
- * `transcriptionEndpointingPlan` below for why that's exactly what it
- * avoids), and this change should not quietly make that choice for it.
+ * TRANSCRIBER: Deepgram, model nova-3, language "multi". This is the
+ * pairing Vapi's own multilingual guide
+ * (docs.vapi.ai/customization/multilingual) recommends for automatic
+ * per-call language detection with no fixed language list configured up
+ * front -- the owner's explicit ask. nova-3 over nova-2 specifically:
+ * Deepgram's nova-2 "multi" mode only code-switches between Spanish and
+ * English, while nova-3 "multi" covers ten (English, Spanish, French,
+ * German, Hindi, Russian, Portuguese, Japanese, Italian, Dutch) with
+ * materially better accuracy in Deepgram's own comparison
+ * (developers.deepgram.com/docs/models-languages-overview). That is a
+ * real, current limit worth being honest about: a caller in, say,
+ * Arabic, Korean, or Mandarin still gets transcribed -- Deepgram still
+ * auto-detects a single language per utterance outside that list -- but
+ * not through the same real-time code-switching path this was tuned
+ * and measured for. Ten languages is the ceiling Vapi exposes today for
+ * "detect it automatically, per call, with nothing chosen in advance,"
+ * not a promise that covers every language a caller might speak.
+ *
+ * VOICE: ElevenLabs (`11labs`), model eleven_flash_v2_5, voice "sarah"
+ * (one of Vapi's own curated `ElevenLabsVoiceIdEnum` presets, so it's a
+ * real voice in every account, not an id that has to exist in someone's
+ * personal Voice Library). eleven_flash_v2_5 over eleven_multilingual_v2:
+ * per ElevenLabs' own model docs (elevenlabs.io/docs/models),
+ * eleven_flash_v2_5 covers 32 languages -- all of
+ * eleven_multilingual_v2's 29 plus Hungarian, Norwegian and Vietnamese --
+ * at roughly 75ms generation latency, against eleven_multilingual_v2's
+ * markedly slower, "most lifelike" tuning. A restaurant phone call is a
+ * real-time back-and-forth (see `START_SPEAKING_PLAN` /
+ * `STOP_SPEAKING_PLAN` below, tuned for exactly this reason), and
+ * ElevenLabs' own guidance is to prefer Flash for that over Multilingual
+ * v2 or Turbo. No `language` is set on the voice: Vapi's own field
+ * comment says only Turbo v2.5 honours it, and it would have to be
+ * fixed before the call anyway -- the entire point of the transcriber
+ * above is that nothing here picks the language in advance. Flash
+ * infers pronunciation from the text itself, which the model already
+ * wrote in whatever language it decided to answer in.
+ *
+ * The real ceiling, stated plainly rather than oversold: a Vapi
+ * assistant has exactly one `voice`. "Sarah" is one recorded voice
+ * identity, and while eleven_flash_v2_5 can make that identity speak
+ * correct, fluent French, Hindi, or Portuguese, it does not swap in a
+ * different native French, Hindi, or Portuguese voice actor to do it --
+ * so vocabulary and grammar land natively (a native ear should not
+ * catch a wrong word or a translated-sounding sentence) while the
+ * accent itself carries some trace of the voice's own training accent
+ * in languages further from it. Going further than that -- a
+ * genuinely native accent in every language, not just correct words --
+ * needs either a per-language voice selected from the transcribed
+ * language (a Vapi squad routing to a different assistant/voice per
+ * detected language, or a runtime voice override keyed off the
+ * transcript) or a differently-trained voice model entirely. Neither is
+ * this change: this is the best a single assistant, single voice, one
+ * phone number can do today, and it should not be described as more
+ * than that.
  */
+const TRANSCRIBER = { provider: "deepgram", model: "nova-3", language: "multi" };
+
+const VOICE = { provider: "11labs", voiceId: "sarah", model: "eleven_flash_v2_5" };
 
 /** How long the assistant waits before it starts speaking, and how it
  *  decides the caller is actually done talking rather than mid-thought. */
@@ -443,10 +499,15 @@ export function buildAssistantPayload({
     firstMessageMode: "assistant-speaks-first",
     // Top-level on the assistant, not under `model` -- these are Vapi's
     // own pacing knobs (see the constants' own comments for what each
-    // number does and why). `voice` and `transcriber` are deliberately
-    // absent; see the comment on START_SPEAKING_PLAN above.
+    // number does and why).
     startSpeakingPlan: START_SPEAKING_PLAN,
     stopSpeakingPlan: STOP_SPEAKING_PLAN,
+    // Also top-level, not under `model`: Vapi's transcriber (speech-to-text)
+    // and voice (text-to-speech) are assistant-level, same as the pacing
+    // plans above. See the comment on TRANSCRIBER/VOICE above for why
+    // these two, specifically, and what they can and can't do.
+    transcriber: TRANSCRIBER,
+    voice: VOICE,
     model: {
       provider: modelProvider,
       model: modelName,

@@ -94,9 +94,32 @@ describe("buildAssistantPayload", () => {
     );
   });
 
-  it("does not set a voice or transcriber -- that's separate, later work for multiple languages", () => {
-    expect(payload).not.toHaveProperty("voice");
-    expect(payload).not.toHaveProperty("transcriber");
+  // Multilingual, per-call, with nothing chosen in advance: nova-3's
+  // "multi" mode is Deepgram's broadest real-time code-switching option
+  // (verified against Vapi's own DeepgramTranscriberModel/Language SDK
+  // enums, not assumed), so a caller is heard correctly without anyone
+  // picking a language up front.
+  it("sets a multilingual, auto-detecting transcriber", () => {
+    expect(payload.transcriber).toEqual({
+      provider: "deepgram",
+      model: "nova-3",
+      language: "multi",
+    });
+  });
+
+  // eleven_flash_v2_5 over eleven_multilingual_v2: verified against Vapi's
+  // own ElevenLabsVoiceModel SDK enum, it's the widest-language
+  // (32-language) ElevenLabs model at real-time latency, which is what a
+  // live phone call needs. One assistant still has exactly one voice,
+  // so this buys correct vocabulary and grammar in every language it
+  // covers, not a native accent in each -- see the comment on VOICE in
+  // provision.ts for the honest ceiling.
+  it("sets a multilingual voice", () => {
+    expect(payload.voice).toEqual({
+      provider: "11labs",
+      voiceId: "sarah",
+      model: "eleven_flash_v2_5",
+    });
   });
 
   it("honours an explicit model override", () => {
