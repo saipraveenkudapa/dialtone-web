@@ -74,6 +74,31 @@ describe("buildAssistantPayload", () => {
     expect(payload.model.temperature).toBe(0.3);
   });
 
+  it("sets pacing so the assistant doesn't talk over callers or leave gaps", () => {
+    expect(payload.startSpeakingPlan.waitSeconds).toBe(0.6);
+    expect(payload.startSpeakingPlan.transcriptionEndpointingPlan).toEqual({
+      onPunctuationSeconds: 0.1,
+      onNoPunctuationSeconds: 1.8,
+      onNumberSeconds: 1.0,
+    });
+  });
+
+  it("sets pacing so a real interruption cuts in fast but noise and backchannel don't", () => {
+    expect(payload.stopSpeakingPlan.numWords).toBe(1);
+    expect(payload.stopSpeakingPlan.backoffSeconds).toBe(1);
+    expect(payload.stopSpeakingPlan.acknowledgementPhrases).toEqual(
+      expect.arrayContaining(["okay", "yeah", "mm-hmm", "got it"]),
+    );
+    expect(payload.stopSpeakingPlan.interruptionPhrases).toEqual(
+      expect.arrayContaining(["stop", "wait"]),
+    );
+  });
+
+  it("does not set a voice or transcriber -- that's separate, later work for multiple languages", () => {
+    expect(payload).not.toHaveProperty("voice");
+    expect(payload).not.toHaveProperty("transcriber");
+  });
+
   it("honours an explicit model override", () => {
     const p = buildAssistantPayload({
       locationId: "loc-1",

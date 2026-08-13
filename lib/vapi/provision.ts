@@ -307,6 +307,105 @@ function nativeTransferTool(fallbackNumber: string) {
   };
 }
 
+/* Pacing: how long the assistant waits before it starts talking, and how
+ * it behaves when the caller talks over it. Every field below is named
+ * and typed straight from Vapi's own StartSpeakingPlan / StopSpeakingPlan
+ * DTOs (github.com/VapiAI/server-sdk-typescript) -- checked against that
+ * source directly, not guessed, since a wrong field name here either
+ * gets silently dropped or 400s the PATCH in
+ * scripts/provision-vapi.mjs's real run against the live assistant.
+ *
+ * Deliberately excluded: `voice` and `transcriber`. Both are untouched
+ * Vapi defaults on purpose -- multi-language support is a separate,
+ * later piece of work that has to choose them (a transcriber and a
+ * smart-endpointing provider are both language-specific choices; see
+ * `transcriptionEndpointingPlan` below for why that's exactly what it
+ * avoids), and this change should not quietly make that choice for it.
+ */
+
+/** How long the assistant waits before it starts speaking, and how it
+ *  decides the caller is actually done talking rather than mid-thought. */
+const START_SPEAKING_PLAN = {
+  // Vapi's own default is 0.4s, tuned for short back-and-forth app
+  // turns. A phone order runs longer utterances -- multi-item lists,
+  // spelled names, addresses -- with more mid-sentence hesitation than
+  // that default assumes, and getting cut off while re-ordering a
+  // sentence is a worse experience than a few hundred extra ms of
+  // silence. 0.6s buys headroom for that without reading as a hung line.
+  waitSeconds: 0.6,
+  // Text-based (transcript) endpointing, not `smartEndpointingPlan`.
+  // Smart endpointing requires picking a provider (LiveKit, Vapi,
+  // Krisp, ...), and Vapi's own docs say LiveKit is for English only --
+  // exactly the kind of language-coupled choice the future
+  // multi-language work should make, not this change. Transcript-based
+  // punctuation timing has no such coupling.
+  transcriptionEndpointingPlan: {
+    // Default (0.1s). A transcript that already ends with terminal
+    // punctuation is a strong, reliable "they're done" signal -- there's
+    // nothing here worth slowing down for.
+    onPunctuationSeconds: 0.1,
+    // Default is 1.5s. Bumped to 1.8s: a caller listing an order
+    // ("a large pepperoni... a coke... and, uh...") very often trails
+    // off without the transcriber ever emitting terminal punctuation,
+    // and that's precisely the shape of pause this field exists to
+    // survive. The extra 300ms is the difference between catching
+    // "...and also a salad" and talking over it.
+    onNoPunctuationSeconds: 1.8,
+    // Default is 0.5s. Doubled to 1.0s. Vapi's own docs give the reason
+    // this field exists at all: transcribers often punctuate mid-number
+    // when a caller reads a long number in chunks. This assistant reads
+    // phone numbers back digit by digit and constantly asks for phone
+    // numbers, addresses, and party sizes -- a transcript ending on a
+    // digit here is disproportionately likely to be mid-number, not the
+    // end of the turn, so this is the single highest-value number to
+    // move off the platform default.
+    onNumberSeconds: 1.0,
+  },
+};
+
+/** How the assistant behaves when the caller talks over it, and how it
+ *  recovers afterward. */
+const STOP_SPEAKING_PLAN = {
+  // Vapi's default (0) stops the assistant on raw voice-activity
+  // detection alone -- fastest to react, but on a phone line (kitchen
+  // noise, a bad connection) that also means stopping mid-sentence for
+  // a cough or a stray sound that was never a word. Requiring 1
+  // transcribed word switches to transcript-based interruption
+  // (slower, ~200-500ms vs ~50-100ms, per Vapi's own numbers) in
+  // exchange for only stopping on something the caller actually said --
+  // worth it here, since being talked over by noise is a worse failure
+  // than a few hundred extra ms of latency on a real interruption.
+  numWords: 1,
+  // Short backchannel words ("okay", "yeah", "mm-hmm", "got it") are
+  // exactly what a caller says while the assistant reads back a long
+  // order or a booking -- without this list, each one would meet the
+  // 1-word threshold above and cut the read-back off mid-sentence.
+  acknowledgementPhrases: [
+    "okay",
+    "ok",
+    "yeah",
+    "yep",
+    "right",
+    "mm-hmm",
+    "uh-huh",
+    "got it",
+    "sure",
+  ],
+  // The flip side of acknowledgementPhrases: words that mean the caller
+  // wants in *right now* -- correcting an order mid-read-back, or
+  // stopping the assistant before it finishes a sentence -- bypass the
+  // numWords threshold entirely rather than waiting for a second word.
+  interruptionPhrases: ["stop", "wait", "hold on", "no", "actually"],
+  // Vapi's default (1s) is already the middle of its own documented
+  // range (0.5s quick / 1s natural / 2s formal) and there's no reason
+  // specific to a restaurant counter to move off it: long enough that
+  // the assistant doesn't immediately talk back over a caller who is
+  // still correcting themselves, short enough that a false-alarm
+  // interruption (filtered noise, a word not in either list above)
+  // doesn't leave a dead few seconds of silence on the line.
+  backoffSeconds: 1,
+};
+
 export type BuildAssistantPayloadArgs = {
   locationId: string;
   /** No trailing slash. Every tool's `server.url` is built from this. */
@@ -342,6 +441,12 @@ export function buildAssistantPayload({
     // greeting is spoken exactly as fetched, never regenerated by the
     // model.
     firstMessageMode: "assistant-speaks-first",
+    // Top-level on the assistant, not under `model` -- these are Vapi's
+    // own pacing knobs (see the constants' own comments for what each
+    // number does and why). `voice` and `transcriber` are deliberately
+    // absent; see the comment on START_SPEAKING_PLAN above.
+    startSpeakingPlan: START_SPEAKING_PLAN,
+    stopSpeakingPlan: STOP_SPEAKING_PLAN,
     model: {
       provider: modelProvider,
       model: modelName,
