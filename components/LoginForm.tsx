@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Corners } from "./Corners";
@@ -118,6 +119,10 @@ export function LoginForm({
       )}
 
       {state.error ? <p className="auth-error">{state.error}</p> : null}
+
+      <p className="text-muted auth-note">
+        New to Dialtone? <Link href="/signup">Create an account</Link>
+      </p>
     </div>
   );
 }
