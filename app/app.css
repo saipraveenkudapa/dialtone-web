@@ -796,3 +796,35 @@ a:hover { color: var(--color-accent); }
   margin-bottom: var(--space-2);
 }
 .missing-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; margin: 0; padding-left: 18px; }
+
+/* ── menu uploads (/dashboard/menu, /admin/new) ───────────────────── */
+
+.menu-upload .upload-picker { max-width: 460px; }
+.menu-upload .upload-picker .input { padding: var(--space-2); }
+
+.upload-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-divider);
+}
+.upload-name { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.upload-name .name { word-break: break-word; }
+.upload-meta { font-size: 12px; }
+.upload-why { font-size: 12px; }
+.upload-link { font-size: 12px; color: var(--color-accent-800); word-break: break-word; }
+.upload-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+
+@media (max-width: 700px) {
+  .upload-row { flex-wrap: wrap; }
+  .upload-actions { width: 100%; }
+}

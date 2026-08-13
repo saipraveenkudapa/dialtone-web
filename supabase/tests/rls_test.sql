@@ -50,6 +50,21 @@ insert into menu_items (category_id, name, price_cents, location_id) values
 insert into calls (id, location_id, twilio_call_sid) values
   ('cc100000-0000-0000-0000-0000000000cc', 'a10c0000-0000-0000-0000-00000000000a', 'CA_test_a');
 
+-- One uploaded menu each, in the PRIVATE menu-uploads bucket. Objects are
+-- keyed <location_id>/<uuid>, so the first path segment is the whole
+-- tenant boundary -- the same shape call-recordings uses.
+insert into menu_imports (id, location_id, source_type, source_path, original_filename, byte_size) values
+  ('d1100000-0000-0000-0000-0000000000d1', 'a10c0000-0000-0000-0000-00000000000a', 'image',
+   'a10c0000-0000-0000-0000-00000000000a/f0000000-0000-4000-8000-00000000000f.jpg', 'front.jpg', 2048),
+  ('d2200000-0000-0000-0000-0000000000d2', 'b10c0000-0000-0000-0000-00000000000b', 'pdf',
+   'b10c0000-0000-0000-0000-00000000000b/e0000000-0000-4000-8000-00000000000e.pdf', 'rival.pdf', 4096);
+
+insert into storage.objects (bucket_id, name, metadata) values
+  ('menu-uploads', 'a10c0000-0000-0000-0000-00000000000a/f0000000-0000-4000-8000-00000000000f.jpg',
+   jsonb_build_object('size', 2048, 'mimetype', 'image/jpeg')),
+  ('menu-uploads', 'b10c0000-0000-0000-0000-00000000000b/e0000000-0000-4000-8000-00000000000e.pdf',
+   jsonb_build_object('size', 4096, 'mimetype', 'application/pdf'));
+
 insert into results
 select 'trigger forces menu item to its category location',
        (select location_id::text from menu_items where name = 'Cacio e Pepe'),
@@ -83,6 +98,95 @@ exception when insufficient_privilege then
   insert into results values ('owner A: flag own item sold out', 'denied', 'allowed');
 end $$;
 
+-- ── owner A's menu uploads ───────────────────────────────────────────
+--
+-- A menu import is a photo nobody has confirmed yet. It must be as
+-- private as a call recording, and the file behind it more so: the bucket
+-- has no public URL at all.
+
+insert into results values ('owner A: own menu import visible', (select count(*)::text from public.menu_imports), '1');
+insert into results values ('owner A: rival menu import hidden', (select count(*)::text from public.menu_imports where original_filename = 'rival.pdf'), '0');
+insert into results values ('owner A: own menu file visible', (select count(*)::text from storage.objects where bucket_id = 'menu-uploads'), '1');
+
+do $$
+begin
+  insert into public.menu_imports (location_id, source_type, source_path)
+  values ('b10c0000-0000-0000-0000-00000000000b', 'image',
+          'b10c0000-0000-0000-0000-00000000000b/c0000000-0000-4000-8000-00000000000c.jpg');
+  insert into results values ('owner A: import against rival location', 'allowed', 'denied');
+exception when insufficient_privilege then
+  insert into results values ('owner A: import against rival location', 'denied', 'denied');
+end $$;
+
+do $$
+begin
+  insert into public.menu_imports (location_id, source_type, source_path)
+  values ('a10c0000-0000-0000-0000-00000000000a', 'image',
+          'a10c0000-0000-0000-0000-00000000000a/c0000000-0000-4000-8000-00000000000c.jpg');
+  insert into results values ('owner A: import against own location', 'allowed', 'allowed');
+exception when insufficient_privilege then
+  insert into results values ('owner A: import against own location', 'denied', 'allowed');
+end $$;
+
+-- The two facts the owner's rule rests on, at the only level that cannot
+-- be talked out of them.
+do $$
+begin
+  insert into public.menu_imports (location_id, source_type, source_path, status, confirmed_at)
+  values ('a10c0000-0000-0000-0000-00000000000a', 'image',
+          'a10c0000-0000-0000-0000-00000000000a/d0000000-0000-4000-8000-00000000000d.jpg', 'confirmed', null);
+  insert into results values ('confirmed with no confirmed_at', 'allowed', 'denied');
+exception when check_violation then
+  insert into results values ('confirmed with no confirmed_at', 'denied', 'denied');
+end $$;
+
+do $$
+begin
+  insert into public.menu_imports (location_id, source_type, source_path)
+  values ('a10c0000-0000-0000-0000-00000000000a', 'image', null);
+  insert into results values ('file import with no stored path', 'allowed', 'denied');
+exception when check_violation then
+  insert into results values ('file import with no stored path', 'denied', 'denied');
+end $$;
+
+do $$
+begin
+  insert into storage.objects (bucket_id, name)
+  values ('menu-uploads', 'a10c0000-0000-0000-0000-00000000000a/a0000000-0000-4000-8000-00000000000a.jpg');
+  insert into results values ('owner A: upload into own folder', 'allowed', 'allowed');
+exception when insufficient_privilege then
+  insert into results values ('owner A: upload into own folder', 'denied', 'allowed');
+end $$;
+
+do $$
+begin
+  insert into storage.objects (bucket_id, name)
+  values ('menu-uploads', 'b10c0000-0000-0000-0000-00000000000b/b0000000-0000-4000-8000-00000000000b.jpg');
+  insert into results values ('owner A: upload into rival folder', 'allowed', 'denied');
+exception when insufficient_privilege then
+  insert into results values ('owner A: upload into rival folder', 'denied', 'denied');
+end $$;
+
+-- Removing a wrong photo before anything is extracted from it is the
+-- owner's own job. It is not tested here: storage.protect_delete() blocks
+-- deletes issued as SQL, so the only way to remove an object is the
+-- Storage API, which evaluates the delete policy above. What this file
+-- can assert is that the policy is there to be evaluated.
+insert into results values (
+  'menu-uploads has a delete policy',
+  (select count(*)::text from pg_policies
+   where schemaname = 'storage' and tablename = 'objects'
+     and cmd = 'DELETE' and qual like '%menu-uploads%'),
+  '1');
+
+-- And that the bucket itself is private, with the two limits the app
+-- reads back out of lib/menu-imports/file.ts.
+insert into results values (
+  'menu-uploads is private, 10 MiB, four types',
+  (select public::text || ' ' || file_size_limit::text || ' ' || array_length(allowed_mime_types, 1)::text
+   from storage.buckets where id = 'menu-uploads'),
+  'false 10485760 4');
+
 -- ── owner B ──────────────────────────────────────────────────────────
 
 set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}';
@@ -90,6 +194,8 @@ set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","r
 insert into results values ('owner B: A calls hidden', (select count(*)::text from public.calls), '0');
 insert into results values ('owner B: own location visible', (select count(*)::text from public.locations), '1');
 insert into results values ('owner B: A menu hidden', (select count(*)::text from public.menu_items where name = 'Cacio e Pepe'), '0');
+insert into results values ('owner B: A menu imports hidden', (select count(*)::text from public.menu_imports where original_filename = 'front.jpg'), '0');
+insert into results values ('owner B: A menu files hidden', (select count(*)::text from storage.objects where name like 'a10c%'), '0');
 
 -- ── anonymous ────────────────────────────────────────────────────────
 
@@ -99,6 +205,8 @@ set local request.jwt.claims = '{"role":"anon"}';
 insert into results values ('anon: locations', (select count(*)::text from public.locations), '0');
 insert into results values ('anon: menu', (select count(*)::text from public.menu_items), '0');
 insert into results values ('anon: calls', (select count(*)::text from public.calls), '0');
+insert into results values ('anon: menu imports', (select count(*)::text from public.menu_imports), '0');
+insert into results values ('anon: menu files', (select count(*)::text from storage.objects where bucket_id = 'menu-uploads'), '0');
 
 -- ── the voice agent, minted for location A ───────────────────────────
 

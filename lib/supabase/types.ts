@@ -84,6 +84,37 @@ export type MenuItemRow = {
   updated_at: string;
 };
 
+export type MenuImportSourceType = "pdf" | "image" | "url";
+
+export type MenuImportStatus =
+  | "pending"
+  | "needs_review"
+  | "confirmed"
+  | "discarded";
+
+/** One uploaded file waiting to become a menu. Never the menu itself:
+ *  nothing a model extracts into raw_extraction reaches menu_items until
+ *  a human confirms it, which is what status and confirmed_at are for. */
+export type MenuImportRow = {
+  id: string;
+  location_id: string;
+  /** The files uploaded together as one menu -- three photos of the same
+   *  card share this. */
+  batch_id: string;
+  source_type: MenuImportSourceType;
+  /** Path inside the PRIVATE menu-uploads bucket, `<location_id>/<uuid>`.
+   *  Never a public URL. */
+  source_path: string | null;
+  original_filename: string | null;
+  byte_size: number | null;
+  raw_extraction: Record<string, unknown>;
+  status: MenuImportStatus;
+  uploaded_by: string | null;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+};
+
 export type CallRow = {
   id: string;
   location_id: string;

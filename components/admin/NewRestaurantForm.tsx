@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 import Link from "next/link";
 import { Corners } from "@/components/Corners";
+import { MenuUpload } from "@/components/MenuUpload";
+import { uploadMenuFile } from "@/lib/menu-imports/upload";
 import { createRestaurantAction } from "@/app/admin/new/actions";
 import { WEEKDAYS } from "@/lib/provisioning/constants";
 import { formatBasisPointsAsPercent, parseDollarsToCents, parsePercentToBasisPoints } from "@/lib/money";
@@ -58,9 +60,17 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
   const [categories, setCategories] = useState<LocalCategory[]>([]);
   const [nextKey, setNextKey] = useState(1);
 
+  const [stagedMenuFiles, setStagedMenuFiles] = useState<File[]>([]);
+  const [menuFileNotes, setMenuFileNotes] = useState<string[]>([]);
+
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedRestaurant | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // Stable identity on purpose: MenuUpload calls this on every change to
+  // the staged files, and a new function each render would make that a
+  // loop.
+  const takeStagedFiles = useCallback((files: File[]) => setStagedMenuFiles(files), []);
 
   function claimKey() {
     const key = nextKey;
@@ -153,14 +163,20 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
         setError(result.error);
         return;
       }
-      if (result.restaurant) setCreated(result.restaurant);
+      if (!result.restaurant) return;
+
+      // Only now is there a location id, and the first segment of every
+      // menu-upload path is one. The files have been sitting in this tab
+      // waiting for it.
+      setMenuFileNotes(await storeStagedMenuFiles(result.restaurant.locationId, stagedMenuFiles));
+      setCreated(result.restaurant);
     });
   }
 
   // Once the restaurant exists, the form is gone. The credentials below
   // are the only copy of that password anywhere, and re-rendering the
   // form underneath them would invite a second Start.
-  if (created) return <HandoverPanel restaurant={created} />;
+  if (created) return <HandoverPanel restaurant={created} menuFileNotes={menuFileNotes} />;
 
   const previewBps = parsePercentToBasisPoints(taxPercent.trim());
   const itemCount = categories.reduce((sum, c) => sum + c.items.length, 0);
@@ -547,6 +563,17 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
         </div>
       </section>
 
+      {/* The same component the owner uses on /dashboard/menu. There is
+          no restaurant yet, so it holds the files rather than sending
+          them: Start creates the location, and these go up against its
+          id straight after. */}
+      <MenuUpload
+        locationId={null}
+        timezone={timezone}
+        onStagedFilesChange={takeStagedFiles}
+        disabled={pending}
+      />
+
       <section className="card blueprint setup-card">
         <Corners />
         <h2>Start</h2>
@@ -572,11 +599,46 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
   );
 }
 
+/** The menu files the operator picked before the restaurant existed.
+ *
+ *  Deliberately after creation and deliberately not fatal. The location
+ *  is real, the login below is real, and a file that did not make it is
+ *  a line on the handover screen rather than a rolled-back restaurant --
+ *  the owner can upload it again from their own dashboard. Uploaded one
+ *  at a time so a single bad file is named, not the whole batch. */
+async function storeStagedMenuFiles(locationId: string, files: File[]): Promise<string[]> {
+  if (files.length === 0) return [];
+
+  const batchId = crypto.randomUUID();
+  const notes: string[] = [];
+  let stored = 0;
+
+  for (const file of files) {
+    const result = await uploadMenuFile({ locationId, batchId, file });
+    if ("menuImport" in result) stored += 1;
+    else notes.push(`${file.name} did not upload: ${result.error}`);
+  }
+
+  if (stored > 0) {
+    notes.unshift(
+      `${stored} menu file${stored === 1 ? "" : "s"} stored, waiting to be read. Nothing in ` +
+        "them is on the menu yet -- somebody has to confirm every price first.",
+    );
+  }
+  return notes;
+}
+
 /** The one screen that shows the owner's password. It is rendered from
  *  the value the server action returned to this component, in this
  *  browser tab, once. Reloading loses it: nothing on the server can
  *  produce it again, because nothing on the server kept it. */
-function HandoverPanel({ restaurant }: { restaurant: CreatedRestaurant }) {
+function HandoverPanel({
+  restaurant,
+  menuFileNotes,
+}: {
+  restaurant: CreatedRestaurant;
+  menuFileNotes: string[];
+}) {
   const [copied, setCopied] = useState<string | null>(null);
 
   async function copy(what: string, text: string) {
@@ -662,6 +724,16 @@ function HandoverPanel({ restaurant }: { restaurant: CreatedRestaurant }) {
             <li key={line}>{line}</li>
           ))}
         </ul>
+        {menuFileNotes.length > 0 ? (
+          <div className="field">
+            <span className="field-label">Menu files</span>
+            <ul className="missing-list">
+              {menuFileNotes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="field">
           <span className="field-label">Vapi assistant</span>
           <p className="setup-note">{restaurant.assistantId}</p>

@@ -24,6 +24,19 @@ export function timeIn(timezone: string, iso: string) {
   }).format(new Date(iso));
 }
 
+/** A date and time in the location's timezone. The database stores UTC;
+ *  nobody at the restaurant thinks in it. Absolute rather than relative
+ *  so a server render and a client render of the same row agree. */
+export function dateTimeIn(timezone: string, iso: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: timezone,
+  }).format(new Date(iso));
+}
+
 export function dateIn(timezone: string, date = new Date()) {
   return new Intl.DateTimeFormat("en-US", {
     weekday: "long",

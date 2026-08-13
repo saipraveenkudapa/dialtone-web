@@ -4,6 +4,7 @@ import type {
   CallRow,
   LocationRow,
   MenuCategoryRow,
+  MenuImportRow,
   MenuItemRow,
   MessageRow,
   OrderItemRow,
@@ -59,6 +60,24 @@ export async function getMenu(locationId: string): Promise<MenuCategoryWithItems
     ...c,
     items: byCategory.get(c.id) ?? [],
   }));
+}
+
+/** Menu files uploaded and not yet turned into a menu.
+ *
+ *  RLS limits this to the caller's own restaurant, as it does everywhere
+ *  else in this file. Newest first: the thing somebody is looking for is
+ *  the thing they just uploaded. */
+export async function getMenuImports(locationId: string): Promise<MenuImportRow[]> {
+  const supabase = await supabaseServer();
+  const { data, error } = await supabase
+    .from("menu_imports")
+    .select("*")
+    .eq("location_id", locationId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  if (error) throw error;
+  return (data ?? []) as MenuImportRow[];
 }
 
 export async function getRecentCalls(locationId: string, limit = 25) {
