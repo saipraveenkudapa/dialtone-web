@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { currentPlatformAdmin } from "@/lib/admin/auth";
+import { MUST_CHANGE_PASSWORD_CLAIM } from "@/lib/auth/must-change-password";
 import { generateOwnerPassword } from "@/lib/provisioning/password";
 import { validateRestaurantDraft, type RestaurantDraft } from "@/lib/provisioning/draft";
 import {
@@ -62,6 +63,13 @@ import type { LocationRow } from "@/lib/supabase/types";
  * own bcrypt hash, exactly as it does for a password a user chose
  * themselves. If the operator loses it before handing it over, the fix
  * is a password reset, not a lookup: there is nowhere to look.
+ *
+ * It is also, unavoidably, a password the operator has read. That is
+ * fine for a handover and not fine as a permanent state of affairs, so
+ * the account is created carrying `must_change_password` in its
+ * app_metadata and can reach nothing but /set-password until it is gone.
+ * See lib/auth/must-change-password.ts for why the flag lives there and
+ * not in user_metadata, which its own subject could clear.
  *
  * ATOMICITY
  * ---------
@@ -186,11 +194,21 @@ export async function createRestaurant(
     // wait on -- the operator hands these credentials over in person or
     // over the phone, and an owner who cannot sign in until they find a
     // confirmation link is an owner who calls the operator instead.
+    //
+    // app_metadata carries the flag that makes this password temporary.
+    // It goes in on the create call rather than in a follow-up update so
+    // that there is no window, however short, in which an account exists
+    // with a password the operator knows and no gate in front of it. This
+    // is also the ONLY place the flag is ever set: an account that did
+    // not come from this function -- the operator's own platform-admin
+    // login, notably -- never gets it, and createUser refuses an email
+    // that already exists, so this cannot reach back and flag one.
     const password = generateOwnerPassword();
     const created = await supabase.auth.admin.createUser({
       email: value.ownerEmail,
       password,
       email_confirm: true,
+      app_metadata: { [MUST_CHANGE_PASSWORD_CLAIM]: true },
     });
 
     if (created.error || !created.data.user) {

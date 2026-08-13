@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { supabaseServer } from "@/lib/supabase/server";
+import { SET_PASSWORD_PATH, mustChangePassword } from "@/lib/auth/must-change-password";
 
 export type AuthState = { error?: string; sent?: boolean };
 
@@ -23,13 +24,19 @@ export async function signInWithPassword(
   if (!email || !password) return { error: "Enter your email and password." };
 
   const supabase = await supabaseServer();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
   // Deliberately vague: a precise message tells an attacker which emails
   // have accounts.
   if (error) return { error: "That email and password did not match." };
 
   revalidatePath("/", "layout");
+
+  // The middleware would bounce them there anyway on the next request.
+  // Going straight saves a redirect the owner would otherwise watch
+  // flicker past on the one screen they are most likely to distrust.
+  if (mustChangePassword(data.user)) redirect(SET_PASSWORD_PATH);
+
   redirect(safeNext(formData.get("next")));
 }
 

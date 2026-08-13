@@ -485,6 +485,20 @@ a:hover { color: var(--color-accent); }
   font-size: 13px;
   color: var(--color-accent-900);
 }
+/* Why /set-password is asking. Same frame as the operator's one-time
+   credential warning, because it is the other end of the same handover. */
+.auth-why {
+  border: 1px solid var(--color-accent-900);
+  background: color-mix(in srgb, var(--color-accent-900) 8%, transparent);
+  padding: var(--space-3);
+  font-size: 13px;
+}
+.auth-why strong {
+  font-family: var(--font-heading);
+  letter-spacing: 0.02em;
+  display: block;
+  margin-bottom: 2px;
+}
 .sidebar-signout { width: 100%; font-size: 13px; }
 
 /* ── operator console ──────────────────────────────────────────────── */

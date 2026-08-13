@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { supabaseServer } from "@/lib/supabase/server";
+import { passwordIsStillTemporary } from "@/lib/auth/password-gate";
 
 /** Mark a message dealt with, or put it back on the pile.
  *
@@ -16,6 +17,11 @@ import { supabaseServer } from "@/lib/supabase/server";
  *  combination (`messages_handled_consistent`): one fact, recorded once,
  *  so "still waiting" can never disagree with "waiting since". */
 export async function setMessageHandled(formData: FormData) {
+  // Same reason as saveCallNotes: middleware gates the page, not the
+  // endpoint. An account still carrying the password its operator read
+  // off a screen writes nothing anywhere until it has its own.
+  if (await passwordIsStillTemporary()) return;
+
   const id = String(formData.get("id") ?? "");
   const handled = formData.get("handled") === "true";
   if (!/^[0-9a-f-]{36}$/i.test(id)) return;
