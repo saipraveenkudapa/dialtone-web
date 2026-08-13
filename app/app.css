@@ -636,69 +636,28 @@ a:hover { color: var(--color-accent); }
   font-size: 13px;
 }
 
-/* ── onboarding ────────────────────────────────────────────────────── */
+/* ── operator: create a new restaurant ─────────────────────────────── */
 
-.onboard-page {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 48px 20px 90px;
+/* These were the /onboarding wizard's classes. That wizard is gone --
+   restaurants are created by the operator now (app/admin/new) -- but the
+   form furniture it grew is exactly what the operator form needs, so it
+   was renamed rather than rewritten. components/MenuEditor.tsx uses
+   .setup-row and .setup-error too. */
+
+.setup-stack {
+  max-width: 760px;
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
 }
-.onboard-head { text-align: center; }
-.onboard-head .sidebar-brand { font-size: 26px; }
-.onboard-head p { font-size: 14px; margin: var(--space-1) 0 0; }
 
-.onboard-steps {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  justify-content: center;
-}
-.onboard-step {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px 4px 4px;
-  font: inherit;
-  font-size: 12px;
-  color: inherit;
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-md);
-}
-.onboard-step .num {
-  width: 20px;
-  height: 20px;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  border: 1px solid var(--color-divider);
-  font-family: var(--font-heading);
-  font-size: 11px;
-}
-.onboard-step.is-done .num {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: var(--color-bg);
-}
-.onboard-step.is-current .num { border-color: var(--color-accent); color: var(--color-accent-700); }
-.onboard-step.is-current .label { font-family: var(--font-heading); color: var(--color-accent-800); }
-.onboard-step:not(.is-current) .label { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
-.onboard-step.is-clickable { cursor: pointer; }
-.onboard-step.is-clickable:hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
-.onboard-step:disabled { cursor: not-allowed; opacity: 0.6; }
-
-.onboard-card { padding: var(--space-6); gap: var(--space-3); background: var(--color-bg); }
-.onboard-card h2 { margin: 0; }
-.onboard-card .sub { font-size: 13px; margin: 0 0 var(--space-2); }
-.onboard-form { display: flex; flex-direction: column; gap: var(--space-3); }
-.onboard-row { display: flex; gap: var(--space-3); align-items: flex-end; }
-.onboard-row > .field { flex: 1; min-width: 0; }
-.onboard-actions {
+.setup-card { padding: var(--space-6); gap: var(--space-3); background: var(--color-bg); }
+.setup-card h2 { margin: 0; }
+.setup-card .sub { font-size: 13px; margin: 0 0 var(--space-2); }
+.setup-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.setup-row { display: flex; gap: var(--space-3); align-items: flex-end; }
+.setup-row > .field { flex: 1; min-width: 0; }
+.setup-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -707,8 +666,18 @@ a:hover { color: var(--color-accent); }
   padding-top: var(--space-3);
   border-top: 1px solid var(--color-divider);
 }
-.onboard-error { font-size: 13px; margin: 0; color: var(--color-accent-900); }
-.onboard-note { font-size: 12px; margin: 4px 0 0; }
+.setup-error { font-size: 13px; margin: 0; color: var(--color-accent-900); }
+.setup-note { font-size: 12px; margin: 4px 0 0; }
+
+/* A caption for a group of controls that has no single control to point
+   at (a radio set, a read-only value). Matches .field > label exactly,
+   without claiming to be a label for something it does not label. */
+.field > .field-label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 5px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
 
 .hours-grid { display: flex; flex-direction: column; }
 .hours-row {
@@ -730,8 +699,8 @@ a:hover { color: var(--color-accent); }
 .money-grid .field.span-2 { grid-column: 1 / -1; }
 
 .menu-category { padding: var(--space-3); gap: var(--space-2); }
-.menu-category-head { display: flex; align-items: center; gap: var(--space-2); }
-.menu-category-head h4 { margin: 0; flex: 1; }
+.menu-category-head { display: flex; align-items: flex-end; gap: var(--space-2); }
+.menu-category-head .field { flex: 1; }
 .menu-item-row {
   display: flex;
   align-items: center;
@@ -745,6 +714,22 @@ a:hover { color: var(--color-accent); }
 .add-item-form { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: flex-end; margin-top: var(--space-2); }
 .add-item-form .field { flex: 1; min-width: 130px; }
 .price-preview { font-size: 12px; flex: none; align-self: center; min-width: 160px; }
+
+/* ── the one-time credential handover ──────────────────────────────── */
+
+.cred-warn {
+  border: 1px solid var(--color-accent-900);
+  background: color-mix(in srgb, var(--color-accent-900) 8%, transparent);
+  padding: var(--space-3);
+  font-size: 13px;
+}
+.cred-warn strong { font-family: var(--font-heading); letter-spacing: 0.02em; }
+.cred-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+@media (max-width: 700px) {
+  .money-grid { grid-template-columns: 1fr; }
+  .setup-row { flex-direction: column; align-items: stretch; }
+}
 
 /* ── menu editor (/dashboard/menu) ────────────────────────────────── */
 

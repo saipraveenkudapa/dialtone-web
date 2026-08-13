@@ -47,6 +47,11 @@ export default async function OperatorPage() {
             timezone.
           </div>
         </div>
+        <div className="actions">
+          <Link href="/admin/new" className="btn btn-primary">
+            Create a new restaurant
+          </Link>
+        </div>
       </div>
 
       <div className="stat-grid">
@@ -64,7 +69,8 @@ export default async function OperatorPage() {
         <h4>Accounts</h4>
         {rows.length === 0 ? (
           <p className="text-muted empty-note">
-            No restaurants yet. They appear here the moment one signs up.
+            No restaurants yet. Nobody signs themselves up — use{" "}
+            <Link href="/admin/new">Create a new restaurant</Link> to make the first one.
           </p>
         ) : (
           <div className="table-scroll">

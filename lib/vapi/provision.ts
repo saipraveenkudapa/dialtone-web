@@ -1,6 +1,7 @@
 /* Building and upserting a Vapi assistant for one location -- the part
- * scripts/provision-vapi.mjs and app/onboarding/actions.ts's finish step
- * both need, and used to live only in the former. One implementation:
+ * scripts/provision-vapi.mjs and lib/provisioning/assistant.ts -- the
+ * operator's "Create a new restaurant" action -- both need, and which
+ * used to live only in the former. One implementation:
  * the nine tool definitions, the assistant payload they and the system
  * prompt assemble into, and the create-or-update call against Vapi's own
  * API. Read scripts/provision-vapi.mjs's own header first -- it is still
@@ -14,9 +15,9 @@
  *     number) for a location. The CLI script fetches it over HTTP from a
  *     deployed app/api/agent/assistant, because that is the one honest
  *     way for an operator wiring a real, live, already-deployed location
- *     to get it. The onboarding server action builds the same shape
+ *     to get it. lib/provisioning/assistant.ts builds the same shape
  *     directly from lib/agent/prompt.ts against data it just saved,
- *     because at that point in signup the location is not live yet --
+ *     because at that point the location is not live yet --
  *     POST /api/agent/assistant would refuse it (assistant_enabled:
  *     false), and going over HTTP to itself would be a pointless round
  *     trip for a server action that already has a database connection.
@@ -27,9 +28,9 @@
  *     operator typing a CLI argument can fat-finger `localhost` or
  *     `http://`. scripts/provision-vapi.mjs keeps it, with the long
  *     explanation of exactly what silently breaks if it's skipped. The
- *     onboarding action derives its base URL from the request itself
- *     (the same `origin` header app/signup/actions.ts already trusts for
- *     its confirmation link), not from something a human typed, so that
+ *     operator's server action derives its base URL from the request
+ *     itself (the same `origin` header the magic-link redirect already
+ *     trusts), not from something a human typed, so that
  *     defensive check has no job to do there.
  *
  * Deliberately NOT `import "server-only"`: scripts/provision-vapi.mjs
@@ -37,8 +38,8 @@
  * scripts/provision-vapi.mjs`, entirely outside Next's bundler -- and
  * outside that "react-server" condition, the real server-only package
  * throws on import rather than the no-op Next swaps in. Every caller
- * inside the web app is itself a "use server" action
- * (app/onboarding/actions.ts), so this file never reaches a client
+ * inside the web app is reached only from a "use server" action
+ * (app/admin/new/actions.ts), so this file never reaches a client
  * bundle regardless of the missing guard. */
 
 export const VAPI_API = "https://api.vapi.ai";
@@ -591,6 +592,21 @@ export async function findAssistantForLocation(
     "Walked 50,000 assistants without finding a match or reaching the end of the list -- " +
       "something is wrong with pagination here. Check the Vapi dashboard by hand.",
   );
+}
+
+/** Delete one assistant by id.
+ *
+ *  Exists for exactly one job: undoing a half-made restaurant. The
+ *  operator's "Create a new restaurant" action creates the assistant
+ *  before its last database writes, so a failure after that point would
+ *  otherwise leave an assistant on Vapi answering for a location that no
+ *  longer exists (see lib/provisioning/create-restaurant.ts's rollback).
+ *  Nothing in the normal lifecycle of a live restaurant calls this --
+ *  updating an assistant is upsertAssistant's PATCH, never a
+ *  delete-and-recreate, which would hand the location a new assistant id
+ *  and break any phone number pointed at the old one. */
+export async function deleteAssistant(vapiKey: string, assistantId: string): Promise<void> {
+  await vapiRequest(vapiKey, "DELETE", `/assistant/${assistantId}`);
 }
 
 /** Create-or-update, idempotent on metadata.dialtone_location_id: finds

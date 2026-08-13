@@ -57,7 +57,7 @@ export function MenuEditor() {
         the old one before it commits.
       </p>
 
-      <form className="onboard-row menu-edit-add" onSubmit={handleAdd}>
+      <form className="setup-row menu-edit-add" onSubmit={handleAdd}>
         <div className="field">
           <label htmlFor="new-category">New category</label>
           <input
@@ -74,7 +74,7 @@ export function MenuEditor() {
           Add category
         </button>
       </form>
-      {error ? <p className="onboard-error">{error}</p> : null}
+      {error ? <p className="setup-error">{error}</p> : null}
 
       {categories.length === 0 ? (
         <p className="text-muted empty-note">No categories yet. Add one to start on items.</p>
@@ -206,7 +206,7 @@ function CategoryCard({
         )}
       </div>
 
-      {error ? <p className="onboard-error">{error}</p> : null}
+      {error ? <p className="setup-error">{error}</p> : null}
 
       {category.items.length === 0 ? (
         <p className="text-muted empty-note">No items yet.</p>
@@ -428,7 +428,7 @@ function ItemRow({
             Cancel
           </button>
         </div>
-        {error ? <p className="onboard-error">{error}</p> : null}
+        {error ? <p className="setup-error">{error}</p> : null}
 
         {confirmPriceCents !== null ? (
           <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby={`price-confirm-${item.id}`}>
@@ -547,7 +547,7 @@ function AddItemForm({ categoryId }: { categoryId: string }) {
       <button type="submit" className="btn btn-secondary" disabled={pending || !name.trim() || previewCents === null}>
         Add item
       </button>
-      {error ? <p className="onboard-error">{error}</p> : null}
+      {error ? <p className="setup-error">{error}</p> : null}
     </form>
   );
 }

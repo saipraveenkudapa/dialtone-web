@@ -19,6 +19,9 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
           Dialtone <span className="admin-tag">operator</span>
         </Link>
         <span className="text-muted admin-who">{admin.email}</span>
+        <Link href="/admin/new" className="btn btn-secondary">
+          New restaurant
+        </Link>
         <Link href="/dashboard" className="btn btn-ghost">
           My restaurant
         </Link>
