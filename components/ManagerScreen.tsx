@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Corners } from "./Corners";
 import { useMenu } from "./MenuStore";
 import { useAgentStatus } from "./AgentStatus";
@@ -87,6 +88,9 @@ export function ManagerScreen() {
         <div className="manager-sync">
           <SyncNote timezone={location.timezone} />
         </div>
+        <Link href="/dashboard/menu" className="btn btn-secondary">
+          Edit the menu →
+        </Link>
       </div>
 
       <div className="phone blueprint elev-lg">

@@ -746,6 +746,45 @@ a:hover { color: var(--color-accent); }
 .add-item-form .field { flex: 1; min-width: 130px; }
 .price-preview { font-size: 12px; flex: none; align-self: center; min-width: 160px; }
 
+/* ── menu editor (/dashboard/menu) ────────────────────────────────── */
+
+.menu-edit { display: flex; flex-direction: column; gap: var(--space-6); }
+.menu-edit .page-head .actions { margin-left: auto; }
+.menu-edit-add { max-width: 420px; }
+
+.menu-edit-cat { padding: var(--space-4); gap: var(--space-3); background: var(--color-bg); }
+.menu-edit-cat-head { display: flex; align-items: center; gap: var(--space-3); min-height: 36px; }
+.menu-edit-cat-head h3 { margin: 0; flex: 1; }
+.menu-edit-cat-controls { display: flex; gap: 4px; flex-wrap: wrap; }
+
+.menu-edit-row-edit {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: flex-end;
+  padding: var(--space-2) 0;
+}
+.menu-edit-row-edit .field { flex: 1; min-width: 140px; }
+.menu-edit-row-actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+.menu-edit-desc { font-size: 12px; margin-top: 2px; }
+
+/* The dangerous edit -- current and next price shown side by side before
+   either one is written. */
+.price-compare {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 20px;
+  margin: 0 0 var(--space-2);
+}
+.price-compare .was { text-decoration: line-through; opacity: 0.55; font-size: 16px; }
+.price-compare .arrow { opacity: 0.5; font-size: 15px; }
+.price-compare .now {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  color: var(--color-accent-800);
+}
+
 .secret-box {
   font-family: monospace;
   font-size: 15px;
