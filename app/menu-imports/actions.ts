@@ -131,7 +131,10 @@ export async function createMenuUploadTicket(input: {
  *  from the browser that just claimed them. An object that is not there,
  *  or that is bigger or of a different type than the bucket should have
  *  allowed, is deleted rather than recorded: a menu_imports row pointing
- *  at a file nobody can read is worse than no row. */
+ *  at a file nobody can read is worse than no row.
+ *
+ *  Idempotent in the path: called twice for one object it hands back the
+ *  row that already claims it rather than writing a second one. */
 export async function recordMenuImport(input: {
   locationId: string;
   batchId: string;
@@ -144,6 +147,30 @@ export async function recordMenuImport(input: {
   if (!isPathInLocation(input.path, input.locationId) || !isUuid(input.batchId)) {
     return { error: REFUSED };
   }
+
+  // One object, one row. This action is reached twice for the same file
+  // more often than it looks -- a retry after a slow response, a double
+  // submit, a POST to the action id by hand -- and a second row against
+  // one path is not a harmless duplicate: discarding either row deletes
+  // the object the other still points at, leaving exactly the row-with-
+  // no-file this function refuses to write, and extraction would read
+  // the same photo twice at the restaurant's expense. The unique index
+  // (supabase/migrations/20260813140000_menu_import_one_row_per_file.sql)
+  // is what makes that impossible; this lookup is what makes the second
+  // call answer with the row the first one wrote instead of an error.
+  //
+  // It runs before anything below can remove an object, because every
+  // refusal further down deletes the file it was handed -- correct for a
+  // file no row claims yet, catastrophic for one that is already spoken
+  // for.
+  const { data: claimed } = await who.db
+    .from("menu_imports")
+    .select("*")
+    .eq("location_id", input.locationId)
+    .eq("source_path", input.path)
+    .maybeSingle();
+
+  if (claimed) return { menuImport: claimed as MenuImportRow };
 
   const objectName = input.path.slice(input.locationId.length + 1);
   const { data: listed, error: listError } = await who.db.storage
@@ -197,6 +224,25 @@ export async function recordMenuImport(input: {
     .single();
 
   if (error || !data) {
+    // A concurrent call won the race between the lookup above and this
+    // insert, and the unique index turned its own duplicate into this
+    // error. Their row owns the object now, so hand it back -- and, either
+    // way, leave the file alone: it is not ours to delete any more.
+    if (error?.code === "23505") {
+      const { data: winner } = await who.db
+        .from("menu_imports")
+        .select("*")
+        .eq("location_id", input.locationId)
+        .eq("source_path", input.path)
+        .maybeSingle();
+
+      if (winner) {
+        revalidatePath("/dashboard/menu");
+        return { menuImport: winner as MenuImportRow };
+      }
+      return { error: "Could not save that upload. Try again." };
+    }
+
     console.error("[menu-imports] could not record the upload", error);
     // The row is what makes the file findable. Without one the object is
     // litter in a private bucket, so take it back out.
