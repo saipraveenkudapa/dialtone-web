@@ -121,8 +121,7 @@ export function LoginForm({
       {state.error ? <p className="auth-error">{state.error}</p> : null}
 
       <p className="text-muted auth-note">
-        New to Dialtone? <Link href="/signup">Create an account</Link>
-      </p>
+        </p>
     </div>
   );
 }

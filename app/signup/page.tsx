@@ -1,15 +1,16 @@
-import { SignupForm } from "@/components/SignupForm";
+import { notFound } from "next/navigation";
 
 export const metadata = { title: "Sign up · Dialtone" };
 
+/** Public signup is closed, deliberately.
+ *
+ *  Restaurants do not create their own accounts. The operator creates the
+ *  restaurant and hands its owner credentials, so that every account on
+ *  the platform is one somebody agreed to. Leaving a public signup route
+ *  live would let a stranger create an organization in this project and
+ *  provision a voice assistant against it.
+ *
+ *  The operator-side flow is at /admin. */
 export default function SignupPage() {
-  return (
-    <div className="auth-page">
-      <div className="auth-head">
-        <div className="sidebar-brand">Dialtone</div>
-        <p className="text-muted">Set up your restaurant.</p>
-      </div>
-      <SignupForm />
-    </div>
-  );
+  notFound();
 }
