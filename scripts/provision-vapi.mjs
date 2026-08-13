@@ -12,6 +12,14 @@
    two ever disagree, the document wins; open an issue rather than
    trusting whichever this script happens to send.
 
+   The payload this script builds and the Vapi API calls it makes both
+   live in lib/vapi/provision.ts now, shared with app/onboarding's finish
+   step -- see that file's own header for why. This script keeps
+   everything that is specific to being run by hand from a terminal: CLI
+   argument parsing, the public-URL sanity check, and fetching the
+   assistant config over HTTP from a deployed app/api/agent/assistant
+   rather than assembling it in-process.
+
    set -a && . ./.env.local && set +a
    AGENT_SECRET=<secret from scripts/set-agent-secret.mjs> \
      node scripts/provision-vapi.mjs <location-id> <public-https-base-url> [--dry-run]
@@ -55,10 +63,14 @@
    location finds that assistant and PATCHes it in place -- system
    prompt, greeting, tools and all -- rather than creating a second one. */
 
-const VAPI_API = "https://api.vapi.ai";
+import {
+  AGENT_TOOLS,
+  ProvisioningError,
+  buildAssistantPayload,
+  upsertAssistant,
+} from "../lib/vapi/provision.ts";
 
 class UsageError extends Error {}
-class ProvisioningError extends Error {}
 
 function usageAndExit(message) {
   console.error(message);
@@ -87,6 +99,11 @@ if (!baseUrlArg) usageAndExit("Missing <public-https-base-url>.");
  *  configured wrong" from the Vapi dashboard, which is what makes it the
  *  single most likely way to lose an hour here -- so it is refused
  *  up front instead, loudly, with the fix.
+ *
+ *  This check is specific to this script being driven by a human typing
+ *  a CLI argument -- see lib/vapi/provision.ts's header for why the
+ *  onboarding server action, which derives its base URL from the request
+ *  itself rather than from something typed, does not repeat it.
  *
  *  --dry-run is the one exception, and only for the localhost half of
  *  this check: a dry run calls no Vapi endpoint at all, so there is
@@ -203,359 +220,6 @@ async function fetchAssistantConfig() {
   return json;
 }
 
-// ── the nine tools ──────────────────────────────────────────────────
-//
-// One entry per app/api/agent/*/route.ts. `properties`/`required` are
-// the JSON Schema the MODEL sees and fills in from what the caller said
-// -- read against each route's own `body = await request.json()` type
-// annotation, not against docs/vapi-setup.md's prose table, so a
-// mismatch between the two would have been caught while writing this.
-// `staticParameters`, where present, are Vapi's own mechanism for
-// merging a value into the request body that the MODEL must never be
-// asked to supply -- provider_call_id is Vapi's id for the call in
-// progress (`{{call.id}}`, a Liquid template Vapi resolves per call),
-// not something a caller ever says out loud.
-const TOOLS = [
-  {
-    name: "get_menu",
-    path: "menu",
-    description:
-      "Look up this restaurant's current menu: categories, items, pre-tax prices, and which items " +
-      "are sold out right now. Call this every single time the caller mentions food -- never answer " +
-      "a menu question from memory or from earlier in this same call, since prices and sold-out " +
-      "status can change mid-call.",
-    properties: {
-      item: {
-        type: "string",
-        description:
-          'The specific item the caller asked about, in their own words (e.g. "the squid ink ' +
-          'pasta", "wings"). Leave this out to just fetch the whole menu.',
-      },
-    },
-    required: [],
-  },
-  {
-    name: "get_hours",
-    path: "hours",
-    description:
-      "Check whether the restaurant is open right now, what today's hours are, and when it opens " +
-      "next if it's closed.",
-    properties: {},
-    required: [],
-  },
-  {
-    name: "check_availability",
-    path: "availability",
-    description:
-      "Check whether a table is free for a given date, time and party size. Always call this " +
-      "before promising a time to the caller -- never say a time is open until this says so.",
-    properties: {
-      requested_at: {
-        type: "string",
-        description:
-          "The requested date and time as a full ISO 8601 timestamp (e.g. " +
-          '"2026-08-14T19:00:00-07:00"), resolved from what the caller said against the current ' +
-          "date and time given in your instructions.",
-      },
-      party_size: { type: "integer", description: "How many people are in the party." },
-    },
-    required: ["requested_at", "party_size"],
-  },
-  {
-    name: "create_reservation",
-    path: "reservation",
-    description:
-      "Book a table. Call check_availability first, and read the booking back to the caller before " +
-      "calling this.",
-    properties: {
-      requested_at: {
-        type: "string",
-        description: "The reservation date and time as a full ISO 8601 timestamp.",
-      },
-      party_size: { type: "integer", description: "How many people are in the party." },
-      customer_name: { type: "string", description: "The caller's first name, for the reservation." },
-      customer_phone: { type: "string", description: "A callback phone number for the reservation." },
-    },
-    required: ["requested_at", "party_size", "customer_name", "customer_phone"],
-    staticParameters: [{ key: "provider_call_id", value: "{{call.id}}" }],
-  },
-  {
-    name: "cancel_reservation",
-    path: "cancel-reservation",
-    description:
-      "Cancel an existing table reservation. Needs the first name it's under, the phone number, " +
-      "and roughly when the table is -- all three together, or nothing is found.",
-    properties: {
-      customer_name: { type: "string", description: "The first name the reservation is under." },
-      customer_phone: { type: "string", description: "The phone number the reservation is under." },
-      booking_time: {
-        type: "string",
-        description:
-          "Roughly when the table is, as a full ISO 8601 timestamp -- it does not need to be " +
-          'exact to the minute (e.g. "around seven" is fine).',
-      },
-    },
-    required: ["customer_name", "customer_phone", "booking_time"],
-  },
-  {
-    name: "change_reservation",
-    path: "change-reservation",
-    description:
-      "Move an existing reservation to a new time and/or party size. Needs the first name, phone " +
-      "number and roughly when the CURRENT booking is, plus the new time.",
-    properties: {
-      customer_name: { type: "string", description: "The first name the existing reservation is under." },
-      customer_phone: { type: "string", description: "The phone number the existing reservation is under." },
-      booking_time: {
-        type: "string",
-        description: "Roughly when the EXISTING table is, as a full ISO 8601 timestamp.",
-      },
-      new_requested_at: {
-        type: "string",
-        description: "The NEW date and time being requested, as a full ISO 8601 timestamp.",
-      },
-      new_party_size: {
-        type: "integer",
-        description: "The new party size, if it's changing. Leave out to keep the party size the booking already has.",
-      },
-    },
-    required: ["customer_name", "customer_phone", "booking_time", "new_requested_at"],
-  },
-  {
-    name: "place_order",
-    path: "order",
-    description:
-      "Place a takeout or delivery order. Read the whole order back with the total -- and say the " +
-      "total is before tax -- before calling this.",
-    properties: {
-      items: {
-        type: "array",
-        description: "Every item on the order.",
-        items: {
-          type: "object",
-          properties: {
-            name: {
-              type: "string",
-              description: "The menu item's name, as it appears in what get_menu returned.",
-            },
-            quantity: { type: "integer", description: "How many of this item." },
-            note: {
-              type: "string",
-              description:
-                "Any change the caller asked for on this specific item, in their own words (e.g. " +
-                '"no onions", "sauce on the side"). Leave out if there is no change on this item.',
-            },
-          },
-          required: ["name", "quantity"],
-        },
-      },
-      type: {
-        type: "string",
-        enum: ["pickup", "delivery"],
-        description: "Pickup or delivery. Defaults to pickup if the caller didn't say.",
-      },
-      customer_name: { type: "string", description: "The caller's first name." },
-      customer_phone: { type: "string", description: "A callback phone number." },
-      address: {
-        type: "string",
-        description: "The delivery address. Required when type is delivery, otherwise leave out.",
-      },
-    },
-    required: ["items", "customer_name", "customer_phone"],
-    staticParameters: [{ key: "provider_call_id", value: "{{call.id}}" }],
-  },
-  {
-    name: "transfer_to_human",
-    path: "transfer",
-    description:
-      "Transfer the call to a person at the restaurant. Only two things reach a person: a catering " +
-      "or large order, and anything to do with an allergy, an intolerance, celiac, or what is in a " +
-      "dish for a health reason. Everything else you cannot handle -- an upset caller, a complaint, " +
-      "a request for a manager, anything about payment or money owed, anything outside what you " +
-      "can do, anything you've failed twice to understand -- is take_message, not this.",
-    properties: {
-      reason: {
-        type: "string",
-        description:
-          'A short internal note on why you are transferring (e.g. "allergy question", "catering ' +
-          'order"). This is not spoken to the caller.',
-      },
-    },
-    required: [],
-    staticParameters: [{ key: "provider_call_id", value: "{{call.id}}" }],
-  },
-  {
-    name: "take_message",
-    path: "message",
-    // The counterweight to the narrowed transfer_to_human above. Every
-    // reason a call used to be handed to a person and no longer is ends
-    // here, so all three fields are required: a message the restaurant
-    // cannot act on is worse than none, because the caller has already
-    // been told somebody will ring them back. The route refuses (400)
-    // with a sentence to read out when any one of them is missing or
-    // could not be heard -- that is a question to ask the caller again,
-    // not an error.
-    description:
-      "Take a message for the restaurant to call back about. Use this for anything you cannot " +
-      "handle yourself except a catering order or an allergy question: an upset caller, a " +
-      "complaint about a past order, a request for a manager or a person, anything about payment, " +
-      "refunds or money owed, anything outside what you can do, and anything you still cannot make " +
-      "out after two tries. Apologise, take all three details, then call this and tell them " +
-      "someone will call them back.",
-    properties: {
-      caller_name: { type: "string", description: "The caller's name." },
-      callback_number: {
-        type: "string",
-        description: "The best number to call them back on, as they said it.",
-      },
-      message: {
-        type: "string",
-        description:
-          "What the message is about, in the caller's own words -- what to pass on to the " +
-          "restaurant. Never a card number.",
-      },
-    },
-    required: ["caller_name", "callback_number", "message"],
-    staticParameters: [{ key: "provider_call_id", value: "{{call.id}}" }],
-  },
-];
-
-function buildFunctionTool(tool) {
-  return {
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: { type: "object", properties: tool.properties, required: tool.required },
-    },
-    server: {
-      url: `${base}/api/agent/${tool.path}`,
-      headers: { "x-dialtone-secret": agentSecret },
-    },
-    ...(tool.staticParameters ? { parameters: tool.staticParameters } : {}),
-  };
-}
-
-/** Item 2 of the brief -- "a transfer destination of fallback_number" --
- *  is a second, distinct thing from the transfer_to_human tool above,
- *  and deliberately not the same tool wearing two hats:
- *
- *  Vapi's native `transferCall` tool type is the one thing on this list
- *  that can actually move the live phone leg to another number -- a
- *  `function` tool (transfer_to_human, above) only ever returns JSON to
- *  the model, the same as get_menu or place_order does. Checked against
- *  Vapi's own OpenAPI schema (api.vapi.ai/api-json) while building this:
- *  `CreateTransferCallToolDTO` has no `function` field at all, so a
- *  transferCall tool cannot be *named* `transfer_to_human` the way the
- *  system prompt's "call transfer_to_human" implies a function tool can
- *  be -- there is nothing to bind that name to. So the two tools below
- *  are not competing implementations of the same feature; they are
- *  complementary: transfer_to_human is what the model calls (and what
- *  gets logged, per /api/agent/transfer's own docstring), and this one
- *  is what actually carries the call to a person, with a destination
- *  that is already known -- fallback_number, fetched in step 1 above --
- *  and baked in statically rather than looked up from this app at
- *  transfer time. That matters for exactly the reason
- *  app/api/agent/transfer/route.ts gives for answering before it logs
- *  anything: transferring to a human is the escape hatch for when the
- *  rest of the system is degraded, so the one thing that actually moves
- *  the call must not itself depend on this app answering a webhook
- *  during the call. */
-function nativeTransferTool(fallbackNumber) {
-  return {
-    type: "transferCall",
-    destinations: [
-      {
-        type: "number",
-        number: fallbackNumber,
-        message: "Let me get someone for you, one moment.",
-      },
-    ],
-  };
-}
-
-function buildAssistantPayload(config) {
-  return {
-    // Capped at 40 characters by Vapi; the location id is what's
-    // actually used to find this assistant again (see metadata below),
-    // so the name only has to be recognisable, not unique.
-    name: locationId.length <= 40 ? locationId : locationId.slice(0, 40),
-    metadata: { dialtone_location_id: locationId },
-    firstMessage: config.greeting,
-    // Not "assistant-speaks-first-with-model-generated-message": the
-    // greeting is spoken exactly as fetched, never regenerated by the
-    // model. docs/vapi-setup.md step 4 asks for pre-recorded audio for
-    // this, which would need a separate TTS-and-hosting step this
-    // script does not do; this is the "not model-generated" half of
-    // that requirement, not the "pre-recorded" half.
-    firstMessageMode: "assistant-speaks-first",
-    model: {
-      provider: modelProvider,
-      model: modelName,
-      // "Boring and consistent, not creative" -- docs/vapi-setup.md step 4.
-      temperature: 0.3,
-      messages: [{ role: "system", content: config.system_prompt }],
-      tools: [...TOOLS.map(buildFunctionTool), nativeTransferTool(config.fallback_number)],
-    },
-  };
-}
-
-// ── Vapi's own API ──────────────────────────────────────────────────
-
-async function vapiRequest(method, path, body) {
-  let res;
-  try {
-    res = await fetch(`${VAPI_API}${path}`, {
-      method,
-      headers: { Authorization: `Bearer ${vapiKey}`, "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch (err) {
-    throw new ProvisioningError(`Could not reach Vapi (${VAPI_API}${path}): ${err.message}`);
-  }
-
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : null;
-
-  if (res.status === 401) {
-    throw new ProvisioningError(
-      `Vapi rejected VAPI_PRIVATE_KEY (401 on ${method} ${path}). The key is wrong, revoked, or ` +
-        "this is the public key instead of the private one -- get a fresh private key from the " +
-        "Vapi dashboard's API Keys page and update .env.local.",
-    );
-  }
-  if (!res.ok) {
-    const detail = json?.message ?? json?.error ?? text.slice(0, 500) ?? "(empty body)";
-    throw new ProvisioningError(
-      `Vapi returned ${res.status} on ${method} ${path}: ${Array.isArray(detail) ? detail.join("; ") : detail}`,
-    );
-  }
-  return json;
-}
-
-/** "The assistant for this location" -- see the module header for why
- *  metadata, not name, is the key. GET /assistant has no server-side
- *  filter for metadata, so this walks pages (newest first) comparing
- *  client-side; almost every account this runs against has a handful of
- *  assistants, not thousands, so one page is the common case. */
-async function findExistingAssistant() {
-  let cursor;
-  for (let page = 0; page < 50; page++) {
-    const qs = new URLSearchParams({ limit: "1000" });
-    if (cursor) qs.set("createdAtLt", cursor);
-    const list = await vapiRequest("GET", `/assistant?${qs}`);
-    const match = list.find((a) => a?.metadata?.dialtone_location_id === locationId);
-    if (match) return match;
-    if (list.length < 1000) return null;
-    cursor = list[list.length - 1]?.createdAt;
-    if (!cursor) return null;
-  }
-  throw new ProvisioningError(
-    "Walked 50,000 assistants without finding a match or reaching the end of the list -- " +
-      "something is wrong with pagination here. Check the Vapi dashboard by hand.",
-  );
-}
-
 // ── output helpers ──────────────────────────────────────────────────
 
 /** Never print the secret or the Vapi key -- including inside a
@@ -627,7 +291,18 @@ async function main() {
   console.error(`System prompt: ${config.system_prompt.length} characters`);
   console.error(`Config assembled_at=${config.assembled_at} expires_at=${config.expires_at}`);
 
-  const payload = buildAssistantPayload(config);
+  const payload = buildAssistantPayload({
+    locationId,
+    base,
+    agentSecret,
+    config: {
+      system_prompt: config.system_prompt,
+      greeting: config.greeting,
+      fallback_number: config.fallback_number,
+    },
+    modelProvider,
+    modelName,
+  });
 
   if (dryRun) {
     console.log("");
@@ -642,24 +317,21 @@ async function main() {
     return;
   }
 
-  const existing = await findExistingAssistant();
-  let assistant;
-  if (existing) {
-    console.error(
-      `Found existing assistant ${existing.id} for location ${locationId} ` +
-        "(matched on metadata.dialtone_location_id) -- updating it in place.",
-    );
-    assistant = await vapiRequest("PATCH", `/assistant/${existing.id}`, payload);
-    console.log(`Updated assistant ${assistant.id}.`);
-  } else {
-    console.error(`No existing assistant found for location ${locationId} -- creating one.`);
-    assistant = await vapiRequest("POST", "/assistant", payload);
+  const { assistant, created } = await upsertAssistant({ vapiKey, locationId, payload });
+  if (created) {
+    console.error(`No existing assistant found for location ${locationId} -- created one.`);
     console.log(`Created assistant ${assistant.id}.`);
+  } else {
+    console.error(
+      `Found existing assistant ${assistant.id} for location ${locationId} ` +
+        "(matched on metadata.dialtone_location_id) -- updated it in place.",
+    );
+    console.log(`Updated assistant ${assistant.id}.`);
   }
 
   console.log("");
   console.log("Tools registered (inline on the assistant, fully replaced on every run):");
-  for (const tool of TOOLS) console.log(`  - ${tool.name} -> ${base}/api/agent/${tool.path}`);
+  for (const tool of AGENT_TOOLS) console.log(`  - ${tool.name} -> ${base}/api/agent/${tool.path}`);
   console.log(`  - (native transferCall, static destination) -> ${config.fallback_number}`);
   console.log("");
   console.log(`Model: ${modelProvider}/${modelName}, temperature 0.3`);
