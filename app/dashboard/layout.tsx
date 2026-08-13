@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { AgentStatusProvider } from "@/components/AgentStatus";
 import { MenuProvider } from "@/components/MenuStore";
 import { Sidebar } from "@/components/Sidebar";
@@ -28,16 +29,21 @@ export default async function DashboardLayout({
 
   const location = await getCurrentLocation();
 
-  // Signed in, but no restaurant yet. Onboarding is not built; say so
-  // plainly rather than rendering an empty dashboard.
+  // Signed in, but no restaurant yet -- either a brand new account, or
+  // one that started /onboarding and closed the tab before it saved a
+  // location. Either way, onboarding is where this goes next, not an
+  // empty dashboard.
   if (!location) {
     return (
       <div className="page">
         <h1>No restaurant yet</h1>
         <p className="text-muted">
-          This account is not attached to a location. Onboarding is not built
-          yet — seed one with <code>supabase db reset</code> for now.
+          This account is not attached to a location yet. Set one up to
+          start taking calls.
         </p>
+        <Link href="/onboarding" className="btn btn-primary">
+          Set up your restaurant
+        </Link>
         {/* Without this the account is stuck: no sidebar here means no
             other way to sign out and try a different one. */}
         <form action={signOut}>
