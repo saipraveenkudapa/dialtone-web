@@ -5,11 +5,21 @@ export type AgentMenuItem = {
   name: string;
   price: string;
   sold_out: boolean;
-  /** What the dish generally comes with, in the words a person typed or
-   *  confirmed into `menu_items.description` -- the editor's own
-   *  placeholder for that box is "Black pepper, pecorino", and the only
-   *  other way anything reaches it is a human confirming an imported
-   *  item line by line. Nothing a model extracted lands here on its own.
+  /** What the dish generally comes with, read to callers off
+   *  `menu_items.description` -- the editor's own placeholder for that
+   *  box is "Black pepper, pecorino".
+   *
+   *  Text a model wrote can reach this column: an import pre-fills the
+   *  editable description box with the extraction's own words
+   *  (lib/menu-imports/review.ts, `draftFromExtraction`), and publishing
+   *  passes those strings straight through as p_item_descriptions. What
+   *  keeps unread words out of a caller's ear is not the column, it is
+   *  the per-item `confirmed` flag, which `publishArrays` in that same
+   *  file checks on every row, server-side. The invariant is "not
+   *  without a per-item confirmation", not "no model text here". Relax
+   *  that gate -- auto-confirm the rows the model was sure about, say --
+   *  and a hallucinated description is spoken aloud as what the dish
+   *  contains.
    *
    *  Optional, and genuinely absent rather than `null` or `""`, on the
    *  items that have nothing to say: this payload is fetched live on
