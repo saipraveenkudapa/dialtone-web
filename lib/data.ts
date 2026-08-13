@@ -1,4 +1,7 @@
 import { supabaseServer } from "@/lib/supabase/server";
+import { MENU_UPLOAD_BUCKET } from "@/lib/menu-imports/file";
+import { readExtraction } from "@/lib/menu-imports/review";
+import type { MenuExtraction } from "@/lib/menu-imports/extraction";
 import type {
   BookingRow,
   CallRow,
@@ -78,6 +81,102 @@ export async function getMenuImports(locationId: string): Promise<MenuImportRow[
 
   if (error) throw error;
   return (data ?? []) as MenuImportRow[];
+}
+
+/** One uploaded file of a batch, with a link to look at it.
+ *
+ *  `index` is the file's place in the read, taken from the row's own
+ *  extraction rather than from the order rows came back in: every item
+ *  says which file it was read from by that number, and "check this
+ *  against the photo" has to point at the right photo. */
+export type MenuImportFile = {
+  index: number;
+  row: MenuImportRow;
+  url: string | null;
+};
+
+export type MenuImportBatch = {
+  batchId: string;
+  rows: MenuImportRow[];
+  files: MenuImportFile[];
+  /** The read, taken from whichever row of the batch carries it. Every
+   *  row of a batch stores the same reading -- they differ only in which
+   *  file each one is -- because a section that runs off the bottom of
+   *  one photo onto the top of the next is one section. */
+  extraction: MenuExtraction | null;
+  status: MenuImportRow["status"];
+};
+
+/** How long a link to look at the uploaded menu is good for.
+ *
+ *  Longer than the five minutes everything else in this app signs for,
+ *  and for a stated reason: this is the one screen where somebody sits
+ *  with the photograph open, checking forty prices against it. A link
+ *  that dies mid-review sends them back to the start. An hour is still
+ *  short enough that a URL pasted into a group chat stops working. */
+const REVIEW_URL_SECONDS = 3600;
+
+/** One batch of uploaded files, ready to be reviewed.
+ *
+ *  Read on the user's own session, so RLS answers "someone else's import"
+ *  and "no such import" the same way. Returns null for both. */
+export async function getMenuImportBatch(
+  locationId: string,
+  batchId: string,
+): Promise<MenuImportBatch | null> {
+  const supabase = await supabaseServer();
+
+  const { data, error } = await supabase
+    .from("menu_imports")
+    .select("*")
+    .eq("location_id", locationId)
+    .eq("batch_id", batchId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+
+  const rows = (data ?? []) as MenuImportRow[];
+  if (rows.length === 0) return null;
+
+  const extraction =
+    rows.map((row) => readExtraction(row.raw_extraction)).find((e) => e !== null) ?? null;
+
+  const files: MenuImportFile[] = await Promise.all(
+    rows.map(async (row, position) => {
+      const read = readExtraction(row.raw_extraction);
+      const index = read?.file?.index ?? position;
+      return { index, row, url: await getMenuUploadUrl(row.source_path) };
+    }),
+  );
+
+  files.sort((a, b) => a.index - b.index);
+
+  // The batch is as far along as its least-finished row. Rows of one
+  // batch move together -- publishing confirms all of them in one
+  // transaction -- so this only ever disagrees while something is wrong,
+  // and then it disagrees on the safe side.
+  const status = rows.some((row) => row.status === "needs_review")
+    ? "needs_review"
+    : rows.some((row) => row.status === "pending")
+      ? "pending"
+      : rows[0].status;
+
+  return { batchId, rows, files, extraction, status };
+}
+
+async function getMenuUploadUrl(path: string | null): Promise<string | null> {
+  if (!path) return null;
+
+  const supabase = await supabaseServer();
+  const { data, error } = await supabase.storage
+    .from(MENU_UPLOAD_BUCKET)
+    .createSignedUrl(path, REVIEW_URL_SECONDS);
+
+  if (error) {
+    console.error("[menu-imports] could not sign a review url", error);
+    return null;
+  }
+  return data.signedUrl;
 }
 
 export async function getRecentCalls(locationId: string, limit = 25) {

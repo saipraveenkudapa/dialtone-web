@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useId, useRef, useState } from "react";
+import Link from "next/link";
 import {
   ACCEPTED_TYPES_SENTENCE,
   MAX_MENU_FILES,
@@ -9,7 +10,7 @@ import {
   fileSize,
 } from "@/lib/menu-imports/file";
 import { uploadMenuFile } from "@/lib/menu-imports/upload";
-import { extractionSummary } from "@/lib/menu-imports/extraction";
+import { extractionHasItems, extractionSummary } from "@/lib/menu-imports/extraction";
 import {
   discardMenuImport,
   menuImportViewUrl,
@@ -285,6 +286,22 @@ export function MenuUpload({
               <span className={statusTag(entry)}>{statusLabel(entry)}</span>
 
               <div className="upload-actions">
+                {/* The one thing left to do with a file that has been
+                    read. It points at the batch, not this row: the whole
+                    menu was read in one call and is confirmed in one
+                    transaction, so reviewing one photo of three is not a
+                    thing anybody can do. */}
+                {entry.state === "stored" &&
+                locationId &&
+                entry.row.status === "needs_review" &&
+                extractionHasItems(entry.row.raw_extraction) ? (
+                  <Link
+                    href={`/dashboard/menu/imports/${entry.row.batch_id}`}
+                    className="btn btn-primary"
+                  >
+                    Check what was read
+                  </Link>
+                ) : null}
                 {entry.state === "stored" && locationId && !links[entry.row.id] ? (
                   <button
                     type="button"
