@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { currentPlatformAdmin } from "@/lib/admin/auth";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { supabaseServer } from "@/lib/supabase/server";
@@ -13,6 +14,21 @@ export type AuthState = { error?: string; sent?: boolean };
 function safeNext(next: FormDataEntryValue | null) {
   const value = typeof next === "string" ? next : "";
   return value.startsWith("/") && !value.startsWith("//") ? value : "/dashboard";
+}
+
+/** Where a successful sign-in should land.
+ *
+ *  Operator staff belong to no organization on purpose, so /dashboard
+ *  greets them with "no restaurant yet" -- a dead end that made the
+ *  console look missing unless you already knew to type /admin. Staff go
+ *  to the console; everyone else goes where they were headed.
+ *
+ *  An explicit `next` still wins, so a deep link a signed-out user
+ *  followed still works after they log in. */
+async function landingFor(next: FormDataEntryValue | null) {
+  const target = safeNext(next);
+  if (target !== "/dashboard") return target;
+  return (await currentPlatformAdmin()) ? "/admin" : target;
 }
 
 export async function signInWithPassword(
@@ -37,7 +53,7 @@ export async function signInWithPassword(
   // flicker past on the one screen they are most likely to distrust.
   if (mustChangePassword(data.user)) redirect(SET_PASSWORD_PATH);
 
-  redirect(safeNext(formData.get("next")));
+  redirect(await landingFor(formData.get("next")));
 }
 
 export async function sendMagicLink(
