@@ -264,8 +264,8 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
               onChange={(e) => setOwnerEmail(e.target.value)}
             />
             <p className="text-muted setup-note">
-              This becomes their username. A password is generated on Start and shown to you once,
-              to hand over.
+              This becomes their username. A temporary password is generated on Start and shown to
+              you once, to hand over -- they are asked to replace it the first time they sign in.
             </p>
           </div>
         </div>
@@ -589,7 +589,16 @@ function HandoverPanel({ restaurant }: { restaurant: CreatedRestaurant }) {
     }
   }
 
-  const both = `Dialtone sign-in for ${restaurant.locationName}\nURL: /login\nEmail: ${restaurant.ownerEmail}\nPassword: ${restaurant.ownerPassword}`;
+  // What the operator pastes into a message or reads down a phone. The
+  // last line is not decoration: without it the owner signs in, is asked
+  // for a new password, and concludes the credential they were just given
+  // is broken.
+  const both =
+    `Dialtone sign-in for ${restaurant.locationName}\n` +
+    `URL: /login\n` +
+    `Email: ${restaurant.ownerEmail}\n` +
+    `Temporary password: ${restaurant.ownerPassword}\n` +
+    `This password is temporary. Dialtone will ask you to set your own the first time you sign in.`;
 
   return (
     <>
@@ -607,6 +616,14 @@ function HandoverPanel({ restaurant }: { restaurant: CreatedRestaurant }) {
           owner needs a password reset.
         </div>
 
+        <div className="cred-warn">
+          <strong>Say that it is temporary.</strong> You have read this password, so it cannot stay
+          theirs. The first time they sign in, Dialtone asks them to set their own and opens nothing
+          else until they do. Tell them that when you hand it over -- otherwise the credential you
+          just gave them looks broken the moment they use it. &ldquo;Copy both&rdquo; below includes
+          the sentence.
+        </div>
+
         <div className="field">
           <span className="field-label">Email</span>
           <div className="secret-box">{restaurant.ownerEmail}</div>
@@ -620,7 +637,7 @@ function HandoverPanel({ restaurant }: { restaurant: CreatedRestaurant }) {
         </div>
 
         <div className="field">
-          <span className="field-label">Password</span>
+          <span className="field-label">Temporary password</span>
           <div className="secret-box">{restaurant.ownerPassword}</div>
           <div className="cred-actions">
             <button
