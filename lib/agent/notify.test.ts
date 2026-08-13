@@ -181,6 +181,8 @@ function testLocation(overrides: Partial<LocationRow> = {}): LocationRow {
     order_types: "both",
     pickup_promise_minutes: 25,
     delivery_promise_minutes: 45,
+    onboarding_step: "menu",
+    vapi_assistant_id: null,
     ...overrides,
   };
 }

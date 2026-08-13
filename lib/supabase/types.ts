@@ -59,6 +59,8 @@ export type LocationRow = {
   order_types: "pickup" | "delivery" | "both";
   pickup_promise_minutes: number;
   delivery_promise_minutes: number;
+  onboarding_step: "business" | "hours" | "money" | "menu";
+  vapi_assistant_id: string | null;
 };
 
 export type MenuCategoryRow = {
