@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { AgentStatusProvider } from "@/components/AgentStatus";
 import { MenuProvider } from "@/components/MenuStore";
 import { Sidebar } from "@/components/Sidebar";
@@ -29,21 +28,23 @@ export default async function DashboardLayout({
 
   const location = await getCurrentLocation();
 
-  // Signed in, but no restaurant yet -- either a brand new account, or
-  // one that started /onboarding and closed the tab before it saved a
-  // location. Either way, onboarding is where this goes next, not an
-  // empty dashboard.
+  // Signed in, but attached to no restaurant. There is deliberately
+  // nothing to offer here any more: restaurants are created by the
+  // operator (app/admin/new), which creates the owner's login and the
+  // location together, so an account in this state is not a half-finished
+  // signup waiting to be completed -- it is an account that should not
+  // exist, or one whose restaurant was removed. Offering a "set one up"
+  // button would be the second way to create a restaurant this product
+  // deliberately does not have.
   if (!location) {
     return (
       <div className="page">
         <h1>No restaurant yet</h1>
         <p className="text-muted">
-          This account is not attached to a location yet. Set one up to
-          start taking calls.
+          This account is not attached to a restaurant. Dialtone sets those up — ask
+          your contact there to attach this account, or sign in with the address
+          they gave you.
         </p>
-        <Link href="/onboarding" className="btn btn-primary">
-          Set up your restaurant
-        </Link>
         {/* Without this the account is stuck: no sidebar here means no
             other way to sign out and try a different one. */}
         <form action={signOut}>

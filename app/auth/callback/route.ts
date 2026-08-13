@@ -11,28 +11,23 @@ export async function GET(request: NextRequest) {
       ? nextParam
       : "/dashboard";
 
+  // This used to do a second thing: if the signed-in user carried a
+  // `business_name` in their metadata, it called the create_organization
+  // RPC to finish a /signup that had been waiting on email confirmation.
+  // That branch is gone, along with public signup and the RPC itself
+  // (supabase/migrations/20260813120000_drop_create_organization.sql).
+  //
+  // Removing it was not tidying. Two accounts left over from testing that
+  // flow still carry `business_name: "Marty's"` in their metadata and
+  // belong to no organization; under the old code, either of them
+  // signing in with a magic link would have silently minted a SECOND
+  // organization called Marty's, owned by them, alongside the real one.
+  // Restaurants are created by the operator now, and this route's only
+  // job is exchanging a link for a session.
   if (code) {
     const supabase = await supabaseServer();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error) {
-      // Finish a signup that had to wait on email confirmation. Only a
-      // user who just came through /signup has business_name in their
-      // metadata -- an ordinary magic-link sign-in never sets it, so an
-      // existing member never runs into the RPC's name validation here.
-      // See supabase/migrations/20260812001000_signup_create_organization.sql.
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const businessName = user?.user_metadata?.business_name;
-      if (typeof businessName === "string" && businessName.trim()) {
-        // Result deliberately ignored: created, already_member, and any
-        // defensive validation failure all land the same way -- signed
-        // in, headed to /dashboard, which explains a missing restaurant
-        // if the RPC genuinely could not make one.
-        await supabase.rpc("create_organization", { p_name: businessName });
-      }
-      return NextResponse.redirect(`${origin}${next}`);
-    }
+    if (!error) return NextResponse.redirect(`${origin}${next}`);
   }
 
   return NextResponse.redirect(`${origin}/login?error=link`);

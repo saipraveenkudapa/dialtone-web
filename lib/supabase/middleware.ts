@@ -28,7 +28,11 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
-  const isProtected = pathname.startsWith("/dashboard") || pathname.startsWith("/onboarding");
+  // /admin is deliberately absent: app/admin/layout.tsx answers a
+  // non-admin with notFound() rather than a redirect, so that a signed-in
+  // restaurant owner poking at it cannot tell the route exists. Sending
+  // them to /login from here would tell them.
+  const isProtected = pathname.startsWith("/dashboard");
 
   if (!user && isProtected) {
     const to = request.nextUrl.clone();

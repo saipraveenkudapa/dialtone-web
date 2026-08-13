@@ -13,8 +13,8 @@
    trusting whichever this script happens to send.
 
    The payload this script builds and the Vapi API calls it makes both
-   live in lib/vapi/provision.ts now, shared with app/onboarding's finish
-   step -- see that file's own header for why. This script keeps
+   live in lib/vapi/provision.ts now, shared with the operator's own
+   "Create a new restaurant" action -- see that file's own header for why. This script keeps
    everything that is specific to being run by hand from a terminal: CLI
    argument parsing, the public-URL sanity check, and fetching the
    assistant config over HTTP from a deployed app/api/agent/assistant
@@ -102,7 +102,7 @@ if (!baseUrlArg) usageAndExit("Missing <public-https-base-url>.");
  *
  *  This check is specific to this script being driven by a human typing
  *  a CLI argument -- see lib/vapi/provision.ts's header for why the
- *  onboarding server action, which derives its base URL from the request
+ *  operator's server action, which derives its base URL from the request
  *  itself rather than from something typed, does not repeat it.
  *
  *  --dry-run is the one exception, and only for the localhost half of
