@@ -11,6 +11,7 @@ import {
   cleanFileName,
   isPathInLocation,
   isUuid,
+  menuBatchTooLarge,
   menuUploadMediaType,
   menuUploadPath,
 } from "@/lib/menu-imports/file";
@@ -407,7 +408,10 @@ export async function readMenuImports(input: {
     return { error: "Those files have already been read." };
   }
 
-  const files: MenuReadFile[] = [];
+  // Everything that can be decided from the rows alone is decided here,
+  // before a single object is fetched: whose file this is, whether it is
+  // a kind we can read, and whether the batch is over the ceiling.
+  const wanted: { row: MenuImportRow; path: string; mediaType: string }[] = [];
   for (const row of pending) {
     const path = row.source_path;
     if (!path || !isPathInLocation(path, input.locationId)) return { error: REFUSED };
@@ -416,7 +420,19 @@ export async function readMenuImports(input: {
     if (!mediaType) {
       return { error: `${row.original_filename ?? "That file"} is not a kind we can read.` };
     }
+    wanted.push({ row, path, mediaType });
+  }
 
+  // readMenu refuses this batch too, but only after every file has been
+  // downloaded and base64'd: ten files at ten megabytes -- both limits
+  // are reachable -- is ~100 MB of Buffers plus ~133 MB of base64 held
+  // live in one serverless invocation, materialised only to be turned
+  // away. byte_size is already on the row, so the same refusal is free.
+  const tooLarge = menuBatchTooLarge(wanted.map(({ row }) => row.byte_size));
+  if (tooLarge) return { error: tooLarge.error };
+
+  const files: MenuReadFile[] = [];
+  for (const { row, path, mediaType } of wanted) {
     const { data: blob, error: downloadError } = await who.db.storage
       .from(MENU_UPLOAD_BUCKET)
       .download(path);

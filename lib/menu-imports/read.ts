@@ -2,14 +2,13 @@ import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
 import { anthropicEnv } from "@/lib/anthropic/env";
-import { MAX_MENU_BATCH_BYTES } from "@/lib/menu-imports/file";
+import { menuBatchTooLarge } from "@/lib/menu-imports/file";
 import {
   MENU_EXTRACTION_JSON_SCHEMA,
   normalizeExtraction,
   type ExtractionFile,
   type MenuExtraction,
 } from "@/lib/menu-imports/extraction";
-import { fileSize } from "@/lib/menu-imports/file";
 
 /** Handing a menu to Claude and getting structured items back.
  *
@@ -93,16 +92,11 @@ export async function readMenu(files: MenuReadFile[]): Promise<MenuReadResult> {
     return { ok: false, reason: "no_files", error: "There is nothing to read." };
   }
 
-  const total = files.reduce((sum, file) => sum + file.bytes, 0);
-  if (total > MAX_MENU_BATCH_BYTES) {
-    return {
-      ok: false,
-      reason: "too_large",
-      error:
-        `These files come to ${fileSize(total)} together, and one menu can be read up to ` +
-        `${fileSize(MAX_MENU_BATCH_BYTES)}. Remove a file, or upload smaller photos, and try again.`,
-    };
-  }
+  // The backstop. The action refuses the same batch from the byte_size on
+  // its rows before it downloads a thing; this is the check that stands
+  // between the bytes in hand and the request.
+  const tooLarge = menuBatchTooLarge(files.map((file) => file.bytes));
+  if (tooLarge) return { ok: false, reason: "too_large", error: tooLarge.error };
 
   let client: Anthropic;
   try {

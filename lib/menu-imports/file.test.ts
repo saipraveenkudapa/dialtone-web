@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   ACCEPTED_TYPES_SENTENCE,
+  MAX_MENU_BATCH_BYTES,
   MAX_MENU_FILE_BYTES,
+  MAX_MENU_FILES,
   MENU_UPLOAD_ACCEPT,
   MENU_UPLOAD_BUCKET,
   checkMenuUpload,
@@ -9,6 +11,7 @@ import {
   fileSize,
   isPathInLocation,
   isUuid,
+  menuBatchTooLarge,
   menuUploadKind,
   menuUploadPath,
   normalizeContentType,
@@ -121,5 +124,47 @@ describe("what is shown back to a human", () => {
     expect(fileSize(2048)).toBe("2 KB");
     expect(fileSize(2.4 * 1024 * 1024)).toBe("2.4 MB");
     expect(fileSize(MAX_MENU_FILE_BYTES)).toBe("10 MB");
+  });
+});
+
+describe("the batch ceiling, weighed before anything is fetched", () => {
+  it("lets a batch that fits through", () => {
+    expect(menuBatchTooLarge([2_000_000, 3_000_000, 1])).toBeNull();
+    expect(menuBatchTooLarge([MAX_MENU_BATCH_BYTES])).toBeNull();
+    expect(menuBatchTooLarge([])).toBeNull();
+  });
+
+  it("refuses one byte past the ceiling, naming the size and the fix", () => {
+    const over = menuBatchTooLarge([MAX_MENU_BATCH_BYTES, 1]);
+    expect(over).not.toBeNull();
+    expect(over!.total).toBe(MAX_MENU_BATCH_BYTES + 1);
+    expect(over!.error).toMatch(/16 MB/);
+    expect(over!.error).toMatch(/Remove a file/);
+  });
+
+  it("refuses the worst batch both other limits allow: ten files of ten megabytes", () => {
+    // Neither MAX_MENU_FILES nor MAX_MENU_FILE_BYTES implies this one, so
+    // this is the batch that would otherwise be downloaded and base64'd
+    // in full before anything said no.
+    const worst = Array(MAX_MENU_FILES).fill(MAX_MENU_FILE_BYTES);
+    expect(menuBatchTooLarge(worst)!.error).toMatch(/100 MB/);
+  });
+
+  it("counts a size it does not have as nothing rather than refusing a menu", () => {
+    // byte_size is nullable, and an unknown size is not evidence of a big
+    // one. readMenu weighs the real bytes afterwards.
+    expect(menuBatchTooLarge([null, undefined, 2_000_000])).toBeNull();
+    expect(menuBatchTooLarge([Number.NaN, Number.POSITIVE_INFINITY, -5])).toBeNull();
+    // ...and one nonsense size does not hide the ones that are real.
+    expect(menuBatchTooLarge([null, MAX_MENU_BATCH_BYTES + 1])).not.toBeNull();
+  });
+
+  it("says the same sentence to both callers", async () => {
+    // readMenu's own ceiling is this function, so the owner cannot be
+    // told two different things about one batch.
+    const source = await import("node:fs").then(({ readFileSync }) =>
+      readFileSync(new URL("./read.ts", import.meta.url), "utf8"),
+    );
+    expect(source).toMatch(/menuBatchTooLarge/);
   });
 });

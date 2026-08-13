@@ -156,3 +156,34 @@ export function fileSize(bytes: number): string {
   const mb = bytes / (1024 * 1024);
   return `${mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10} MB`;
 }
+
+/** Does this batch already exceed the ceiling, judged from sizes alone?
+ *
+ *  Two callers ask, and they have to refuse the same batch with the same
+ *  sentence. `readMenuImports` asks first, from the `byte_size` already
+ *  on each menu_imports row, before it downloads anything: ten files of
+ *  ten megabytes is ~100 MB of Buffers plus ~133 MB of base64 held live
+ *  in one serverless invocation, and materialising all of that to then
+ *  turn it away is a needless way to run out of memory. `readMenu` asks
+ *  again, of the bytes it actually holds, as the backstop -- it is the
+ *  one that guards the request.
+ *
+ *  A missing or nonsense size counts as zero. It is not grounds to refuse
+ *  a menu, and the backstop weighs the real bytes anyway.
+ *
+ *  Returns null when the batch fits. */
+export function menuBatchTooLarge(
+  sizes: readonly (number | null | undefined)[],
+): { total: number; error: string } | null {
+  let total = 0;
+  for (const size of sizes) {
+    if (typeof size === "number" && Number.isFinite(size) && size > 0) total += size;
+  }
+  if (total <= MAX_MENU_BATCH_BYTES) return null;
+  return {
+    total,
+    error:
+      `These files come to ${fileSize(total)} together, and one menu can be read up to ` +
+      `${fileSize(MAX_MENU_BATCH_BYTES)}. Remove a file, or upload smaller photos, and try again.`,
+  };
+}
