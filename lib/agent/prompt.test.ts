@@ -57,6 +57,27 @@ describe("system prompt", () => {
     );
   });
 
+  // The owner's explicit ask: full suggestive selling (sides, drinks,
+  // dessert, the bigger size, pairings), but bounded so it cannot become
+  // the thing that makes this agent chatty or unsafe. These four
+  // constraints are the ones that make it safe to ship: the offer names
+  // only what get_menu returned on this call, it never names a sold-out
+  // item, it happens at most once per call (no re-pitching after a no),
+  // and it is switched off entirely once an allergy has come up, since
+  // that call is already headed to a human.
+  it("bounds suggestive selling to this call's menu, said once, and never after an allergy", () => {
+    const orderSection = prompt.slice(
+      prompt.indexOf("## Taking an order"),
+      prompt.indexOf("## Taking a reservation"),
+    );
+    expect(orderSection).toContain("Only offer something get_menu returned this call");
+    expect(orderSection).toContain("never anything sold out");
+    expect(orderSection).toContain("drop it - never bring it up again this call");
+    expect(orderSection).toContain(
+      "Never offer anything once an allergy has come up; that call is already transferring.",
+    );
+  });
+
   // The ambiguity answer is `agentOk({placed: false, reason:
   // "ambiguous_item", options})` -- a 200 the agent only ever sees as a
   // reply to place_order (lib/agent/orders.ts, app/api/agent/order/route.ts).
@@ -97,6 +118,19 @@ describe("system prompt", () => {
   // -- a complaint about a past order, someone asking for a manager --
   // and with this line gone nothing stops the agent from agreeing that
   // the food was terrible while it takes the caller's number down.
+  // The other half of the owner's ask: sound glad the person called, not
+  // merely correct. This is deliberately in "How you sound", not "Taking
+  // an order" -- it's the register for the whole call, not just the
+  // sales moment.
+  it("tells the agent to sound glad to hear from callers, not just transact", () => {
+    const soundSection = prompt.slice(
+      prompt.indexOf("## How you sound"),
+      prompt.indexOf("## What you can do"),
+    );
+    expect(soundSection).toContain("Thank them for calling");
+    expect(soundSection).toContain("react to what they say");
+  });
+
   it("keeps the agent from disparaging the restaurant", () => {
     expect(prompt).toContain("Never say anything bad about the restaurant.");
   });
@@ -104,20 +138,32 @@ describe("system prompt", () => {
   it("stays short enough to keep latency down", () => {
     // The spec's tuning note: keep the prompt this length or shorter.
     //
-    // Raised once, from 6000, and only by the size of one new section.
-    // The prompt now has to describe cancel_reservation and
-    // change_reservation: an endpoint the prompt never mentions is an
-    // endpoint the agent never calls, so leaving the ceiling where it
-    // was would have meant shipping two tools no caller could reach --
-    // while the prompt went on listing "Book, change, or cancel a table
-    // reservation" as something it can do. The other three edits in that
-    // same change (dropping parking, dropping the payment link, saying
-    // the total is before tax) are net-neutral to slightly shorter. Do
-    // not treat this number as a budget to spend: it is a latency guard,
-    // every character of it is spoken-word instructions the model reads
-    // before it can answer, and the next person to need more room should
-    // cut something first.
-    expect(prompt.length).toBeLessThan(6500);
+    // Raised twice now.
+    //
+    // First, from 6000, and only by the size of one new section: the
+    // prompt now had to describe cancel_reservation and
+    // change_reservation, since an endpoint the prompt never mentions is
+    // an endpoint the agent never calls, and leaving the ceiling where
+    // it was would have meant shipping two tools no caller could reach
+    // while the prompt still listed "Book, change, or cancel a table
+    // reservation" as something it can do.
+    //
+    // Second, from 6500 to 7500, for the owner's explicit call to add
+    // sales behaviour: warmer, more reactive tone in "How you sound",
+    // and one bounded suggestive-sell offer in "Taking an order" (a
+    // side, a drink, a dessert, the bigger size, or a pairing -- named
+    // only from what get_menu returned this call, offered once, dropped
+    // for the rest of the call on anything but a yes). This is exactly
+    // the "cut something first" test warns against doing lightly, so it
+    // was not done lightly: the two additions were trimmed for length
+    // before this ceiling moved at all, and the suggestive-sell offer is
+    // capped at one attempt per call specifically so it costs one extra
+    // turn on an order call, not one extra turn per item. Do not treat
+    // this number as a budget to spend: it is a latency guard, every
+    // character of it is spoken-word instructions the model reads before
+    // it can answer, and the next person to need more room should cut
+    // something first.
+    expect(prompt.length).toBeLessThan(7500);
   });
 
   it("falls back to 'not on file' when the address is empty or blank", () => {
@@ -184,7 +230,7 @@ describe("template", () => {
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "19d6dbc153ad28984a1ca3962da1a807879e017df24ac30232328322cf247e00",
+      "7b6ebb3231a446e850a8bc45e330a31e9e7bd90db40fcb7d5b5be8d4f3172389",
     );
   });
 
