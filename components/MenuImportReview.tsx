@@ -16,7 +16,9 @@ import {
   itemCents,
   itemEdited,
   itemFlags,
+  nextPosition,
   publishBlocker,
+  restoreItem,
   reviewCounts,
   toPublishItems,
   usedCategories,
@@ -114,19 +116,22 @@ export function MenuImportReview({
 
   const putBack = useCallback((item: ReviewItem) => {
     setRemoved((prev) => prev.filter((i) => i.key !== item.key));
-    setDraft((prev) => {
-      // Back where it was: the model's own order is the order the card
-      // prints, and an item that reappears at the bottom of its section
-      // is a small lie about the menu.
-      const items = [...prev.items, item].sort((a, b) => a.key.localeCompare(b.key, "en"));
-      return { ...prev, items };
-    });
+    // Back where it was, and nothing else moved: the model's own order is
+    // the order the card prints, and an item that reappears somewhere
+    // else -- or shoves its neighbours around on the way back in -- is a
+    // small lie about the menu, told in the list somebody is checking
+    // against the photograph and again in the order the assistant reads.
+    setDraft((prev) => ({ ...prev, items: restoreItem(prev.items, item) }));
   }, []);
 
-  const add = useCallback((categoryKey: string) => {
-    const item = blankItem(categoryKey, `h${crypto.randomUUID()}`);
-    setDraft((prev) => ({ ...prev, items: [...prev.items, item] }));
-  }, []);
+  const add = useCallback(
+    (categoryKey: string) => {
+      const position = nextPosition(draft.items, removed);
+      const item = blankItem(categoryKey, `h${crypto.randomUUID()}`, position);
+      setDraft((prev) => ({ ...prev, items: [...prev.items, item] }));
+    },
+    [draft.items, removed],
+  );
 
   const renameSection = useCallback((key: string, name: string) => {
     setDraft((prev) => ({

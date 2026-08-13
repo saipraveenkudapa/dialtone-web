@@ -8,14 +8,17 @@ import {
   itemCents,
   itemEdited,
   itemFlags,
+  nextPosition,
   publishArrays,
   publishBlocker,
   readExtraction,
+  restoreItem,
   reviewCounts,
   toPublishItems,
   usedCategories,
   type PublishItem,
   type ReviewDraft,
+  type ReviewItem,
 } from "@/lib/menu-imports/review";
 
 /* The human gate, as data.
@@ -139,7 +142,7 @@ describe("the draft a person works on", () => {
   });
 
   it("gives an item a person adds no model to check, and counts it as done", () => {
-    const added = blankItem("c0", "h1");
+    const added = blankItem("c0", "h1", 0);
     expect(added.origin).toBe("human");
     expect(added.confirmed).toBe(true);
     expect(added.said).toBeNull();
@@ -156,6 +159,109 @@ describe("the draft a person works on", () => {
     ]);
     const emptied = { ...draft, items: draft.items.filter((i) => i.categoryKey !== "c1") };
     expect(usedCategories(emptied).map((c) => c.name)).toEqual(["Antipasti"]);
+  });
+});
+
+/* Taking an item out and putting it back.
+ *
+ * The one action on this screen that can quietly change the order of a
+ * menu. The order matters twice: it is the order somebody reads the list
+ * in while checking it against the photograph, and it is the sort_order
+ * the assistant later reads the menu to a caller in. Ordering the list by
+ * key put "c0i10" before "c0i2", so every section of eleven items or more
+ * came back reordered -- which is why these fixtures are long. */
+describe("remove and put back", () => {
+  /** A section long enough that a string sort over "c0i2"/"c0i10" is
+   *  wrong: twelve dishes, named for their place on the card. */
+  const longSection = () =>
+    draftOf([
+      category(
+        "Antipasti",
+        Array.from({ length: 12 }, (_, i) =>
+          item({ name: `Dish ${i}`, price_as_printed: `${i + 5}.00` }),
+        ),
+      ),
+    ]);
+
+  /** What the screen does when somebody presses Remove. */
+  const without = (draft: ReviewDraft, key: string): ReviewItem[] =>
+    draft.items.filter((i) => i.key !== key);
+
+  it("numbers every row in the order the card printed it", () => {
+    const draft = draftOf([
+      category("Antipasti", [item(), item({ name: "Olive" })]),
+      category("Dolci", [item({ name: "Tiramisu" })]),
+    ]);
+    // One run of numbers across the whole menu, not one per section, so
+    // any two rows can be compared.
+    expect(draft.items.map((i) => i.position)).toEqual([0, 1, 2]);
+  });
+
+  it("puts a row back exactly where it was, on a section keys sort wrong", () => {
+    const draft = longSection();
+    const card = draft.items.map((i) => i.name);
+    // "c0i10" sorts before "c0i2": the two rows a key sort swaps.
+    expect("c0i10".localeCompare("c0i2", "en")).toBeLessThan(0);
+
+    const taken = draft.items[2];
+    expect(taken.key).toBe("c0i2");
+    expect(restoreItem(without(draft, taken.key), taken).map((i) => i.name)).toEqual(card);
+  });
+
+  it("moves nothing else when a row goes back in", () => {
+    const draft = longSection();
+    const taken = draft.items[10];
+    const left = without(draft, taken.key);
+    const back = restoreItem(left, taken);
+    // Every other row is the same object in the same relative order.
+    expect(back.filter((i) => i.key !== taken.key)).toEqual(left);
+    expect(back.map((i) => i.position)).toEqual(
+      [...back].map((i) => i.position).sort((a, b) => a - b),
+    );
+  });
+
+  it("gets the card back however many rows are taken out, in any order", () => {
+    const draft = longSection();
+    const card = draft.items.map((i) => i.name);
+    const takenKeys = ["c0i2", "c0i10", "c0i0", "c0i11", "c0i7"];
+    const taken = takenKeys.map((k) => draft.items.find((i) => i.key === k)!);
+
+    let items = draft.items.filter((i) => !takenKeys.includes(i.key));
+    // Put back newest-first, which is the order the removed list offers.
+    for (const item of [...taken].reverse()) items = restoreItem(items, item);
+
+    expect(items.map((i) => i.name)).toEqual(card);
+  });
+
+  it("publishes a put-back menu in the order shown on the screen", () => {
+    const draft = confirmAll(longSection());
+    const taken = draft.items[2];
+    const restored = { ...draft, items: restoreItem(without(draft, taken.key), taken) };
+    expect(toPublishItems(restored).map((i) => i.name)).toEqual(
+      draft.items.map((i) => i.name),
+    );
+  });
+
+  it("puts a row a person added back where they added it, not among the model's", () => {
+    const draft = longSection();
+    const added = blankItem("c0", "h1", nextPosition(draft.items, []));
+    const withAdded = [...draft.items, added];
+    expect(restoreItem(draft.items, added)).toEqual(withAdded);
+    // And it stays at the end after a round trip through Remove.
+    expect(restoreItem(draft.items, added).map((i) => i.key).at(-1)).toBe("h1");
+  });
+
+  it("gives an added row a place past one still sitting in the removed pile", () => {
+    const draft = longSection();
+    const removed = [draft.items[3]];
+    const kept = without(draft, "c0i3");
+    const added = blankItem("c0", "h1", nextPosition(kept, removed));
+    // Past the whole card, removed rows included, so putting that row
+    // back afterwards cannot land on top of the added one.
+    expect(added.position).toBe(12);
+    const items = restoreItem([...kept, added], removed[0]);
+    expect(items.map((i) => i.key).at(-1)).toBe("h1");
+    expect(items.map((i) => i.name)).toEqual([...draft.items.map((i) => i.name), ""]);
   });
 });
 

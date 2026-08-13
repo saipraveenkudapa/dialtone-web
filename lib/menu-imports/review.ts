@@ -92,6 +92,13 @@ export type ModelSaid = {
 export type ReviewItem = {
   /** Stable for React and for tests. */
   key: string;
+  /** Where this row sits in the list, as the card printed it.
+   *
+   *  A number rather than something read back off the key, because keys
+   *  are strings and "c0i10" sorts before "c0i2": ordering by key would
+   *  reorder any section of eleven items or more the first time somebody
+   *  put a row back. */
+  position: number;
   categoryKey: string;
   origin: ReviewOrigin;
   /** Which uploaded file this was read from, so "go and look at it" names
@@ -164,6 +171,7 @@ export function draftFromExtraction(extraction: MenuExtraction): ReviewDraft {
     category.items.forEach((item, i) => {
       items.push({
         key: `c${c}i${i}`,
+        position: items.length,
         categoryKey,
         origin: "model",
         fileIndex: item.file_index,
@@ -201,9 +209,14 @@ export function draftFromExtraction(extraction: MenuExtraction): ReviewDraft {
  *  meant to answer "what has nobody looked at yet?", which this is not.
  *  It is still subject to every other rule: publishing refuses it if the
  *  price does not parse, exactly like any other row. */
-export function blankItem(categoryKey: string, key: string): ReviewItem {
+export function blankItem(
+  categoryKey: string,
+  key: string,
+  position: number,
+): ReviewItem {
   return {
     key,
+    position,
     categoryKey,
     origin: "human",
     fileIndex: -1,
@@ -214,6 +227,34 @@ export function blankItem(categoryKey: string, key: string): ReviewItem {
     confirmed: true,
     said: null,
   };
+}
+
+/** The position the next added row takes: past everything the review is
+ *  holding, the removed pile included, so a row somebody adds cannot land
+ *  on top of one they put back afterwards. */
+export function nextPosition(...lists: ReviewItem[][]): number {
+  let highest = -1;
+  for (const list of lists) {
+    for (const item of list) {
+      if (item.position > highest) highest = item.position;
+    }
+  }
+  return highest + 1;
+}
+
+/** An item put back where it was.
+ *
+ *  An insertion, not a re-sort: the list is already in position order, so
+ *  every other row stays exactly where the person checking it left it.
+ *  Re-sorting the list by key did this wrong -- "c0i10" sorts before
+ *  "c0i2", so one "put it back" on a section of eleven items moved item
+ *  10 ahead of item 2, both in the list being read against the photograph
+ *  and in the sort_order the assistant would then read the menu in. */
+export function restoreItem(items: ReviewItem[], item: ReviewItem): ReviewItem[] {
+  const at = items.findIndex((i) => i.position > item.position);
+  const restored = [...items];
+  restored.splice(at === -1 ? restored.length : at, 0, item);
+  return restored;
 }
 
 /* ── what the screen has to say about one item ──────────────────────── */
@@ -498,7 +539,8 @@ export function toPublishItems(draft: ReviewDraft): PublishItem[] {
   return [...draft.items]
     .sort(
       (a, b) =>
-        (order.get(a.categoryKey) ?? 0) - (order.get(b.categoryKey) ?? 0),
+        (order.get(a.categoryKey) ?? 0) - (order.get(b.categoryKey) ?? 0) ||
+        a.position - b.position,
     )
     .map((item) => ({
       category: nameByKey.get(item.categoryKey) ?? "",
