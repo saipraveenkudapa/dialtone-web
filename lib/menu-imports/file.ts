@@ -20,6 +20,13 @@ export const MAX_MENU_FILE_BYTES = 10 * 1024 * 1024;
  *  single extraction run has to read. */
 export const MAX_MENU_FILES = 10;
 
+/** 16 MiB across one menu, which the per-file limit above does not imply:
+ *  ten files at ten megabytes each is a hundred, and the whole batch goes
+ *  to the model in a single request whose body is base64 (four bytes on
+ *  the wire for every three stored) and capped at 32 MB. Refusing here,
+ *  by name, beats a 413 from an API the owner has never heard of. */
+export const MAX_MENU_BATCH_BYTES = 16 * 1024 * 1024;
+
 type UploadKind = { extension: string; sourceType: MenuImportSourceType };
 
 /** Deliberately no HEIC. iPhones can produce it, but nothing downstream
@@ -110,6 +117,21 @@ export function menuUploadPath(locationId: string, objectId: string, contentType
   const kind = menuUploadKind(contentType);
   if (!kind) throw new Error("menuUploadPath: unsupported content type");
   return `${locationId}/${objectId}.${kind.extension}`;
+}
+
+/** The content type of a stored object, read back from the extension the
+ *  server itself put on the path. What the model has to be told a file is
+ *  -- `image/jpeg` and `application/pdf` are different kinds of content
+ *  block -- and the path is the only description of the bytes that this
+ *  app wrote rather than took from a browser. */
+export function menuUploadMediaType(path: string): string | null {
+  const dot = path.lastIndexOf(".");
+  if (dot === -1) return null;
+  const extension = path.slice(dot + 1).toLowerCase();
+  for (const [contentType, kind] of Object.entries(MENU_UPLOAD_TYPES)) {
+    if (kind.extension === extension) return contentType;
+  }
+  return null;
 }
 
 /** Does this path sit inside this location's folder? Checked on the

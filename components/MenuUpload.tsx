@@ -9,7 +9,12 @@ import {
   fileSize,
 } from "@/lib/menu-imports/file";
 import { uploadMenuFile } from "@/lib/menu-imports/upload";
-import { discardMenuImport, menuImportViewUrl } from "@/app/menu-imports/actions";
+import { extractionSummary } from "@/lib/menu-imports/extraction";
+import {
+  discardMenuImport,
+  menuImportViewUrl,
+  readMenuImports,
+} from "@/app/menu-imports/actions";
 import { dateTimeIn } from "@/lib/format";
 import type { MenuImportRow } from "@/lib/supabase/types";
 
@@ -63,8 +68,23 @@ export function MenuUpload({
   );
   const [links, setLinks] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
 
   const counted = entries.filter((e) => e.state !== "rejected").length;
+
+  // Files uploaded together are read together -- a section that runs off
+  // the bottom of one photo and onto the top of the next is one section,
+  // and only a single read of the whole batch can see that. This list is
+  // usually one id long: everything picked in this sitting. It can be
+  // longer when the screen also shows a batch from an earlier visit that
+  // was never read.
+  const unread = [
+    ...new Set(
+      entries.flatMap((e) =>
+        e.state === "stored" && e.row.status === "pending" ? [e.row.batch_id] : [],
+      ),
+    ),
+  ];
 
   const publish = useCallback(
     (next: Entry[]) => {
@@ -150,6 +170,37 @@ export function MenuUpload({
     publish(entries.filter((e) => e.key !== entry.key));
   }
 
+  /** Hand every unread batch on this screen to the reader, one call each.
+   *
+   *  Nothing a caller hears moves here. A finished read leaves the files
+   *  where they are and the rows at 'needs_review', which is a promise
+   *  that a person will see every price before the assistant quotes one.
+   *  A read that fails leaves the rows pending, so the same photographs
+   *  can be read again without uploading them twice. */
+  async function read() {
+    if (!locationId || unread.length === 0) return;
+    setReading(true);
+    setNotice(null);
+
+    for (const batch of unread) {
+      const result = await readMenuImports({ locationId, batchId: batch });
+      if (result.error) {
+        setNotice(result.error);
+        continue;
+      }
+      const byId = new Map((result.menuImports ?? []).map((row) => [row.id, row]));
+      setEntries((prev) =>
+        prev.map((e) =>
+          e.state === "stored" && byId.has(e.row.id)
+            ? { ...e, row: byId.get(e.row.id)! }
+            : e,
+        ),
+      );
+    }
+
+    setReading(false);
+  }
+
   async function reveal(row: MenuImportRow) {
     if (!locationId) return;
     const result = await menuImportViewUrl({ locationId, importId: row.id });
@@ -188,6 +239,24 @@ export function MenuUpload({
       </div>
 
       {notice ? <p className="setup-error">{notice}</p> : null}
+
+      {locationId && unread.length > 0 ? (
+        <div className="upload-read">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={disabled || reading}
+            onClick={() => void read()}
+          >
+            {reading ? "Reading…" : "Read these files"}
+          </button>
+          <span className="text-muted setup-note">
+            Claude reads the prices, descriptions and any ingredients the menu prints, and
+            leaves them here for you to check. Nothing reaches the assistant until you
+            confirm it.
+          </span>
+        </div>
+      ) : null}
 
       {entries.length === 0 ? (
         <p className="text-muted empty-note">Nothing uploaded yet.</p>
@@ -253,7 +322,11 @@ function metaOf(entry: Entry, timezone: string): string {
   if (entry.state === "uploading") return fileSize(entry.size);
   if (entry.state === "rejected") return "Not stored";
   const size = entry.row.byte_size ? `${fileSize(entry.row.byte_size)} · ` : "";
-  return `${size}${dateTimeIn(timezone, entry.row.created_at)}`;
+  const when = dateTimeIn(timezone, entry.row.created_at);
+  // What was read, once something has been: "4 to check" is the only part
+  // of this line anybody acts on, so it goes last, where the eye lands.
+  const read = extractionSummary(entry.row.raw_extraction);
+  return `${size}${when}${read ? ` · ${read}` : ""}`;
 }
 
 function statusLabel(entry: Entry): string {

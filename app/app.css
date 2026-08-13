@@ -828,3 +828,15 @@ a:hover { color: var(--color-accent); }
   .upload-row { flex-wrap: wrap; }
   .upload-actions { width: 100%; }
 }
+
+/* The one action on an uploaded menu: hand it to the reader. Secondary
+   rather than primary -- typing the menu in is still the certain path,
+   and this button spends the restaurant's money. */
+.upload-read {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+.upload-read .setup-note { flex: 1; min-width: 240px; margin: 0; }

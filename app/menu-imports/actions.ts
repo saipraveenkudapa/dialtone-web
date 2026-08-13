@@ -11,8 +11,11 @@ import {
   cleanFileName,
   isPathInLocation,
   isUuid,
+  menuUploadMediaType,
   menuUploadPath,
 } from "@/lib/menu-imports/file";
+import { extractionHasItems } from "@/lib/menu-imports/extraction";
+import { readMenu, type MenuReadFile } from "@/lib/menu-imports/read";
 import type { MenuImportRow } from "@/lib/supabase/types";
 
 /** Storing a photo of a menu, and nothing more.
@@ -260,7 +263,11 @@ export async function recordMenuImport(input: {
  *  read and rejected; this is the blurry photo nobody has spent a model
  *  call on yet, and keeping a row whose source_path points at a deleted
  *  object would just be a lie in the table. Refuses once extraction has
- *  produced anything, which is the moment there is something to audit. */
+ *  produced something to audit -- and only then. A read that came back
+ *  "this is a photo of a parking meter", or that could make nothing out
+ *  at all, has produced no item anybody will ever confirm, and refusing
+ *  to delete it would leave the owner holding a file they can neither
+ *  review nor remove. */
 export async function discardMenuImport(input: {
   locationId: string;
   importId: string;
@@ -271,17 +278,21 @@ export async function discardMenuImport(input: {
 
   const { data: row } = await who.db
     .from("menu_imports")
-    .select("id, location_id, source_path, status")
+    .select("id, location_id, source_path, status, raw_extraction")
     .eq("id", input.importId)
     .eq("location_id", input.locationId)
     .maybeSingle();
 
   if (!row) return { error: REFUSED };
-  if ((row as MenuImportRow).status !== "pending") {
+  const found = row as MenuImportRow;
+  const removable =
+    found.status === "pending" ||
+    (found.status === "needs_review" && !extractionHasItems(found.raw_extraction));
+  if (!removable) {
     return { error: "That import has already been read. Review it instead." };
   }
 
-  const path = (row as MenuImportRow).source_path;
+  const path = found.source_path;
   if (path && isPathInLocation(path, input.locationId)) {
     const { error: removeError } = await who.db.storage
       .from(MENU_UPLOAD_BUCKET)
@@ -340,4 +351,116 @@ export async function menuImportViewUrl(input: {
     return { error: "Could not open that file. Try again." };
   }
   return { url: data.signedUrl };
+}
+
+/** Step three: read the menu, and put what was read in front of a human.
+ *
+ *  The whole batch is read in one call. A menu is often three photos and
+ *  a section routinely runs off the bottom of one onto the top of the
+ *  next; reading them separately would invent a category break that is
+ *  not on the card. So every pending file of the batch goes to the model
+ *  together, and every row of the batch gets the same answer, differing
+ *  only in which file that row is.
+ *
+ *  What this does NOT do is write a menu. It writes raw_extraction and
+ *  moves 'pending' to 'needs_review', which is the whole distance a model
+ *  is allowed to move a price on its own. menu_items is untouched here
+ *  and stays untouched until a human confirms, in the review step -- a
+ *  wrong price read down the phone comes out of the restaurant's pocket,
+ *  and no model has ever been the one to sign for that.
+ *
+ *  Every outcome lands in front of a human, including "this is not a
+ *  menu" and "I could not read this". A model calling a hand-lettered
+ *  chalkboard unreadable is exactly the call an owner overrules, so the
+ *  verdict is stored and shown rather than acted on. Only a failure
+ *  before any answer -- no key, no network, a truncated reply -- leaves
+ *  the rows pending, so the same files can be read again without an
+ *  upload. */
+export async function readMenuImports(input: {
+  locationId: string;
+  batchId: string;
+}): Promise<{ menuImports?: MenuImportRow[]; error?: string }> {
+  const who = await reach(input.locationId);
+  if (!who) return { error: REFUSED };
+  if (!isUuid(input.batchId)) return { error: REFUSED };
+
+  // Oldest first: the order the owner picked the files is the order the
+  // pages of their menu run in.
+  const { data: rows, error: readError } = await who.db
+    .from("menu_imports")
+    .select("*")
+    .eq("location_id", input.locationId)
+    .eq("batch_id", input.batchId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true });
+
+  if (readError) {
+    console.error("[menu-imports] could not list the batch", readError);
+    return { error: "Could not open those files. Try again." };
+  }
+
+  const pending = (rows ?? []) as MenuImportRow[];
+  if (pending.length === 0) {
+    // Either somebody else just read them, or a second click arrived
+    // behind the first. Not an error worth alarming anyone about, and
+    // deliberately not a second model call on the same photographs.
+    return { error: "Those files have already been read." };
+  }
+
+  const files: MenuReadFile[] = [];
+  for (const row of pending) {
+    const path = row.source_path;
+    if (!path || !isPathInLocation(path, input.locationId)) return { error: REFUSED };
+
+    const mediaType = menuUploadMediaType(path);
+    if (!mediaType) {
+      return { error: `${row.original_filename ?? "That file"} is not a kind we can read.` };
+    }
+
+    const { data: blob, error: downloadError } = await who.db.storage
+      .from(MENU_UPLOAD_BUCKET)
+      .download(path);
+
+    if (downloadError || !blob) {
+      console.error("[menu-imports] could not fetch a stored file", downloadError);
+      return { error: "One of those files could not be opened. Try again." };
+    }
+
+    const bytes = Buffer.from(await blob.arrayBuffer());
+    files.push({
+      filename: row.original_filename,
+      mediaType,
+      bytes: bytes.byteLength,
+      base64: bytes.toString("base64"),
+      sourceType: row.source_type,
+    });
+  }
+
+  const read = await readMenu(files);
+  // Nothing was read, so nothing is written: the rows stay 'pending' and
+  // the owner can try again without uploading the photographs twice.
+  if (!read.ok) return { error: read.error };
+
+  const updated: MenuImportRow[] = [];
+  for (const [index, row] of pending.entries()) {
+    const { data, error } = await who.db
+      .from("menu_imports")
+      .update({ raw_extraction: read.extractions[index], status: "needs_review" })
+      .eq("id", row.id)
+      .eq("location_id", input.locationId)
+      // Still pending, or somebody else got there first and this answer
+      // is not the one to overwrite theirs with.
+      .eq("status", "pending")
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      console.error("[menu-imports] could not save what was read", error);
+      return { error: "The menu was read but could not be saved. Try again." };
+    }
+    if (data) updated.push(data as MenuImportRow);
+  }
+
+  revalidatePath("/dashboard/menu");
+  return { menuImports: updated };
 }
