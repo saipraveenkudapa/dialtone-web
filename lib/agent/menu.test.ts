@@ -20,6 +20,7 @@ const item = (
   name: string,
   price_cents: number,
   sold_out_until: "close" | "reopen" | null,
+  extra: { description?: string | null; allergen_note?: string | null } = {},
 ) =>
   ({
     id,
@@ -32,6 +33,7 @@ const item = (
     allergen_note: null,
     sort_order: 1,
     updated_at: "2026-08-12T00:00:00Z",
+    ...extra,
   }) as MenuCategoryWithItems["items"][number];
 
 const buffalo = item("i1", "Buffalo Wings", 1400, "close");
@@ -69,6 +71,84 @@ describe("menu shaping", () => {
     expect(suggestAlternative(menu, { name: "Buffalo Wings" })).toBeNull();
     expect(suggestAlternative(menu, ["Buffalo Wings"])).toBeNull();
     expect(suggestAlternative(menu, null)).toBeNull();
+  });
+});
+
+describe("what a dish comes with", () => {
+  // The description is the only field on a menu item a person actually
+  // wrote or confirmed -- typed in the editor (whose placeholder for the
+  // box is literally "Black pepper, pecorino") or moved there, line by
+  // line, from an import somebody signed off. Handing it to the agent as
+  // `ingredients` is what lets it describe a dish at all.
+  it("carries the description a person wrote, as ingredients", () => {
+    const pepe = item("i9", "Cacio e Pepe", 2200, null, {
+      description: "Black pepper, pecorino",
+    });
+    const menu = shapeMenu(category([pepe]));
+    expect(menu.categories[0].items[0].ingredients).toBe("Black pepper, pecorino");
+  });
+
+  // Not `null`, not `""` -- the key is not there at all. get_menu is
+  // fetched live on every call that mentions food and sits in the latency
+  // budget, and today every one of Nonna Rosa's fourteen items has an
+  // empty description: a null per item, on every call, forever, buys
+  // nothing. `toHaveProperty` rather than a truthiness check, because
+  // `{ingredients: undefined}` would pass the latter and still be a key
+  // on the wire.
+  it("says nothing at all when nobody wrote anything", () => {
+    const menu = shapeMenu(categories);
+    expect(menu.categories[0].items[0]).not.toHaveProperty("ingredients");
+    expect(JSON.stringify(menu)).not.toContain("ingredients");
+  });
+
+  it("treats a whitespace-only description as nothing written", () => {
+    const blank = item("i9", "Affogato", 900, null, { description: "   " });
+    const menu = shapeMenu(category([blank]));
+    expect(menu.categories[0].items[0]).not.toHaveProperty("ingredients");
+  });
+
+  it("trims what it does send", () => {
+    const padded = item("i9", "Affogato", 900, null, {
+      description: "  Espresso, fior di latte  ",
+    });
+    const menu = shapeMenu(category([padded]));
+    expect(menu.categories[0].items[0].ingredients).toBe("Espresso, fior di latte");
+  });
+
+  // The one that costs a restaurant money if it ever goes the other way.
+  // allergen_note is staff reference text on the row right next to the
+  // description; the schema comment on it says outright that the agent
+  // must never answer from it, and the prompt transfers every allergy
+  // question to a person. If it ever reached this payload, a model would
+  // have an allergen claim in its context on every call, and "never
+  // answer an allergy question" would be the only thing standing between
+  // that claim and a caller with coeliac disease. It must not be in the
+  // bytes at all.
+  it("never carries the allergen note, not under any key", () => {
+    const risky = item("i9", "Lasagne Verdi", 2600, null, {
+      description: "Spinach pasta, ragù, besciamella",
+      allergen_note: "Contains gluten, dairy and egg",
+    });
+    const menu = shapeMenu(category([risky]));
+    const wire = JSON.stringify(menu);
+    expect(wire).not.toContain("allergen");
+    expect(wire).not.toContain("gluten");
+    expect(menu.categories[0].items[0].ingredients).toBe(
+      "Spinach pasta, ragù, besciamella",
+    );
+  });
+
+  // A sold-out item is still described: "what's in the squid ink one?"
+  // is a fair question about a dish the caller cannot have tonight, and
+  // an agent that goes quiet on it sounds like it does not know its own
+  // menu.
+  it("still describes an item that is sold out", () => {
+    const out = item("i9", "Squid Ink Tonnarelli", 2900, "close", {
+      description: "Squid ink, chilli, breadcrumb",
+    });
+    const menu = shapeMenu(category([out]));
+    expect(menu.categories[0].items[0].sold_out).toBe(true);
+    expect(menu.categories[0].items[0].ingredients).toBe("Squid ink, chilli, breadcrumb");
   });
 });
 

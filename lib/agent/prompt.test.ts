@@ -131,6 +131,15 @@ describe("system prompt", () => {
     expect(languageSection).toContain(
       "stay in the language you are confident in rather than guess",
     );
+    // The half of the menu-name rule that only "## Language" can carry:
+    // what the agent SAYS out loud. The other half of that sentence (what
+    // may reach place_order) was cut from here as duplication -- it is
+    // asserted in full at the call site by the test below -- so this is
+    // what stops a caller hearing "los ñoquis con mantequilla dorada"
+    // for an item the kitchen prints as Gnocchi, Brown Butter.
+    expect(languageSection).toContain(
+      "Menu item names are never translated - say and confirm them exactly as get_menu gave them.",
+    );
   });
 
   // Menu item names are never translated (the owner's second decision: no
@@ -169,6 +178,62 @@ describe("system prompt", () => {
     );
     expect(soundSection).toContain("Thank them for calling");
     expect(soundSection).toContain("react to what they say");
+  });
+
+  // get_menu now returns each item's ingredients where a person put them
+  // in the description (lib/agent/menu.ts). This is the whole reason that
+  // is safe: a dish may be DESCRIBED -- good selling, and what a caller
+  // asking "what's in the cacio e pepe?" out of curiosity actually wants
+  // -- while an allergy question is still not answered by anybody but a
+  // human. The two failure modes that would put a restaurant on the hook
+  // are (a) the agent reading the description out as though it were the
+  // complete contents of the dish, and (b) the agent finishing the
+  // description it had already started when the caller says "because I'm
+  // coeliac" halfway through. Both are pinned here, in the section that
+  // does the describing, so neither can be lost to a reword of the menu
+  // rules alone.
+  it("lets a dish be described without letting the description become an allergy answer", () => {
+    const menuSection = prompt.slice(
+      prompt.indexOf("## The menu"),
+      prompt.indexOf("## Taking an order"),
+    );
+    expect(menuSection).toContain(
+      "When get_menu gives an item ingredients and a caller asks about a dish out of plain interest, tell them what it generally comes with.",
+    );
+    expect(menuSection).toContain("It sells the dish, so do it.");
+    expect(menuSection).toContain(
+      "That is what the kitchen puts on it, not everything that is in it.",
+    );
+    expect(menuSection).toContain("Never call it the whole list");
+    expect(menuSection).toContain(
+      "never let it stand as an answer to whether something is in a dish or not",
+    );
+    expect(menuSection).toContain(
+      "If an allergy, an intolerance, celiac, or any health reason comes up, even halfway through describing a dish, stop and follow the allergy rule below.",
+    );
+  });
+
+  // And the rule it hands off to is untouched, byte for byte. Describing
+  // a dish is an addition ALONGSIDE this, never a softening of it: the
+  // agent still does not answer, does not guess, does not read
+  // ingredients, and transfers -- with no exceptions.
+  it("leaves the allergy hard rule exactly as it was", () => {
+    const allergySection = prompt.slice(
+      prompt.indexOf("## Allergies - hard rule"),
+      prompt.indexOf("## When to transfer to a human"),
+    );
+    expect(allergySection).toContain(
+      "If anyone mentions an allergy, an intolerance, celiac, or asks what is in a dish for a health reason, stop.",
+    );
+    expect(allergySection).toContain(
+      "Do not answer. Do not guess. Do not read ingredients.",
+    );
+    expect(allergySection).toContain(
+      'Say: "I want to make sure you get that exactly right - let me put you through to someone."',
+    );
+    expect(allergySection).toContain(
+      "Then transfer immediately. There are no exceptions to this.",
+    );
   });
 
   it("keeps the agent from disparaging the restaurant", () => {
@@ -216,7 +281,23 @@ describe("system prompt", () => {
     // is a latency guard, every character of it is spoken-word
     // instructions the model reads before it can answer, and the next
     // person to need more room should cut something first.
-    expect(prompt.length).toBeLessThan(8500);
+    //
+    // Fourth, from 8500 to 8800, for letting the agent describe a dish:
+    // get_menu now carries each item's ingredients where a person wrote
+    // them down, and three short paragraphs in "## The menu" say what
+    // may be done with them -- say what a dish generally comes with when
+    // a caller asks out of interest, never present that as everything
+    // that is in it, and stop dead the moment a health reason is
+    // mentioned. Something was cut first, as this note demands: the
+    // "## Language" section used to end by repeating that only the exact
+    // name get_menu gave an item may reach place_order, which is said
+    // again, in full, at the place_order call site itself -- and the
+    // "handles an ambiguous item where place_order is called" test above
+    // is the standing argument that the call site is the copy that does
+    // the work. The half of that line that is NOT about place_order --
+    // never translate a menu item name when you say it out loud -- stays
+    // in "## Language", and is asserted below.
+    expect(prompt.length).toBeLessThan(8800);
   });
 
   it("falls back to 'not on file' when the address is empty or blank", () => {
@@ -283,7 +364,7 @@ describe("template", () => {
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "52a3fe069d404d32bb7bc29eb86f0d09c7853ad4ec1897ce89f9735eca758ffb",
+      "99042b5046cd347fd6cd11128f969a8b2cc83f3d9c0a95c20a54e2260a414cea",
     );
   });
 

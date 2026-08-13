@@ -326,6 +326,21 @@ const TAX_CANARY_RATE_BPS = 500; // 5% -- nonzero, unlike the demo location
 const TAX_CANARY_ITEM_PRICE_CENTS = 13;
 const TAX_CANARY_ITEM_NAME = "Zzyzx Tax Canary";
 
+// What a described dish looks like on the wire. get_menu returns an
+// item's ingredients where a person wrote them into the description --
+// the one field on a menu row that only a human ever fills, whether
+// typed in the editor or moved there item by item out of a confirmed
+// import. The demo location's fourteen items all have an empty
+// description today, so the described case cannot be observed on it
+// without writing to a live restaurant's menu; this canary carries it
+// instead, and carries an allergen note beside it precisely so the
+// check that the note never leaves the database has something real to
+// fail against. The note names a real allergen in plain words: a
+// substring search for it is only meaningful if a leak would actually
+// spell something.
+const INGREDIENT_CANARY_DESCRIPTION = "Black pepper, pecorino, guanciale";
+const INGREDIENT_CANARY_ALLERGEN_NOTE = "Contains gluten and dairy; fryer is shared";
+
 // The canary the hours checks run against: a window narrow enough that
 // times either side of it are unambiguously shut, and exactly two seats,
 // so one booking for two fills it and the alternatives the route offers
@@ -438,6 +453,15 @@ async function provisionCanaries(orgId) {
       location_id: isolated.id,
       name: "Zzyzx Canary Special",
       price_cents: 999,
+      // The described item. Its sibling below (the tax canary) is left
+      // with no description on purpose, so one menu answers both halves
+      // of the question: what a described item looks like, and that an
+      // item nobody described costs nothing on the wire.
+      description: INGREDIENT_CANARY_DESCRIPTION,
+      // Reference text for staff, never for a caller. Written here so
+      // "it never reaches the agent" is a check against a row that
+      // really has one, not an assertion about an empty column.
+      allergen_note: INGREDIENT_CANARY_ALLERGEN_NOTE,
     }),
     "insert canary menu item",
   );
@@ -807,6 +831,72 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
     canaryItemNames.includes("Zzyzx Canary Special") &&
       !canaryItemNames.some((n) => demoItemNames.includes(n)),
     JSON.stringify(canaryItemNames),
+  );
+
+  // ── What a dish comes with ────────────────────────────────────────
+  //
+  // The agent can now describe a dish, and everything about whether that
+  // is safe is decided by these bytes. Four things have to be true of the
+  // payload, and none of them can be read off the demo menu alone, whose
+  // descriptions are all empty: the canary provisioned above carries a
+  // described item, an undescribed one, and an allergen note beside the
+  // description, so all four are observable without writing a single
+  // character to a live restaurant's menu.
+  const canaryItems = (canaryMenu.body?.categories ?? []).flatMap((c) => c.items);
+  const described = canaryItems.find((i) => i.name === "Zzyzx Canary Special");
+  const undescribed = canaryItems.find((i) => i.name === TAX_CANARY_ITEM_NAME);
+
+  // One. What a person wrote is what the agent is handed -- not a
+  // summary of it, not a reordering of it. The agent reads this aloud;
+  // anything but the exact words is the restaurant being quoted saying
+  // something nobody at the restaurant wrote.
+  check(
+    "get_menu hands over the ingredients a person wrote, exactly as written",
+    described?.ingredients === INGREDIENT_CANARY_DESCRIPTION,
+    JSON.stringify(described),
+  );
+
+  // Two. An item nobody described costs nothing. Not `null`, not `""` --
+  // no key. This is fetched on every call that mentions food and sits in
+  // the latency budget, and today every one of Nonna Rosa's items would
+  // be paying for an empty field.
+  check(
+    "an item nobody described carries no ingredients field at all",
+    undescribed !== undefined && !("ingredients" in undescribed),
+    JSON.stringify(undescribed),
+  );
+
+  // Three. The one that comes out of the restaurant's pocket. The
+  // allergen note sits in the column next to the description on the very
+  // row this payload is built from, and it is staff reference text: a
+  // laminated card cannot know the fryer is shared. If it ever reached
+  // the model's context, "never answer an allergy question" would be the
+  // only thing between that text and a caller with coeliac disease. It
+  // must not be in the bytes -- neither the note, nor the word, nor the
+  // allergen it names.
+  const canaryWire = JSON.stringify(canaryMenu.body ?? {});
+  const demoWire = JSON.stringify(demoMenu.body ?? {});
+  check(
+    "the allergen note never leaves the database, on either menu",
+    !canaryWire.includes(INGREDIENT_CANARY_ALLERGEN_NOTE) &&
+      !canaryWire.includes("allergen") &&
+      !canaryWire.includes("gluten") &&
+      !demoWire.includes("allergen"),
+    `canary ${canaryWire.length} bytes, demo ${demoWire.length} bytes`,
+  );
+
+  // Four. The invariant that stays true whatever anybody types into the
+  // editor tomorrow: an ingredients field is either absent or it is real
+  // words. A blank one read aloud is an agent saying a dish comes with
+  // nothing.
+  const everyItem = [...canaryItems, ...(demoMenu.body?.categories ?? []).flatMap((c) => c.items)];
+  const emptyIngredients = everyItem.filter(
+    (i) => "ingredients" in i && (typeof i.ingredients !== "string" || i.ingredients.trim() === ""),
+  );
+  check(
+    "no menu ever sends an empty, blank or null ingredients field",
+    emptyIngredients.length === 0,
+    `${everyItem.length} items checked, ${emptyIngredients.length} empty`,
   );
 
   // Isolation on the READ side (get_menu) says nothing about the WRITE
