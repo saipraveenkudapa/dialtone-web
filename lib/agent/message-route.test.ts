@@ -79,6 +79,35 @@ vi.mock("@/lib/supabase/admin", () => ({
 
 const { POST } = await import("@/app/api/agent/message/route");
 
+/** Vapi's envelope, unwrapped: `{results:[{toolCallId, result|error}]}`.
+ *  The wrapper's own shape is asserted on the way past, so every test
+ *  that reads a payload also pins the always-200 status, the results
+ *  ARRAY and its single entry. */
+async function toolResult(res: Response) {
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(Array.isArray(body.results)).toBe(true);
+  expect(body.results).toHaveLength(1);
+  return body.results[0] as { toolCallId: string | null; result?: string; error?: string };
+}
+
+/** The success payload, parsed back out of its single-line string --
+ *  Vapi requires `result` to be a STRING, not an object. */
+async function okResult(res: Response) {
+  const entry = await toolResult(res);
+  expect(entry.error).toBeUndefined();
+  expect(typeof entry.result).toBe("string");
+  return JSON.parse(entry.result as string);
+}
+
+/** The sentence the agent reads out on a refusal. */
+async function failMessage(res: Response) {
+  const entry = await toolResult(res);
+  expect(entry.result).toBeUndefined();
+  return entry.error;
+}
+
+
 function request(body?: unknown, { rawBody, secret }: { rawBody?: string; secret?: string } = {}) {
   return new Request("https://x.test/api/agent/message", {
     method: "POST",
@@ -114,8 +143,7 @@ describe("POST /api/agent/message", () => {
   it("writes the message against the location the secret resolved to", async () => {
     const res = await POST(request({ ...MESSAGE, provider_call_id: "vapi-123" }));
 
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, taken: true });
+    expect(await okResult(res)).toEqual({ taken: true });
     expect(inserted).toEqual([
       {
         location_id: LOCATION.id,
@@ -156,6 +184,34 @@ describe("POST /api/agent/message", () => {
     expect(inserted[0].call_id).toBeNull();
   });
 
+  it("attaches the call using Vapi's own message.call.id, not a body field", async () => {
+    // Vapi puts the call id at `message.call.id` and nowhere else. The
+    // route used to look for a top-level `provider_call_id`, which Vapi
+    // has never sent -- so `messages.call_id` was null on every row ever
+    // written. This is that wiring, end to end.
+    const res = await POST(
+      request({
+        message: {
+          type: "tool-calls",
+          toolCalls: [
+            {
+              id: "call_9w3zzVmqKj04ah0kW95p5BjI",
+              type: "function",
+              function: { name: "take_message", arguments: JSON.stringify(MESSAGE) },
+            },
+          ],
+          call: { id: CALL_ROW.provider_call_id },
+        },
+      }),
+    );
+
+    expect(await okResult(res)).toEqual({ taken: true });
+    expect(inserted[0].call_id).toBe(CALL_ROW.id);
+    expect(inserted[0].location_id).toBe(LOCATION.id);
+    // ...and the caller's own words still made it through the envelope.
+    expect(inserted[0].body).toBe(MESSAGE.message);
+  });
+
   it("takes the message when the payload carries no provider_call_id at all", async () => {
     const res = await POST(request(MESSAGE));
     expect(res.status).toBe(200);
@@ -181,27 +237,30 @@ describe("POST /api/agent/message", () => {
 
     for (const [body, spoken] of cases) {
       const res = await POST(request(body));
-      // 400 and a sentence a person can hear: the caller can answer this,
-      // so it is a question, not a failure.
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ ok: false, error: spoken });
+      // A sentence a person can hear: the caller can answer this, so it
+      // is a question, not a failure. It used to be 400 -- which Vapi
+      // ignores completely, so the question never reached the caller.
+      expect(res.status).toBe(200);
+      expect(await failMessage(res)).toBe(spoken);
     }
     expect(inserted).toHaveLength(0);
   });
 
   it("asks again on a malformed body rather than 500ing", async () => {
     const res = await POST(request(undefined, { rawBody: "not json{" }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ ok: false, error: "I didn't catch your name." });
+    expect(res.status).toBe(200);
+    expect(await failMessage(res)).toBe("I didn't catch your name.");
     expect(inserted).toHaveLength(0);
   });
 
-  it("500s with a speakable apology when the write fails, logging only the location and SQLSTATE", async () => {
+  it("apologises speakably when the write fails, logging only the location and SQLSTATE", async () => {
     insertResult = async () => ({ error: { code: "23514" } });
 
     const res = await POST(request(MESSAGE));
-    expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ ok: false, error: "I couldn't get that message down." });
+    // Was 500. Vapi discards any non-200 entirely, so the apology this
+    // test exists to protect never reached the caller at all.
+    expect(res.status).toBe(200);
+    expect(await failMessage(res)).toBe("I couldn't get that message down.");
 
     // Never the caller's name, number or words -- a PostgrestError's
     // details would carry all three.

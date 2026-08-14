@@ -1,12 +1,19 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
+import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
+import { parseToolCall } from "@/lib/agent/vapi";
 import { openState, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
 
 /** get_hours. Asked whenever there is any question about being open. */
 export async function POST(request: Request) {
+  // Parsed before the secret lookup, because the unauthorised branch now
+  // needs the toolCallId too -- and `request.json()` may only be consumed
+  // once, so this is the single read. `null` rather than `{}` is the
+  // honest "no readable body"; parseToolCall branch A handles it.
+  const call = parseToolCall(await request.json().catch(() => null));
+
   const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  if (!location) return agentUnauthorised(call.toolCallId);
 
   const supabase = supabaseAdmin();
   const [hours, holidays] = await Promise.all([
@@ -24,7 +31,7 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: (hours.error ?? holidays.error)?.code ?? null,
     });
-    return agentFail("I can't check the hours right now.", 500);
+    return agentFail("I can't check the hours right now.", call.toolCallId);
   }
 
   return agentOk(
@@ -34,5 +41,6 @@ export async function POST(request: Request) {
       hours: (hours.data ?? []) as HoursRow[],
       holidays: (holidays.data ?? []) as HolidayRow[],
     }),
+    call.toolCallId,
   );
 }

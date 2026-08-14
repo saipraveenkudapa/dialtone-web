@@ -37,7 +37,7 @@ export function buildTransferLogUpdate(reason: string | undefined) {
  *  be. */
 export async function logTransferOutcome(
   locationId: string,
-  providerCallId: string | undefined,
+  providerCallId: string | null | undefined,
   reason: string | undefined,
 ) {
   try {

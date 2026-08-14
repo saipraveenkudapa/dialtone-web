@@ -9,7 +9,11 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
  *  booking or an order to another restaurant's call. */
 export async function callIdForProvider(
   locationId: string,
-  providerCallId: string | undefined,
+  // `string | null` since the id now comes from `message.call.id` via
+  // parseToolCall, which reports "could not tell" as null. The body
+  // already opened with `if (!providerCallId) return null`, so this was
+  // correct at runtime all along; only the annotation was wrong.
+  providerCallId: string | null | undefined,
 ) {
   if (!providerCallId) return null;
 

@@ -1,8 +1,9 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
+import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
+import { parseToolCall } from "@/lib/agent/vapi";
 import { isRequestInPast } from "@/lib/agent/availability";
-import { hasUsableCallerName, hasUsableCallerPhone } from "@/lib/agent/caller";
+import { callerFieldText, hasUsableCallerName, hasUsableCallerPhone } from "@/lib/agent/caller";
 
 /** What `public.cancel_booking` answers with. */
 type CancelBookingResult = {
@@ -16,7 +17,7 @@ type CancelBookingResult = {
 /** Refusals the agent can act on. Everything else `cancel_booking` can
  *  return describes a request this route was supposed to have validated
  *  first, so seeing one means the two have drifted apart -- a fault to
- *  log and a 500, not a sentence to read to a caller. Same shape as the
+ *  log and apologise for, not a sentence to read to a caller. Same shape as the
  *  order route's SPEAKABLE_REFUSALS. */
 const SPEAKABLE_REFUSALS = new Set(["not_found", "ambiguous"]);
 
@@ -51,19 +52,39 @@ const SPEAKABLE_REFUSALS = new Set(["not_found", "ambiguous"]);
  *  that produces a sentence a person can hear, and the wording of the
  *  answer. */
 export async function POST(request: Request) {
-  const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  // Parsed before the secret lookup, because the unauthorised branch now
+  // needs the toolCallId too -- and `request.json()` may only be consumed
+  // once, so this is the single read. `null` rather than `{}` is the
+  // honest "no readable body"; parseToolCall branch A handles it.
+  const call = parseToolCall(await request.json().catch(() => null));
 
-  const body = (await request.json().catch(() => ({}))) as {
+  const location = await locationForSecret(agentSecretFromRequest(request));
+  if (!location) return agentUnauthorised(call.toolCallId);
+
+  // The model's arguments live inside the tool call, never at the top
+  // level of the body -- see lib/agent/vapi.ts.
+  const args = call.args as {
     booking_time?: string;
-    customer_name?: string;
-    customer_phone?: string;
+    // `unknown`, not `string`. These two arrive from a JSON.parse of a
+    // model-authored arguments string, and a cast claiming `string` is
+    // what stopped tsc noticing that `"customer_phone": 5105550100` --
+    // the shape lib/agent/messages.ts names as the one a tool payload
+    // plausibly carries unquoted -- reached `.replace` and threw a
+    // framework 500 out of this handler, which Vapi discards entirely.
+    customer_name?: unknown;
+    customer_phone?: unknown;
   };
 
-  const when = body.booking_time ? new Date(body.booking_time) : null;
+  // Coerced once, up front, so the strings the gate below judges are the
+  // exact strings `app.caller_name_key` / `app.caller_phone_key` are
+  // given. See lib/agent/caller.ts.
+  const customerName = callerFieldText(args.customer_name);
+  const customerPhone = callerFieldText(args.customer_phone);
+
+  const when = args.booking_time ? new Date(args.booking_time) : null;
 
   if (!when || Number.isNaN(when.getTime())) {
-    return agentFail("I didn't catch when the booking is for.");
+    return agentFail("I didn't catch when the booking is for.", call.toolCallId);
   }
   // The same past-time gate, with the same clock-skew tolerance, that
   // check_availability and create_reservation apply to `requested_at`.
@@ -74,7 +95,7 @@ export async function POST(request: Request) {
   // because "that one's already past" is a different sentence from "I
   // can't find it" and the caller deserves the true one.
   if (isRequestInPast(when, new Date())) {
-    return agentFail("That booking has already passed.");
+    return agentFail("That booking has already passed.", call.toolCallId);
   }
   // Both, always -- and each has to be something app.caller_name_key /
   // app.caller_phone_key can actually turn into a key, not merely a
@@ -87,14 +108,14 @@ export async function POST(request: Request) {
   // six digits, is the same problem wearing a different shape: both
   // normalise to NULL in SQL, and cancel_booking answers that with
   // `missing_details` -- which is not in SPEAKABLE_REFUSALS below and so
-  // would otherwise fall straight into the log-and-500 branch, telling a
+  // would otherwise fall straight into the log-and-apologise branch, telling a
   // caller "I can't get to the book right now" for something as ordinary
   // as a misheard name. Caught here instead, before the call, and
   // answered the way every other unheard field in this route is: ask
   // again. See lib/agent/caller.ts for why this check does not have to
   // reproduce the SQL normalisation exactly to do that job.
-  if (!hasUsableCallerName(body.customer_name) || !hasUsableCallerPhone(body.customer_phone)) {
-    return agentFail("I still need the name and number the booking's under.");
+  if (!hasUsableCallerName(customerName) || !hasUsableCallerPhone(customerPhone)) {
+    return agentFail("I still need the name and number the booking's under.", call.toolCallId);
   }
 
   // No opening-hours gate here, deliberately, unlike create_reservation
@@ -108,8 +129,8 @@ export async function POST(request: Request) {
   const { data, error } = await supabaseAdmin()
     .rpc("cancel_booking", {
       p_location_id: location.id,
-      p_customer_name: body.customer_name,
-      p_customer_phone: body.customer_phone,
+      p_customer_name: customerName,
+      p_customer_phone: customerPhone,
       p_when: when.toISOString(),
     })
     .single<CancelBookingResult>();
@@ -125,7 +146,7 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: error?.code ?? null,
     });
-    return agentFail("I can't get to the book right now.", 500);
+    return agentFail("I can't get to the book right now.", call.toolCallId);
   }
 
   if (!data.cancelled) {
@@ -136,13 +157,13 @@ export async function POST(request: Request) {
       // yours", which is precisely the moment this agent is designed to
       // stop and get a person: picking one would cancel a table
       // belonging to somebody who is not on the phone.
-      return agentOk({ cancelled: false, reason: data.reason });
+      return agentOk({ cancelled: false, reason: data.reason }, call.toolCallId);
     }
     console.error("[agent] cancel_booking refused for a reason this route should have caught", {
       location_id: location.id,
       reason: data.reason,
     });
-    return agentFail("I can't get to the book right now.", 500);
+    return agentFail("I can't get to the book right now.", call.toolCallId);
   }
 
   // `data.already_cancelled` is deliberately not in the response, for
@@ -173,5 +194,5 @@ export async function POST(request: Request) {
           timeZone: location.timezone,
         }).format(new Date(data.booking_at))
       : null,
-  });
+  }, call.toolCallId);
 }

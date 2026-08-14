@@ -287,6 +287,39 @@ export type OrderLine = { item: PricedItem; quantity: number; note: string | nul
 
 export type RequestedItem = { name?: string; quantity?: unknown; note?: unknown };
 
+/** Is this actually a `RequestedItem`, or does it merely claim to be one?
+ *
+ *  `place_order`'s `items` reaches the route as a `JSON.parse` of a
+ *  model-authored `arguments` string, so `RequestedItem` is a claim about
+ *  the shape and nothing checks it -- `args.items as RequestedItem[]` is
+ *  a cast, and a cast is a promise to the compiler, not a test of the
+ *  bytes. Two element shapes went straight through it and threw out of
+ *  the route:
+ *
+ *    [null]         -> "Cannot read properties of null (reading 'name')"
+ *                      at `requestedItem.name` in buildOrderLines
+ *    [{"name": 7}]  -> "value.trim is not a function" in matchItem's
+ *                      `normalise`
+ *
+ *  Both became a framework 500, and Vapi ignores any non-200 completely,
+ *  so a caller in the middle of an order heard silence instead of "I
+ *  didn't catch that" -- the same failure the route's own `Array.isArray`
+ *  comment argues against, one level down. `["wings"]` did not throw at
+ *  all (property access on a string just yields `undefined`), which is
+ *  the reason this survived: it degraded into "we don't sell that"
+ *  rather than crashing, so nothing was ever visibly wrong.
+ *
+ *  `quantity` and `note` are deliberately not checked here.
+ *  `normaliseQuantity` and `normaliseItemNote` already take `unknown` and
+ *  answer with a refusal the agent can speak, which names the item it is
+ *  about -- a better sentence than this predicate could give. `name` is
+ *  the only field with no such guard behind it. */
+export function isRequestedItem(value: unknown): value is RequestedItem {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const name = (value as { name?: unknown }).name;
+  return name === undefined || typeof name === "string";
+}
+
 export type OrderLinesResult =
   | { ok: true; lines: OrderLine[] }
   | {

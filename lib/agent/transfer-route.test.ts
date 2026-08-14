@@ -52,17 +52,43 @@ vi.mock("next/server", () => ({
 }));
 
 const logTransferOutcomeMock = vi.fn<
-  (locationId: string, providerCallId: string | undefined, reason: string | undefined) => Promise<void>
+  (
+    locationId: string,
+    providerCallId: string | null | undefined,
+    reason: string | undefined,
+  ) => Promise<void>
 >(async () => {});
 vi.mock("@/lib/agent/transfer", () => ({
   logTransferOutcome: (
     locationId: string,
-    providerCallId: string | undefined,
+    providerCallId: string | null | undefined,
     reason: string | undefined,
   ) => logTransferOutcomeMock(locationId, providerCallId, reason),
 }));
 
 const { POST } = await import("@/app/api/agent/transfer/route");
+
+/** Vapi's envelope, unwrapped: `{results:[{toolCallId, result|error}]}`.
+ *  The wrapper's own shape is asserted on the way past, so every test
+ *  that reads a payload also pins the always-200 status, the results
+ *  ARRAY and its single entry. */
+async function toolResult(res: Response) {
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(Array.isArray(body.results)).toBe(true);
+  expect(body.results).toHaveLength(1);
+  return body.results[0] as { toolCallId: string | null; result?: string; error?: string };
+}
+
+/** The success payload, parsed back out of its single-line string --
+ *  Vapi requires `result` to be a STRING, not an object. */
+async function okResult(res: Response) {
+  const entry = await toolResult(res);
+  expect(entry.error).toBeUndefined();
+  expect(typeof entry.result).toBe("string");
+  return JSON.parse(entry.result as string);
+}
+
 
 function request(body?: unknown, { rawBody, secret }: { rawBody?: string; secret?: string } = {}) {
   return new Request("https://x.test/api/agent/transfer", {
@@ -86,9 +112,43 @@ describe("POST /api/agent/transfer", () => {
     errorSpy.mockClear();
   });
 
-  it("401s without scheduling anything when the secret matches no location", async () => {
+  it("401s a non-tool-call request whose secret matches no location, scheduling nothing", async () => {
+    // Kept, deliberately. A flat body carries no toolCallId, so nobody is
+    // on the phone behind it -- it is a probe or a misrouted client, and
+    // answering it 200 would delete the only cheap perimeter signal there
+    // is.
     const res = await POST(request({ reason: "test" }, { secret: "wrong" }));
     expect(res.status).toBe(401);
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it("answers a REAL tool call with a bad secret 200, so the caller hears a sentence", async () => {
+    // The other half of the same decision. This used to be a 401, which
+    // Vapi ignores completely -- so a live caller heard silence. Nothing
+    // loosens: no location is resolved, nothing is read, nothing written.
+    const res = await POST(
+      request(
+        {
+          message: {
+            type: "tool-calls",
+            toolCalls: [
+              {
+                id: "call_9w3zzVmqKj04ah0kW95p5BjI",
+                type: "function",
+                function: { name: "transfer_to_human", arguments: "{}" },
+              },
+            ],
+            call: { id: "01a000a0-430a-766c-ad61-b9ac47a0552b" },
+          },
+        },
+        { secret: "wrong" },
+      ),
+    );
+    const entry = await toolResult(res);
+    expect(entry.toolCallId).toBe("call_9w3zzVmqKj04ah0kW95p5BjI");
+    expect(typeof entry.error).toBe("string");
+    // The number is never handed out, and nothing is scheduled.
+    expect(entry.result).toBeUndefined();
     expect(scheduled).toHaveLength(0);
   });
 
@@ -96,8 +156,7 @@ describe("POST /api/agent/transfer", () => {
     const res = await POST(
       request({ reason: "shellfish allergy", provider_call_id: "vapi-1" }),
     );
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, number: LOCATION.fallback_human_number });
+    expect(await okResult(res)).toEqual({ number: LOCATION.fallback_human_number });
 
     expect(afterMock).toHaveBeenCalledTimes(1);
     // Not run yet -- after() only schedules. logTransferOutcome is only
@@ -120,8 +179,7 @@ describe("POST /api/agent/transfer", () => {
     // The response already resolved above -- proving it never depended
     // on the scheduled write -- before the rejecting callback has run at
     // all.
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, number: LOCATION.fallback_human_number });
+    expect(await okResult(res)).toEqual({ number: LOCATION.fallback_human_number });
 
     // Running the scheduled task later must not surface as an unhandled
     // rejection either (real `after()` wraps this in its own try/catch;
@@ -139,8 +197,7 @@ describe("POST /api/agent/transfer", () => {
 
     const res = await POST(request({ reason: "wants a manager", provider_call_id: "vapi-3" }));
 
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, number: LOCATION.fallback_human_number });
+    expect(await okResult(res)).toEqual({ number: LOCATION.fallback_human_number });
     await expect(scheduled[0]()).resolves.toBeUndefined();
   });
 
@@ -151,26 +208,25 @@ describe("POST /api/agent/transfer", () => {
 
     const res = await POST(request({ reason: "test", provider_call_id: "vapi-4" }));
 
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, number: LOCATION.fallback_human_number });
+    expect(await okResult(res)).toEqual({ number: LOCATION.fallback_human_number });
     expect(errorSpy).toHaveBeenCalled();
   });
 
   it("still yields a transfer when the request body is malformed JSON", async () => {
     const res = await POST(request(undefined, { rawBody: "not json{" }));
 
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, number: LOCATION.fallback_human_number });
+    expect(await okResult(res)).toEqual({ number: LOCATION.fallback_human_number });
 
     await scheduled[0]();
-    // No reason and no provider_call_id could be read from the body, so
-    // the scheduled task is told exactly that rather than guessing.
-    expect(logTransferOutcomeMock).toHaveBeenCalledWith(LOCATION.id, undefined, undefined);
+    // Nothing could be read from the body, so the scheduled task is told
+    // exactly that rather than guessing. `null` rather than `undefined`
+    // for the call id: parseToolCall reports "could not tell" as null,
+    // the same answer a body of an unrecognised shape gets.
+    expect(logTransferOutcomeMock).toHaveBeenCalledWith(LOCATION.id, null, undefined);
   });
 
   it("yields a transfer with no body at all", async () => {
     const res = await POST(request(undefined));
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, number: LOCATION.fallback_human_number });
+    expect(await okResult(res)).toEqual({ number: LOCATION.fallback_human_number });
   });
 });

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
+import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
+import { parseToolCall } from "@/lib/agent/vapi";
 import {
   isRequestInPast,
   nearestOpenTimes,
@@ -24,33 +25,41 @@ import { openAt, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
  *  sweep (`seatsTaken`) and the same hours logic (`openAt`) rather than a
  *  second opinion about either. */
 export async function POST(request: Request) {
-  const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  // Parsed before the secret lookup, because the unauthorised branch now
+  // needs the toolCallId too -- and `request.json()` may only be consumed
+  // once, so this is the single read. `null` rather than `{}` is the
+  // honest "no readable body"; parseToolCall branch A handles it.
+  const call = parseToolCall(await request.json().catch(() => null));
 
-  const body = (await request.json().catch(() => ({}))) as {
+  const location = await locationForSecret(agentSecretFromRequest(request));
+  if (!location) return agentUnauthorised(call.toolCallId);
+
+  // The model's arguments live inside the tool call, never at the top
+  // level of the body -- see lib/agent/vapi.ts.
+  const args = call.args as {
     requested_at?: string;
     party_size?: number;
   };
 
-  const when = body.requested_at ? new Date(body.requested_at) : null;
-  const party = Number(body.party_size ?? 0);
+  const when = args.requested_at ? new Date(args.requested_at) : null;
+  const party = Number(args.party_size ?? 0);
   const now = new Date();
 
   if (!when || Number.isNaN(when.getTime())) {
-    return agentFail("I didn't catch the date and time for that.");
+    return agentFail("I didn't catch the date and time for that.", call.toolCallId);
   }
   if (isRequestInPast(when, now)) {
-    return agentFail("That time has already passed.");
+    return agentFail("That time has already passed.", call.toolCallId);
   }
   if (!Number.isInteger(party) || party < 1) {
-    return agentFail("I didn't catch how many people.");
+    return agentFail("I didn't catch how many people.", call.toolCallId);
   }
   if (party > location.max_party_size) {
     return agentOk({
       available: false,
       reason: "large_party",
       alternatives: [],
-    });
+    }, call.toolCallId);
   }
 
   const slot = location.reservation_slot_minutes;
@@ -85,7 +94,7 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: (bookings.error ?? hours.error ?? holidays.error)?.code ?? null,
     });
-    return agentFail("I can't check the book right now.", 500);
+    return agentFail("I can't check the book right now.", call.toolCallId);
   }
 
   const booked = bookings.data ?? [];
@@ -121,7 +130,7 @@ export async function POST(request: Request) {
       // saved booking, and every candidate has been through the same
       // hours check that just refused this one.
       alternatives: alternatives(),
-    });
+    }, call.toolCallId);
   }
 
   const available = fits(when);
@@ -129,5 +138,5 @@ export async function POST(request: Request) {
   return agentOk({
     available,
     alternatives: available ? [] : alternatives(),
-  });
+  }, call.toolCallId);
 }

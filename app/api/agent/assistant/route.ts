@@ -1,6 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
 import { openState, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
 import { buildGreeting, buildSystemPrompt } from "@/lib/agent/prompt";
 
@@ -11,6 +10,16 @@ import { buildGreeting, buildSystemPrompt } from "@/lib/agent/prompt";
 const CONFIG_TTL_MS = 5 * 60 * 1000;
 
 /** The assistant's configuration for this restaurant.
+ *
+ *  NOT a Vapi tool, and deliberately not on lib/agent/respond.ts. It has
+ *  no entry in AGENT_TOOLS; it is fetched over plain HTTP by
+ *  scripts/provision-vapi.mjs, which asserts `!res.ok || !json?.ok` and
+ *  then reads `config.assistant_enabled` / `config.system_prompt`.
+ *  Wrapping this in `{results:[{result:"..."}]}` would break provisioning
+ *  for every new restaurant, and answering 200 on a bad secret would
+ *  break that script's explicit 401 message. So the four returns below
+ *  are inlined rather than shared: `respond.ts` is the Vapi tool
+ *  envelope, full stop.
  *
  *  Callers of this route MUST fetch it fresh for every call, never cache
  *  or store the response. `system_prompt` has the date and today's hours
@@ -36,14 +45,15 @@ const CONFIG_TTL_MS = 5 * 60 * 1000;
  *  `kill_switch_on || !is_live` before ever dialing the assistant. */
 export async function POST(request: Request) {
   const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  if (!location) return Response.json({ ok: false, error: "Not authorised" }, { status: 401 });
 
   // Fail closed. A caller must never reach the AI while the switch is on
   // or the location isn't live, so this is checked before anything else
   // is assembled -- there is no code path below this that can produce a
   // usable system_prompt for a disabled location.
   if (location.kill_switch_on || !location.is_live) {
-    return agentOk({
+    return Response.json({
+      ok: true,
       assistant_enabled: false,
       disabled_reason: location.kill_switch_on ? "kill_switch" : "not_live",
       system_prompt: null,
@@ -65,7 +75,10 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: (hours.error ?? holidays.error)?.code ?? null,
     });
-    return agentFail("I can't put the assistant together right now.", 500);
+    return Response.json(
+      { ok: false, error: "I can't put the assistant together right now." },
+      { status: 500 },
+    );
   }
 
   // One instant for both the open/closed calculation and the prompt's
@@ -82,7 +95,8 @@ export async function POST(request: Request) {
 
   const expiresAt = new Date(now.getTime() + CONFIG_TTL_MS);
 
-  return agentOk({
+  return Response.json({
+    ok: true,
     assistant_enabled: true,
     system_prompt: buildSystemPrompt({
       location,

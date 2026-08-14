@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildOrderLines,
+  isRequestedItem,
   matchesSpokenName,
   matchItem,
   normaliseOrderType,
@@ -561,5 +562,65 @@ describe("matchesSpokenName", () => {
     expect(matchesSpokenName("Hamburger", "ham")).toBe(false);
     expect(matchesSpokenName("Buffalo Wings", "")).toBe(false);
     expect(matchesSpokenName("Buffalo Wings", "   ")).toBe(false);
+  });
+});
+
+/** The runtime half of `RequestedItem`, which until now had none.
+ *
+ *  `app/api/agent/order/route.ts` reached `buildOrderLines` through
+ *  `args.items as RequestedItem[]` -- a cast over a `JSON.parse` of a
+ *  model-authored `arguments` string. The two shapes below used to reach
+ *  the matcher and throw straight out of the handler, and Vapi ignores a
+ *  non-200 completely, so a caller mid-order heard nothing at all. */
+describe("isRequestedItem", () => {
+  it("accepts what a place_order item is declared to be", () => {
+    expect(isRequestedItem({ name: "bucatini" })).toBe(true);
+    expect(isRequestedItem({ name: "bucatini", quantity: 2, note: "no chilli" })).toBe(true);
+    // `name` absent is legitimate -- buildOrderLines already answers it
+    // as unknown_item, in a sentence, without throwing.
+    expect(isRequestedItem({})).toBe(true);
+    expect(isRequestedItem({ quantity: 2 })).toBe(true);
+    expect(isRequestedItem({ name: "" })).toBe(true);
+  });
+
+  it("rejects the two shapes that threw out of the order route", () => {
+    // "Cannot read properties of null (reading 'name')" in
+    // buildOrderLines.
+    expect(isRequestedItem(null)).toBe(false);
+    // "value.trim is not a function" in matchItem's `normalise`.
+    expect(isRequestedItem({ name: 7 })).toBe(false);
+  });
+
+  it("rejects the shapes that did not throw but were never an item either", () => {
+    // These degraded quietly into "we don't sell that" -- property
+    // access on a string or a number just yields undefined -- which is
+    // why nothing ever looked wrong.
+    expect(isRequestedItem("wings")).toBe(false);
+    expect(isRequestedItem(42)).toBe(false);
+    expect(isRequestedItem(true)).toBe(false);
+    expect(isRequestedItem(undefined)).toBe(false);
+    expect(isRequestedItem(["bucatini"])).toBe(false);
+    expect(isRequestedItem([])).toBe(false);
+    expect(isRequestedItem({ name: { first: "bucatini" } })).toBe(false);
+    expect(isRequestedItem({ name: null })).toBe(false);
+    expect(isRequestedItem({ name: ["bucatini"] })).toBe(false);
+  });
+
+  it("leaves quantity and note alone -- each already has a guard with a better sentence", () => {
+    // normaliseQuantity/normaliseItemNote take `unknown` and refuse in a
+    // way that names the item; this predicate could only say "I didn't
+    // catch what you'd like to order" about the whole basket.
+    expect(isRequestedItem({ name: "bucatini", quantity: "two" })).toBe(true);
+    expect(isRequestedItem({ name: "bucatini", note: 42 })).toBe(true);
+  });
+
+  it("narrows an array so buildOrderLines needs no cast to be called", () => {
+    const raw: unknown[] = [{ name: "bucatini", quantity: 2 }, { name: "lasagne verdi" }];
+    // The `.every` narrowing is what lets `as RequestedItem[]` go away in
+    // the route -- assert that the value it produces is actually usable.
+    expect(raw.every(isRequestedItem)).toBe(true);
+    if (raw.every(isRequestedItem)) {
+      expect(buildOrderLines(items, raw).ok).toBe(true);
+    }
   });
 });

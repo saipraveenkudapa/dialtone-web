@@ -24,10 +24,44 @@
  *  booking; this is an earlier, cheaper gate in front of them, not a
  *  replacement. */
 
-export function hasUsableCallerName(name: string | null | undefined): boolean {
-  return (name ?? "").replace(/[^a-zA-Z\s]/g, "").trim().length > 0;
+/** The text form of a spoken field as it actually arrived.
+ *
+ *  Every value asked about here came out of a `JSON.parse` of a
+ *  model-authored `arguments` string, so its declared type is a claim
+ *  about the shape, not a guarantee about the bytes -- and the routes
+ *  reach it through an `as {customer_phone?: string}` cast, which is
+ *  precisely what stops tsc from noticing the difference. The two
+ *  predicates below used to take `string | null | undefined` and call
+ *  `.replace` on whatever turned up, so `"customer_phone": 5105550100`
+ *  threw `TypeError: replace is not a function` out of the handler. An
+ *  unwrapped throw in a route is a framework 500, and Vapi ignores any
+ *  non-200 completely -- so a caller ringing to cancel or move a table
+ *  heard nothing at all.
+ *
+ *  Finite numbers are COERCED rather than refused, for the reason
+ *  lib/agent/messages.ts gives for `spokenPhone`: a callback number is
+ *  the one field a tool payload plausibly carries unquoted, and asking a
+ *  caller to repeat a number the agent heard perfectly well is a refusal
+ *  they cannot answer. NaN and Infinity stringify into things that are
+ *  not numbers at all, so they are not numbers here either. Everything
+ *  else -- an object, an array, a boolean, null, undefined -- is not a
+ *  mis-heard field but a payload nobody should guess at, and becomes the
+ *  empty string, which both predicates already answer "no" to.
+ *
+ *  Exported because the value the gate approves has to be the value the
+ *  route sends to SQL: a check that passes "5105550100" and then hands
+ *  Postgres the JSON number 5105550100 has approved something it did not
+ *  send. */
+export function callerFieldText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+  return "";
 }
 
-export function hasUsableCallerPhone(phone: string | null | undefined): boolean {
-  return (phone ?? "").replace(/[^0-9]/g, "").length >= 7;
+export function hasUsableCallerName(name: unknown): boolean {
+  return callerFieldText(name).replace(/[^a-zA-Z\s]/g, "").trim().length > 0;
+}
+
+export function hasUsableCallerPhone(phone: unknown): boolean {
+  return callerFieldText(phone).replace(/[^0-9]/g, "").length >= 7;
 }

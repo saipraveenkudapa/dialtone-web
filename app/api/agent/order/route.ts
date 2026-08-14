@@ -1,14 +1,15 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
+import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
+import { parseToolCall } from "@/lib/agent/vapi";
 import { callIdForProvider } from "@/lib/agent/context";
 import {
   buildOrderLines,
+  isRequestedItem,
   normaliseOrderType,
   MAX_ITEM_QUANTITY,
   MAX_ORDER_LINES,
   type PricedItem,
-  type RequestedItem,
 } from "@/lib/agent/orders";
 import { orderMessage, sendOrderSms } from "@/lib/agent/notify";
 import { openAt, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
@@ -29,7 +30,7 @@ type PlaceOrderResult = {
 /** Refusals the agent can say out loud. Every other reason the function
  *  can return describes a request this route has already validated, so
  *  seeing one means the two have drifted apart -- which is a fault to log
- *  and a 500, not a sentence to read to a caller. */
+ *  and apologise for, not a reason to read to a caller. */
 const SPEAKABLE_REFUSALS = new Set(["unknown_item", "sold_out", "no_delivery", "no_pickup"]);
 
 /** place_order. Prices from the live menu, never from what the agent
@@ -53,51 +54,76 @@ const SPEAKABLE_REFUSALS = new Set(["unknown_item", "sold_out", "no_delivery", "
  *  that produces a sentence a person can hear, resolving spoken words to
  *  menu ids, and the wording of the answer. */
 export async function POST(request: Request) {
-  const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  // Parsed before the secret lookup, because the unauthorised branch now
+  // needs the toolCallId too -- and `request.json()` may only be consumed
+  // once, so this is the single read. `null` rather than `{}` is the
+  // honest "no readable body"; parseToolCall branch A handles it.
+  const call = parseToolCall(await request.json().catch(() => null));
 
-  const body = (await request.json().catch(() => ({}))) as {
+  const location = await locationForSecret(agentSecretFromRequest(request));
+  if (!location) return agentUnauthorised(call.toolCallId);
+
+  // The model's arguments live inside the tool call, never at the top
+  // level of the body -- see lib/agent/vapi.ts.
+  const args = call.args as {
     items?: unknown;
     type?: unknown;
     customer_name?: string;
     customer_phone?: string;
     address?: string;
-    provider_call_id?: string;
   };
 
   // Array.isArray, not `.length`: a body of `{"items": {"length": 2}}`
   // satisfies a length check and then throws on `for...of` inside
   // buildOrderLines, and an unwrapped throw in a route becomes a
-  // framework 500 -- an empty body the agent cannot speak -- instead of
-  // `{ok:false,error}`. No route under app/api/agent/ catches exceptions;
+  // framework 500 -- which Vapi discards entirely, so the caller hears
+  // nothing at all -- instead of a `results` envelope carrying a spoken
+  // error. No route under app/api/agent/ catches exceptions;
   // they validate up front, so this one does too.
-  if (!Array.isArray(body.items) || body.items.length === 0) {
-    return agentFail("I don't have any items yet.");
+  if (!Array.isArray(args.items) || args.items.length === 0) {
+    return agentFail("I don't have any items yet.", call.toolCallId);
   }
-  const requestedItems = body.items as RequestedItem[];
+  // ...and the same argument one level down, which the check above did
+  // not finish making. `Array.isArray` guards the WRAPPER only, so
+  // `items:[null]` still threw on `.name` inside buildOrderLines and
+  // `items:[{"name":7}]` still threw inside matchItem's `normalise` --
+  // both escaping this handler as the framework 500 the comment above
+  // exists to prevent, with a caller mid-order on the line. `items` is a
+  // JSON.parse of a model-authored argument string, so `as
+  // RequestedItem[]` was a promise to the compiler about bytes nobody
+  // had looked at; `isRequestedItem` is that promise actually kept, and
+  // narrowing through `.every` is what lets the cast go away entirely.
+  //
+  // Refused rather than skipped: an item silently dropped from a ticket
+  // is the failure `bad_note` is refused for, and a caller who says four
+  // things and hears three read back has to catch it themselves.
+  if (!args.items.every(isRequestedItem)) {
+    return agentFail("I didn't catch what you'd like to order.", call.toolCallId);
+  }
+  const requestedItems = args.items;
 
-  if (!body.customer_name || !body.customer_phone) {
-    return agentFail("I still need a name and a callback number.");
+  if (!args.customer_name || !args.customer_phone) {
+    return agentFail("I still need a name and a callback number.", call.toolCallId);
   }
 
   // "Delivery", "DELIVERY" and "delivery " all used to fall through to
   // pickup, taking the address with them.
-  const type = normaliseOrderType(body.type);
+  const type = normaliseOrderType(args.type);
   if (type === null) {
-    return agentFail("I didn't catch whether that's for pickup or delivery.");
+    return agentFail("I didn't catch whether that's for pickup or delivery.", call.toolCallId);
   }
 
   // Both directions. A location that only delivers was silently accepting
   // pickup orders, which is the same bug as one that only does pickup
   // silently accepting delivery -- and only the second was ever refused.
   if (type === "delivery" && location.order_types === "pickup") {
-    return agentOk({ placed: false, reason: "no_delivery" });
+    return agentOk({ placed: false, reason: "no_delivery" }, call.toolCallId);
   }
   if (type === "pickup" && location.order_types === "delivery") {
-    return agentOk({ placed: false, reason: "no_pickup" });
+    return agentOk({ placed: false, reason: "no_pickup" }, call.toolCallId);
   }
-  if (type === "delivery" && !body.address) {
-    return agentFail("I still need the delivery address.");
+  if (type === "delivery" && !args.address) {
+    return agentFail("I still need the delivery address.", call.toolCallId);
   }
 
   const supabase = supabaseAdmin();
@@ -127,7 +153,7 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: (menu.error ?? hours.error ?? holidays.error)?.code ?? null,
     });
-    return agentFail("I can't reach the kitchen system right now.", 500);
+    return agentFail("I can't reach the kitchen system right now.", call.toolCallId);
   }
 
   const menuItems = (menu.data ?? []) as PricedItem[];
@@ -151,6 +177,7 @@ export async function POST(request: Request) {
         built.item
           ? `I didn't catch how many ${built.item} you wanted.`
           : "I didn't catch how many of that you wanted.",
+        call.toolCallId,
       );
     }
     // Not dropped and not cooked as-is: a change the caller heard
@@ -163,16 +190,19 @@ export async function POST(request: Request) {
         built.item
           ? `I didn't catch the change you wanted on the ${built.item}.`
           : "I didn't catch the change you wanted on that.",
+        call.toolCallId,
       );
     }
     if (built.reason === "too_many_items") {
       return agentFail(
         `That's more than ${MAX_ORDER_LINES} different items -- that's too big to take over the phone. Let me put you through to someone.`,
+        call.toolCallId,
       );
     }
     if (built.reason === "too_many_of_item") {
       return agentFail(
         `I can only take up to ${MAX_ITEM_QUANTITY} of ${built.item ?? "one item"} over the phone. Let me put you through to someone.`,
+        call.toolCallId,
       );
     }
     // More than one thing on this menu answers to what the caller said --
@@ -182,8 +212,9 @@ export async function POST(request: Request) {
     // burger shop. The refusal to guess is unchanged; what is new is that
     // the answer says which question to ask and carries the names to ask
     // it with, the way `check_availability` answers a full slot with the
-    // times it could offer instead. 200, not 400: "hand cut or cheese?"
-    // is an ordinary thing a host says, not a request nobody could parse.
+    // times it could offer instead. A `result`, not an `error`: "hand cut
+    // or cheese?" is an ordinary thing a host says, not a request nobody
+    // could parse.
     if (built.reason === "ambiguous_item") {
       return agentOk({
         placed: false,
@@ -194,9 +225,9 @@ export async function POST(request: Request) {
         // how "which of these did you mean" quietly becomes a guess.
         item: built.item,
         options: built.options,
-      });
+      }, call.toolCallId);
     }
-    return agentOk({ placed: false, reason: built.reason, item: built.item });
+    return agentOk({ placed: false, reason: built.reason, item: built.item }, call.toolCallId);
   }
   const lines = built.lines;
 
@@ -225,7 +256,7 @@ export async function POST(request: Request) {
       placed: false,
       reason: "closed",
       hours_that_day: verdict.hoursThatDay,
-    });
+    }, call.toolCallId);
   }
 
   // Per-location, per-order-type: a kitchen quotes pickup and delivery
@@ -248,15 +279,15 @@ export async function POST(request: Request) {
       p_item_ids: lines.map((line) => line.item.id),
       p_quantities: lines.map((line) => line.quantity),
       p_type: type,
-      p_customer_name: body.customer_name,
-      p_customer_phone: body.customer_phone,
-      p_address: type === "delivery" ? body.address : null,
-      p_call_id: await callIdForProvider(location.id, body.provider_call_id),
+      p_customer_name: args.customer_name,
+      p_customer_phone: args.customer_phone,
+      p_address: type === "delivery" ? args.address : null,
+      p_call_id: await callIdForProvider(location.id, call.providerCallId),
       // Not the same thing as p_call_id: that is the calls row this order
       // hangs off and is null whenever no webhook has created one yet,
       // while this is the provider's own id for the call in progress and
       // is what makes a retried tool call recognisable as a retry.
-      p_provider_call_id: body.provider_call_id ?? null,
+      p_provider_call_id: call.providerCallId,
       p_promised_minutes: promisedMinutes,
       // Parallel to the two arrays above, same length and same order:
       // "no onions" belongs to one line, and an off-by-one here puts it
@@ -279,18 +310,18 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: error?.code ?? null,
     });
-    return agentFail("I couldn't get that order in.", 500);
+    return agentFail("I couldn't get that order in.", call.toolCallId);
   }
 
   if (!data.placed) {
     if (data.reason && SPEAKABLE_REFUSALS.has(data.reason)) {
-      return agentOk({ placed: false, reason: data.reason, item: data.item ?? undefined });
+      return agentOk({ placed: false, reason: data.reason, item: data.item ?? undefined }, call.toolCallId);
     }
     console.error("[agent] place_order refused for a reason this route should have caught", {
       location_id: location.id,
       reason: data.reason,
     });
-    return agentFail("I couldn't get that order in.", 500);
+    return agentFail("I couldn't get that order in.", call.toolCallId);
   }
 
   // Best effort, by design: the order row is already committed by this
@@ -320,9 +351,9 @@ export async function POST(request: Request) {
     orderMessage({
       orderNumber: data.order_number ?? 0,
       type,
-      customerName: body.customer_name,
-      customerPhone: body.customer_phone,
-      address: type === "delivery" ? body.address : null,
+      customerName: args.customer_name,
+      customerPhone: args.customer_phone,
+      address: type === "delivery" ? args.address : null,
       lines: lines.map((l) => ({
         quantity: l.quantity,
         name: l.item.name,
@@ -370,5 +401,5 @@ export async function POST(request: Request) {
     // the "Taking an order" section of lib/agent/prompt.ts). Deliberately
     // not an error: the order is fine, the notification is not.
     staff_notified: smsSent,
-  });
+  }, call.toolCallId);
 }

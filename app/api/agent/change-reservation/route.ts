@@ -1,9 +1,10 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
+import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
+import { parseToolCall } from "@/lib/agent/vapi";
 import { isRequestInPast } from "@/lib/agent/availability";
 import { openAt, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
-import { hasUsableCallerName, hasUsableCallerPhone } from "@/lib/agent/caller";
+import { callerFieldText, hasUsableCallerName, hasUsableCallerPhone } from "@/lib/agent/caller";
 
 /** What `public.change_booking` answers with. */
 type ChangeBookingResult = {
@@ -18,7 +19,7 @@ type ChangeBookingResult = {
 /** Refusals the agent can say out loud. Anything else the function can
  *  return describes a request this route has already validated, so
  *  seeing one means the route and the function have drifted apart --
- *  logged and 500, not spoken. Same shape as the order route. */
+ *  logged and apologised for, not spoken. Same shape as the order route. */
 const SPEAKABLE_REFUSALS = new Set(["not_found", "ambiguous", "full", "large_party"]);
 
 /** change_reservation.
@@ -58,26 +59,46 @@ const SPEAKABLE_REFUSALS = new Set(["not_found", "ambiguous", "full", "large_par
  *  transaction, at which the caller has given up their table and not yet
  *  got the new one. */
 export async function POST(request: Request) {
-  const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  // Parsed before the secret lookup, because the unauthorised branch now
+  // needs the toolCallId too -- and `request.json()` may only be consumed
+  // once, so this is the single read. `null` rather than `{}` is the
+  // honest "no readable body"; parseToolCall branch A handles it.
+  const call = parseToolCall(await request.json().catch(() => null));
 
-  const body = (await request.json().catch(() => ({}))) as {
+  const location = await locationForSecret(agentSecretFromRequest(request));
+  if (!location) return agentUnauthorised(call.toolCallId);
+
+  // The model's arguments live inside the tool call, never at the top
+  // level of the body -- see lib/agent/vapi.ts.
+  const args = call.args as {
     booking_time?: string;
     new_requested_at?: string;
     new_party_size?: number;
-    customer_name?: string;
-    customer_phone?: string;
+    // `unknown`, not `string` -- same reason, same failure, as
+    // cancel-reservation/route.ts: a cast claiming `string` over a
+    // JSON.parse'd argument is what let `"customer_phone": 5105550100`
+    // reach `.replace` and throw a framework 500 out of this handler,
+    // which Vapi discards entirely, so a caller moving a booking heard
+    // dead air.
+    customer_name?: unknown;
+    customer_phone?: unknown;
   };
 
-  const when = body.booking_time ? new Date(body.booking_time) : null;
-  const newWhen = body.new_requested_at ? new Date(body.new_requested_at) : null;
+  // Coerced once, up front, so the strings the gate below judges are the
+  // exact strings `app.caller_name_key` / `app.caller_phone_key` are
+  // given. See lib/agent/caller.ts.
+  const customerName = callerFieldText(args.customer_name);
+  const customerPhone = callerFieldText(args.customer_phone);
+
+  const when = args.booking_time ? new Date(args.booking_time) : null;
+  const newWhen = args.new_requested_at ? new Date(args.new_requested_at) : null;
   const now = new Date();
 
   if (!when || Number.isNaN(when.getTime())) {
-    return agentFail("I didn't catch when the booking is for now.");
+    return agentFail("I didn't catch when the booking is for now.", call.toolCallId);
   }
   if (!newWhen || Number.isNaN(newWhen.getTime())) {
-    return agentFail("I didn't catch the new date and time.");
+    return agentFail("I didn't catch the new date and time.", call.toolCallId);
   }
   // Both ends have to be in the future, and they fail differently. A
   // past `booking_time` means the table they are asking about is already
@@ -85,25 +106,25 @@ export async function POST(request: Request) {
   // to is. Two sentences, because a caller who hears the wrong one asks
   // the wrong follow-up question.
   if (isRequestInPast(when, now)) {
-    return agentFail("That booking has already passed.");
+    return agentFail("That booking has already passed.", call.toolCallId);
   }
   if (isRequestInPast(newWhen, now)) {
-    return agentFail("That time has already passed.");
+    return agentFail("That time has already passed.", call.toolCallId);
   }
   // Not merely non-empty -- each has to be something app.caller_name_key
   // / app.caller_phone_key can actually turn into a key. A name the
   // transcript reduced to "22", or a phone number heard as six digits,
   // normalises to NULL in SQL, and change_booking answers that with
   // `missing_details` -- which is not in SPEAKABLE_REFUSALS below, so it
-  // would otherwise fall into the log-and-500 branch and tell a caller
+  // would otherwise fall into the log-and-apologise branch and tell a caller
   // "I can't get to the book right now" over something as ordinary as a
   // misheard name. Caught here instead, before the call, and answered
   // the way every other unheard field in this route is: ask again. Same
   // check, same reasoning, as cancel-reservation/route.ts; see
   // lib/agent/caller.ts for why it does not have to reproduce the SQL
   // normalisation exactly to do that job.
-  if (!hasUsableCallerName(body.customer_name) || !hasUsableCallerPhone(body.customer_phone)) {
-    return agentFail("I still need the name and number the booking's under.");
+  if (!hasUsableCallerName(customerName) || !hasUsableCallerPhone(customerPhone)) {
+    return agentFail("I still need the name and number the booking's under.", call.toolCallId);
   }
 
   // Absent means "keep the party they already have": a caller moving
@@ -112,12 +133,12 @@ export async function POST(request: Request) {
   // it has forgotten the conversation. `change_booking` coalesces a null
   // to the booking's current size.
   const party =
-    body.new_party_size === undefined || body.new_party_size === null
+    args.new_party_size === undefined || args.new_party_size === null
       ? null
-      : Number(body.new_party_size);
+      : Number(args.new_party_size);
 
   if (party !== null && (!Number.isInteger(party) || party < 1)) {
-    return agentFail("I didn't catch how many people.");
+    return agentFail("I didn't catch how many people.", call.toolCallId);
   }
   // An ordinary answer with a reason the agent can speak, not a failure
   // to hear -- the same distinction create_reservation and
@@ -125,7 +146,7 @@ export async function POST(request: Request) {
   // "twelve" and is asked again will say "twelve" again, and the loop
   // has no exit.
   if (party !== null && party > location.max_party_size) {
-    return agentOk({ changed: false, reason: "large_party" });
+    return agentOk({ changed: false, reason: "large_party" }, call.toolCallId);
   }
 
   const supabase = supabaseAdmin();
@@ -139,7 +160,7 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: (hours.error ?? holidays.error)?.code ?? null,
     });
-    return agentFail("I can't get to the book right now.", 500);
+    return agentFail("I can't get to the book right now.", call.toolCallId);
   }
 
   // The NEW time, not the old one: the old one was checked when the
@@ -163,14 +184,14 @@ export async function POST(request: Request) {
       changed: false,
       reason: "closed",
       hours_that_day: verdict.hoursThatDay,
-    });
+    }, call.toolCallId);
   }
 
   const { data, error } = await supabase
     .rpc("change_booking", {
       p_location_id: location.id,
-      p_customer_name: body.customer_name,
-      p_customer_phone: body.customer_phone,
+      p_customer_name: customerName,
+      p_customer_phone: customerPhone,
       p_when: when.toISOString(),
       p_new_requested_at: newWhen.toISOString(),
       p_new_party_size: party,
@@ -186,7 +207,7 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: error?.code ?? null,
     });
-    return agentFail("I can't get to the book right now.", 500);
+    return agentFail("I can't get to the book right now.", call.toolCallId);
   }
 
   if (!data.changed) {
@@ -196,13 +217,13 @@ export async function POST(request: Request) {
       // could be yours -- let me get someone", "that time's full, want
       // to keep the one you have", "that's a big party, let me put you
       // through".
-      return agentOk({ changed: false, reason: data.reason });
+      return agentOk({ changed: false, reason: data.reason }, call.toolCallId);
     }
     console.error("[agent] change_booking refused for a reason this route should have caught", {
       location_id: location.id,
       reason: data.reason,
     });
-    return agentFail("I can't get to the book right now.", 500);
+    return agentFail("I can't get to the book right now.", call.toolCallId);
   }
 
   // `data.already_changed` is deliberately not in the response, exactly
@@ -230,5 +251,5 @@ export async function POST(request: Request) {
           timeZone: location.timezone,
         }).format(new Date(data.booking_at))
       : null,
-  });
+  }, call.toolCallId);
 }

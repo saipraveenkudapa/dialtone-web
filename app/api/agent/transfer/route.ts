@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
+import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
+import { parseToolCall } from "@/lib/agent/vapi";
 import { logTransferOutcome } from "@/lib/agent/transfer";
 
 /** transfer_to_human. This is the escape hatch for allergies, complaints,
@@ -26,25 +27,30 @@ import { logTransferOutcome } from "@/lib/agent/transfer";
  *  500 -- weaker than the normal best-effort-and-usually-succeeds
  *  guarantee elsewhere, but still never the caller's problem. */
 export async function POST(request: Request) {
+  // Parsed before the secret lookup, because the unauthorised branch now
+  // needs the toolCallId too -- and `request.json()` may only be consumed
+  // once, so this is the single read. `null` rather than `{}` is the
+  // honest "no readable body"; parseToolCall branch A handles it.
+  const call = parseToolCall(await request.json().catch(() => null));
+
   const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  if (!location) return agentUnauthorised(call.toolCallId);
+
+  // The model's arguments live inside the tool call, never at the top
+  // level of the body -- see lib/agent/vapi.ts.
+  const args = call.args as { reason?: string };
 
   const number = location.fallback_human_number;
   if (!number) {
     console.error("[agent] no fallback number for location", location.id);
-    return agentFail("No transfer number is set up.", 500);
+    return agentFail("No transfer number is set up.", call.toolCallId);
   }
 
-  const body = (await request.json().catch(() => ({}))) as {
-    reason?: string;
-    provider_call_id?: string;
-  };
-
   try {
-    after(() => logTransferOutcome(location.id, body.provider_call_id, body.reason));
+    after(() => logTransferOutcome(location.id, call.providerCallId, args.reason));
   } catch (err) {
     console.error("[agent] could not schedule transfer logging", err);
   }
 
-  return agentOk({ number });
+  return agentOk({ number }, call.toolCallId);
 }

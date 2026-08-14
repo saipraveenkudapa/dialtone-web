@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
+import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
+import { parseToolCall } from "@/lib/agent/vapi";
 import { callIdForProvider } from "@/lib/agent/context";
 import { isRequestInPast } from "@/lib/agent/availability";
 import { openAt, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
@@ -43,29 +44,36 @@ type BookTableResult = {
  *  that produces a sentence a person can hear, and the wording of the
  *  answer. */
 export async function POST(request: Request) {
-  const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  // Parsed before the secret lookup, because the unauthorised branch now
+  // needs the toolCallId too -- and `request.json()` may only be consumed
+  // once, so this is the single read. `null` rather than `{}` is the
+  // honest "no readable body"; parseToolCall branch A handles it.
+  const call = parseToolCall(await request.json().catch(() => null));
 
-  const body = (await request.json().catch(() => ({}))) as {
+  const location = await locationForSecret(agentSecretFromRequest(request));
+  if (!location) return agentUnauthorised(call.toolCallId);
+
+  // The model's arguments live inside the tool call, never at the top
+  // level of the body -- see lib/agent/vapi.ts.
+  const args = call.args as {
     requested_at?: string;
     party_size?: number;
     customer_name?: string;
     customer_phone?: string;
-    provider_call_id?: string;
   };
 
-  const when = body.requested_at ? new Date(body.requested_at) : null;
-  const party = Number(body.party_size ?? 0);
+  const when = args.requested_at ? new Date(args.requested_at) : null;
+  const party = Number(args.party_size ?? 0);
 
   if (!when || Number.isNaN(when.getTime())) {
-    return agentFail("I didn't catch the date and time.");
+    return agentFail("I didn't catch the date and time.", call.toolCallId);
   }
   if (isRequestInPast(when, new Date())) {
-    return agentFail("That time has already passed.");
+    return agentFail("That time has already passed.", call.toolCallId);
   }
   // A party size that could not be understood at all.
   if (!Number.isInteger(party) || party < 1) {
-    return agentFail("I didn't catch how many people.");
+    return agentFail("I didn't catch how many people.", call.toolCallId);
   }
   // A party size that was understood perfectly and is simply too big.
   // These used to be the same answer: a caller asking for a table for
@@ -78,10 +86,10 @@ export async function POST(request: Request) {
   // the agent can speak ("that's a big party, let me put you through"),
   // not a failure to hear.
   if (party > location.max_party_size) {
-    return agentOk({ booked: false, reason: "large_party" });
+    return agentOk({ booked: false, reason: "large_party" }, call.toolCallId);
   }
-  if (!body.customer_name || !body.customer_phone) {
-    return agentFail("I still need a name and a number for the booking.");
+  if (!args.customer_name || !args.customer_phone) {
+    return agentFail("I still need a name and a number for the booking.", call.toolCallId);
   }
 
   // Nothing on this path read the opening hours. `book_table` does not,
@@ -109,7 +117,7 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: (hours.error ?? holidays.error)?.code ?? null,
     });
-    return agentFail("I can't check the book right now.", 500);
+    return agentFail("I can't check the book right now.", call.toolCallId);
   }
 
   const verdict = openAt({
@@ -128,7 +136,7 @@ export async function POST(request: Request) {
       booked: false,
       reason: "closed",
       hours_that_day: verdict.hoursThatDay,
-    });
+    }, call.toolCallId);
   }
 
   const { data, error } = await supabase
@@ -136,16 +144,16 @@ export async function POST(request: Request) {
       p_location_id: location.id,
       p_requested_at: when.toISOString(),
       p_party_size: party,
-      p_customer_name: body.customer_name,
-      p_customer_phone: body.customer_phone,
-      p_call_id: await callIdForProvider(location.id, body.provider_call_id),
+      p_customer_name: args.customer_name,
+      p_customer_phone: args.customer_phone,
+      p_call_id: await callIdForProvider(location.id, call.providerCallId),
       // Not the same thing as p_call_id: that is the calls row this
       // booking hangs off and is null whenever no webhook has created one
       // yet, while this is the provider's own id for the call in progress
       // and is what makes a retried tool call recognisable as a retry.
       // Absent, book_table has no fingerprint to build and every retry
       // books another table.
-      p_provider_call_id: body.provider_call_id ?? null,
+      p_provider_call_id: call.providerCallId,
     })
     .single<BookTableResult>();
 
@@ -163,14 +171,14 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: error?.code ?? null,
     });
-    return agentFail("I couldn't get that booking in.", 500);
+    return agentFail("I couldn't get that booking in.", call.toolCallId);
   }
 
   // A full house is an ordinary answer, not an error: the function says
   // so in `reason` rather than raising, and the agent offers another
   // time.
   if (!data.booked) {
-    return agentOk({ booked: false, reason: data.reason ?? "full" });
+    return agentOk({ booked: false, reason: data.reason ?? "full" }, call.toolCallId);
   }
 
   // `data.duplicate` is deliberately not in the response. A retry has to
@@ -202,5 +210,5 @@ export async function POST(request: Request) {
       minute: "2-digit",
       timeZone: location.timezone,
     }).format(when),
-  });
+  }, call.toolCallId);
 }

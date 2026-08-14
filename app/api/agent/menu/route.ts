@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { agentFail, agentOk } from "@/lib/agent/respond";
+import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
+import { parseToolCall } from "@/lib/agent/vapi";
 import { shapeMenu, suggestAlternative } from "@/lib/agent/menu";
 import type { MenuCategoryRow, MenuItemRow } from "@/lib/supabase/types";
 
@@ -8,8 +9,14 @@ import type { MenuCategoryRow, MenuItemRow } from "@/lib/supabase/types";
  *  into the prompt. This endpoint is the only reason the agent cannot
  *  invent an item or a price. */
 export async function POST(request: Request) {
+  // Parsed before the secret lookup, because the unauthorised branch now
+  // needs the toolCallId too -- and `request.json()` may only be consumed
+  // once, so this is the single read. `null` rather than `{}` is the
+  // honest "no readable body"; parseToolCall branch A handles it.
+  const call = parseToolCall(await request.json().catch(() => null));
+
   const location = await locationForSecret(agentSecretFromRequest(request));
-  if (!location) return agentFail("Not authorised", 401);
+  if (!location) return agentUnauthorised(call.toolCallId);
 
   const supabase = supabaseAdmin();
   const [categories, items] = await Promise.all([
@@ -32,7 +39,7 @@ export async function POST(request: Request) {
       location_id: location.id,
       code: (categories.error ?? items.error)?.code ?? null,
     });
-    return agentFail("I can't pull the menu up right now.", 500);
+    return agentFail("I can't pull the menu up right now.", call.toolCallId);
   }
 
   const byCategory = new Map<string, MenuItemRow[]>();
@@ -49,8 +56,11 @@ export async function POST(request: Request) {
     })),
   );
 
-  const body = (await request.json().catch(() => ({}))) as { item?: string };
-  const alternative = body.item ? suggestAlternative(menu, body.item) : null;
+  // The model's arguments live inside the tool call, never at the top
+  // level of the body -- see lib/agent/vapi.ts.
+  // `suggestAlternative` already treats a non-string as no item at all,
+  // which is what an absent optional argument arrives as.
+  const alternative = suggestAlternative(menu, call.args.item);
 
-  return agentOk({ ...menu, alternative });
+  return agentOk({ ...menu, alternative }, call.toolCallId);
 }
