@@ -51,6 +51,24 @@ export default async function AdminLocationPage({
 
   const { location, calls, orders, soldOut } = data;
   const tz = location.timezone;
+  const editHref = `/admin/${locationId}/edit`;
+
+  /* The editor's subjects, in the order that page renders them, so the
+     two screens are one vocabulary read in one order. Kept in step by
+     hand with SECTIONS in components/admin/EditSections.tsx -- which
+     documents why it is these eight -- because that module is "use
+     client", and a server component that dots into a client module's
+     export gets a client reference rather than an array. */
+  const sections: { id: string; label: string }[] = [
+    { id: "business", label: "The business" },
+    { id: "hours", label: "Hours" },
+    { id: "answering", label: "Answering the phone" },
+    { id: "service", label: "Money & service" },
+    { id: "orders", label: "Where orders go" },
+    { id: "recording", label: "Recording" },
+    { id: "menu", label: "Menu" },
+    { id: "managed", label: "System" },
+  ];
 
   const answering = location.is_live && !location.kill_switch_on;
 
@@ -71,15 +89,36 @@ export default async function AdminLocationPage({
      caller's number as <dd className="num">), and a phone number in
      proportional type is the specific thing that makes a screen look
      unlike the mockup. */
-  const facts: { label: string; value: string; num?: boolean }[] = [
-    { label: "Organization", value: location.organizations?.name ?? "—" },
-    { label: "Plan", value: location.organizations?.plan ?? "—" },
-    { label: "Timezone", value: tz },
+  /* `to` is the editor section holding the FIELD for this row -- the
+     answer to "where do I change this one", on the row itself rather
+     than only in a link at the foot of the card that lands forty fields
+     away from it.
+
+     A row carries one exactly when an operator can type the value. Our
+     number, the assistant, the forwarding proof, live and the kill
+     switch carry none: every one of them is the go-live panel's, the
+     panel is on this same screen, and a link into an editor that has no
+     field for them would be a promise the editor cannot keep. That
+     division is the one the card could not previously show at all. */
+  const facts: { label: string; value: string; num?: boolean; to?: string }[] = [
+    { label: "Organization", value: location.organizations?.name ?? "—", to: "business" },
+    { label: "Plan", value: location.organizations?.plan ?? "—", to: "business" },
+    { label: "Timezone", value: tz, to: "business" },
     { label: "Our number", value: location.twilio_number ?? "not provisioned", num: true },
-    { label: "Their number", value: location.business_phone ?? "—", num: true },
-    { label: "Falls back to", value: location.fallback_human_number ?? "not set", num: true },
+    {
+      label: "Their number",
+      value: location.business_phone ?? "—",
+      num: true,
+      to: "business",
+    },
+    {
+      label: "Falls back to",
+      value: location.fallback_human_number ?? "not set",
+      num: true,
+      to: "answering",
+    },
     { label: "Assistant", value: location.vapi_assistant_id ?? "none on file", num: true },
-    { label: "Carrier", value: location.carrier_name ?? "unknown" },
+    { label: "Carrier", value: location.carrier_name ?? "unknown", to: "business" },
     {
       label: "Forwarding",
       value: location.forwarding_verified_at
@@ -91,6 +130,7 @@ export default async function AdminLocationPage({
       value: location.recording_enabled
         ? `on, kept ${location.recording_retention_days} days`
         : "off",
+      to: "recording",
     },
     { label: "Live", value: location.is_live ? "yes" : "no" },
     { label: "Kill switch", value: location.kill_switch_on ? "ON" : "off" },
@@ -118,13 +158,41 @@ export default async function AdminLocationPage({
             change. It is a link and not a control, so this page keeps its
             one job -- does this restaurant answer the phone -- and the
             forty inputs live one URL away, bookmarkable and pasteable
-            into a ticket. */}
+            into a ticket.
+
+            Primary, because it is the most likely reason anyone opens
+            this page after the day it went live, and it was reported
+            unfindable as a secondary button in a corner: an operator on
+            a tablet read the checklist below saying "Menu — 14 items"
+            and could not get to the menu. */}
         <div className="actions">
-          <Link href={`/admin/${locationId}/edit`} className="btn btn-secondary">
+          <Link href={editHref} className="btn btn-primary">
             Edit details
           </Link>
         </div>
       </div>
+
+      {/* And the sections by name, because "Edit details" is not the word
+          an operator is looking for when what they want is the menu. The
+          same strip, in the same order, as the index on /edit -- here
+          every entry crosses to it and lands on that card. Above the
+          split, so on a tablet (where the two columns stack) it is read
+          before the checklist rather than after the call log. */}
+      {/* `nav` first: the system class supplies this strip's layout and
+          its anchors' resting colour, worn rather than re-declared, the
+          same way components/admin/AdminNav.tsx wears it. */}
+      <nav className="nav edit-index" aria-label="Edit this restaurant">
+        <span className="card-kicker edit-index-kicker">Edit</span>
+        {sections.map((section) => (
+          <Link
+            key={section.id}
+            href={`${editHref}#${section.id}`}
+            className="edit-index-link"
+          >
+            {section.label}
+          </Link>
+        ))}
+      </nav>
 
       {/* The readiness panel leads the wide column, and the call log sits
           under it. Before this, the wide column held nothing but the call
@@ -202,16 +270,24 @@ export default async function AdminLocationPage({
               {facts.map((f) => (
                 <div key={f.label} className="fact-row">
                   <dt className="text-muted">{f.label}</dt>
-                  <dd className={f.num ? "num" : undefined}>{f.value}</dd>
+                  <dd className={f.num ? "num" : undefined}>
+                    {f.to ? (
+                      <Link href={`${editHref}#${f.to}`} className="row-link">
+                        {f.value}
+                      </Link>
+                    ) : (
+                      f.value
+                    )}
+                  </dd>
                 </div>
               ))}
             </dl>
             {/* Half of these rows are editable and half are not, and the
-                card gives no sign of which. The link is the answer to
-                "where do I change one of these" -- the editor itself is
-                what draws the line, setting the system-managed rows as
-                facts rather than as fields. */}
-            <Link href={`/admin/${locationId}/edit`} className="row-link">
+                sign of which is now the rows themselves: the ones with a
+                field somewhere are links to it, the rest are the go-live
+                panel's and are plain. This stays as the way in to the
+                whole record for the rows that are neither. */}
+            <Link href={editHref} className="row-link">
               Edit these →
             </Link>
           </div>

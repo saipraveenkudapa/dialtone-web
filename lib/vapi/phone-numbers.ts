@@ -1,6 +1,6 @@
 import "server-only";
 
-import { vapiRequest, type VapiRequestOptions } from "@/lib/vapi/provision";
+import { ProvisioningError, vapiRequest, type VapiRequestOptions } from "@/lib/vapi/provision";
 
 /* Vapi's phone numbers, which is where this product's phone numbers
  * actually live.
@@ -86,6 +86,145 @@ function label(name: string): string {
   return name.length <= 40 ? name : name.slice(0, 40);
 }
 
+/* ── the area code ─────────────────────────────────────────────────── */
+
+/** A three-digit NANP area code, and nothing wider.
+ *
+ *  The plan reserves the first digit: 0 reaches an operator and 1 opens
+ *  a long-distance dial string, so no area code has ever begun with
+ *  either and a string that does is a typo rather than a place. Nothing
+ *  beyond that is checked here on purpose -- WHICH of the eight hundred
+ *  remaining codes Vapi actually holds numbers in is Vapi's fact and
+ *  changes hourly, so a table here would refuse real area codes and
+ *  still not save a request.
+ *
+ *  `unknown` rather than `string` because the argument's first stop is a
+ *  "use server" boundary: a hand-rolled POST to that action id can carry
+ *  a number, a null or nothing at all, and a TypeError raised on
+ *  `.trim()` is a 500 where the product owes a sentence. */
+export function isAreaCode(value: unknown): value is string {
+  return typeof value === "string" && /^[2-9][0-9]{2}$/.test(value.trim());
+}
+
+/** What an area code that is not one gets told, wherever it is refused.
+ *
+ *  One string because two copies drift, and this sentence is printed by
+ *  both the module that spends and the module that decides. It
+ *  deliberately does not echo what was typed: the two things worth
+ *  saying are the rule and that nothing was spent. */
+export const AREA_CODE_REFUSAL =
+  "That is not an area code. It has to be exactly three digits and can never begin with 0 or " +
+  "1 — this is the code the restaurant's customers will see and dial. No number was requested " +
+  "and nothing was spent.";
+
+/** The NANP area code inside a number this product already has on file,
+ *  or null when there is not one to read.
+ *
+ *  Pointed at locations.business_phone and locations.fallback_human_number,
+ *  which hold whatever an owner typed -- "(510) 555-0142", "+1 510 555
+ *  0142", "5105550142", "1-510-555-0142". So the digits are taken first
+ *  and the shape decided afterwards, the same way lib/phone.ts's
+ *  normalizer does it.
+ *
+ *  Anything that is not a ten-digit national number, with or without its
+ *  leading 1, gets null rather than its first three digits: +44 20 7183
+ *  8750 has no NANP area code to offer, and offering "442" would ask
+ *  Vapi for a number in a place that does not exist. Null is the honest
+ *  answer, and the caller's job is then to ask a person.
+ *
+ *  The one case this CANNOT tell apart is a foreign number typed with no
+ *  country code at all -- "55 1234 5678" is a Mexico City line and is
+ *  also, digit for digit, a New Jersey one. Nothing in the string
+ *  settles it, which is the second reason what comes out of here is only
+ *  ever a suggestion an operator confirms before it is spent. */
+export function areaCodeOf(stored: string | null | undefined): string | null {
+  if (!stored) return null;
+
+  const trimmed = stored.trim();
+  const digits = trimmed.replace(/\D/g, "");
+
+  /* The leading + has to be read BEFORE it is stripped, because it is
+     the one unambiguous piece of evidence in the string: it says the
+     digits after it begin with a country code. "+49 30 123456" is ten
+     digits and is a Berlin landline, and taking its first three would
+     ask Vapi for a number in "493" -- which is a real request, for a
+     real number, in a place the caller's customers are not. A + is NANP
+     only when what follows it is a 1 and ten more digits. */
+  if (trimmed.startsWith("+") && !(digits.length === 11 && digits.startsWith("1"))) return null;
+
+  const national = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (national.length !== 10) return null;
+
+  const area = national.slice(0, 3);
+  return isAreaCode(area) ? area : null;
+}
+
+/** Vapi has numbers, but none left in the area code that was asked for.
+ *
+ *  A different fact from "that request was wrong" and from "Vapi is
+ *  broken", and the only one of the three whose next move is a
+ *  neighbouring area code rather than a bug report. Nothing was issued
+ *  and nothing was spent, which is why this is safe to surface as its
+ *  own thing rather than as a failure of unknown consequence.
+ *
+ *  A class rather than a message shape so the panel can tell it apart
+ *  without matching on prose twice -- see runProvision. */
+export class NoNumberInAreaCodeError extends Error {
+  readonly areaCode: string;
+
+  constructor(areaCode: string) {
+    super(
+      `Vapi has no free number in area code ${areaCode} right now, so nothing was issued and ` +
+        "nothing was spent. Try a neighbouring area code — this is not a fault in this " +
+        "deployment and asking again for the same one will not change it.",
+    );
+    this.name = "NoNumberInAreaCodeError";
+    this.areaCode = areaCode;
+  }
+}
+
+/** A request that may have allocated a number, and no way from here to
+ *  find out whether it did.
+ *
+ *  POST /phone-number is not a read. Once it has left this process a
+ *  deadline, a 502 from something in front of Vapi, a dropped connection
+ *  or a 201 whose body will not parse all leave the same question open,
+ *  and the one answer that must never be given to it is "no number was
+ *  issued" -- an operator who reads that presses the button again, and
+ *  the second press is the one that mints the duplicate.
+ *
+ *  Only 4xx is excluded, and only because it is Vapi itself saying it
+ *  refused the request before the pool was touched. */
+export class NumberOutcomeUnknownError extends Error {
+  constructor(detail: string) {
+    super(
+      `${detail} This deployment cannot tell whether a number was issued — check the Vapi ` +
+        "dashboard before asking for another one, because asking again could mint a second.",
+    );
+    this.name = "NumberOutcomeUnknownError";
+  }
+}
+
+/* Vapi answers "there is nothing left in that area code" with the same
+   400 it answers a malformed body with, and carries the difference only
+   in the prose -- there is no code, and no field, to read instead. So
+   this is a text match, and deliberately a narrow one: a negation AND
+   the word "available" in some form.
+
+   It is also BOUNDED BY THE STATUS, which the prose alone cannot do.
+   "Vapi returned 504 on POST /phone-number: The service is not
+   available" satisfies both halves of the text test, and it is the
+   opposite fact: a gateway 5xx on a POST is exactly the case where the
+   request may have reached Vapi and a number may exist. Only a 400 --
+   Vapi's own answer, from Vapi -- may be read as an empty area code.
+   The 400 that started all this ("At least one of
+   numberDesiredAreaCode, sipUri must be provided") carries neither half
+   of the text test, so it stays out on its own account. */
+function readsAsNoAvailability(message: string): boolean {
+  const text = message.toLowerCase();
+  return /\b(no|not|none|cannot|can't|unable)\b/.test(text) && /availab/.test(text);
+}
+
 /** Every number on the account. One page: this is an operator's own Vapi
  *  org, which holds numbers in the single digits, and the limit is the
  *  same one findAssistantForLocation() uses against /assistant.
@@ -131,28 +270,72 @@ export async function bindPhoneNumber(
 
 /** Take a new number from Vapi's own pool and bind it in the same call.
  *
- *  `provider: "vapi"` is the free-number path -- no Twilio account, no
- *  card, no area-code search. It spends one of the org's allowance
- *  slots. There is no undo worth the name, so every caller of this must
- *  have asked first. */
+ *  `provider: "vapi"` is the free-number path -- no Twilio account and
+ *  no card. It spends one of the org's allowance slots. There is no undo
+ *  worth the name, so every caller of this must have asked first.
+ *
+ *  `areaCode` is required, and it is required because Vapi requires it:
+ *  a body without it comes back "At least one of numberDesiredAreaCode,
+ *  sipUri must be provided" and no number is issued. It is not an
+ *  implementation detail this could fill in quietly either way -- it is
+ *  the part of the number the restaurant's customers see on a door and
+ *  dial, so it is decided by a person upstream and only carried here.
+ *
+ *  Three failures are told apart on the way out, because each has a
+ *  different next move. A malformed area code is refused before the
+ *  request is built, so nothing is spent on a typo. An area code Vapi
+ *  has nothing left in comes back as NoNumberInAreaCodeError -- "try 925
+ *  instead", not "something is broken". And anything that leaves the
+ *  outcome of the POST itself unread comes back as
+ *  NumberOutcomeUnknownError, so that no caller downstream can promise
+ *  an operator a number was not issued when nobody knows. */
 export async function createPhoneNumber(
   vapiKey: string,
-  { assistantId, name }: { assistantId: string; name: string },
+  { assistantId, name, areaCode }: { assistantId: string; name: string; areaCode: string },
 ): Promise<VapiPhoneNumber> {
-  const body = await vapiRequest(vapiKey, "POST", "/phone-number", {
-    provider: "vapi",
-    assistantId,
-    name: label(name),
-  });
+  // First, and before a request exists. Vapi picks the number out of
+  // this area code and hands it over already dialable, so a typo here is
+  // a real number in the wrong city that nothing can hand back.
+  if (!isAreaCode(areaCode)) throw new Error(AREA_CODE_REFUSAL);
+  const desired = areaCode.trim();
+
+  let body: unknown;
+  try {
+    body = await vapiRequest(vapiKey, "POST", "/phone-number", {
+      provider: "vapi",
+      assistantId,
+      name: label(name),
+      numberDesiredAreaCode: desired,
+    });
+  } catch (err) {
+    const status = err instanceof ProvisioningError ? err.status : undefined;
+
+    // Not a retry, and deliberately not one: Vapi's pool does not refill
+    // between two requests a second apart, and a loop here would spend
+    // the deadline of a page an operator is watching to learn nothing.
+    if (status === 400 && err instanceof Error && readsAsNoAvailability(err.message)) {
+      throw new NoNumberInAreaCodeError(desired);
+    }
+
+    // A 4xx is Vapi refusing this request -- a bad body, a bad key, a
+    // quota -- and a refused request never reached the pool, so the
+    // error stands exactly as it came. Everything else happened to a
+    // POST that allocates, with the outcome unread: a deadline, a 5xx,
+    // a dropped connection, a body that would not parse. Whoever reports
+    // those must not say a number was not issued.
+    if (status !== undefined && status >= 400 && status < 500) throw err;
+    throw new NumberOutcomeUnknownError(err instanceof Error ? err.message : String(err));
+  }
 
   const number = toPhoneNumber(body);
   if (!number) {
     // Worth being loud about: a number may now exist and be billing,
     // with nothing on our side recording it. The Vapi dashboard is the
-    // only place that can settle it.
-    throw new Error(
-      "Vapi reported a new number but returned a record this deployment could not read. Check " +
-        "the Vapi dashboard before asking for another one -- one may already have been issued.",
+    // only place that can settle it -- which is this error's whole
+    // subject, so it carries it rather than a second sentence bolted on
+    // by a caller.
+    throw new NumberOutcomeUnknownError(
+      "Vapi reported a new number but returned a record this deployment could not read.",
     );
   }
   return number;

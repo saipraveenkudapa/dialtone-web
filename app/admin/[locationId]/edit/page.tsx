@@ -6,6 +6,7 @@ import {
   BusinessSection,
   OrderRoutingSection,
   RecordingSection,
+  SectionIndex,
   ServiceSection,
   type AssistantDrift,
   type DriftCell,
@@ -104,6 +105,13 @@ export default async function EditLocationPage({
           </Link>
         </div>
       </div>
+
+      {/* The way through a page seven screens tall. Under the head
+          rather than inside it, so it is the first thing below the title
+          on a tablet -- the screen this was reported from -- and sticky
+          from there down, which is the only place a jump list is any use
+          once the scrolling has started. */}
+      <SectionIndex />
 
       <div className="setup-stack">
         <BusinessSection

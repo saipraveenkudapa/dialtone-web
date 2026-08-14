@@ -44,9 +44,9 @@ import {
  * As little as possible. There is no `live: boolean` parameter and no
  * `on: boolean` parameter: "go live" and "take offline" are two separate
  * exports that each write a literal, which removes any question of how a
- * caller-supplied flag gets coerced. Only two actions take a second
+ * caller-supplied flag gets coerced. Only four actions take a second
  * argument at all, and each is an untrusted selector rather than a
- * value:
+ * value, with one exception named below:
  *
  *   * attachNumberAction takes a Vapi phone-number ID. It proves
  *     nothing. go-live.ts re-derives the attachable set for this
@@ -57,6 +57,17 @@ import {
  *     normalized to E.164 here and refused outright if it will not
  *     normalize, so nothing but E.164 reaches the column that
  *     app/api/agent/transfer/route.ts hands to Twilio to dial.
+ *   * provisionNumberAction and makeItLiveAction take an area code.
+ *     This one is a VALUE and not a selector -- there is no set to check
+ *     it against, because the operator is choosing where a brand-new
+ *     number will appear to be, and that choice is theirs to make. It is
+ *     refused unless it is three digits that could be a NANP area code,
+ *     and that check runs in go-live.ts before a number is asked for and
+ *     again in lib/vapi/phone-numbers.ts before a request is built --
+ *     one rule, one sentence, in the two places that can actually spend.
+ *     It reaches no query, no column and no log line. Omitting it is a
+ *     refusal on both roads and never a default: neither action may
+ *     choose an area code on a restaurant's behalf.
  *
  * Nothing here accepts an org id, an assistant id, a tool secret, a
  * timestamp, an origin, or a "skip the checks" flag. `base` for the
@@ -287,14 +298,24 @@ export async function attachNumberAction(
  *  authorization control: a browser that skips it proves nothing. The
  *  guards that count are the gate above, the second gate inside
  *  go-live.ts, and go-live.ts's own refusal to mint a second number when
- *  this location already has one. */
+ *  this location already has one.
+ *
+ *  `areaCode` is what the operator confirmed in that dialog, pre-filled
+ *  from this restaurant's own numbers and editable there because it is
+ *  the part of the new number the restaurant's customers will see and
+ *  dial. It is passed through untouched and refused in go-live.ts before
+ *  any read; see this file's header for why it is not re-checked here.
+ *  Never defaulted: a caller that omits it gets the refusal, because
+ *  "whatever Vapi feels like" is not a choice this product may make on a
+ *  restaurant's behalf. */
 export async function provisionNumberAction(
   locationId: string,
+  areaCode: string,
 ): Promise<GoLiveActionResult> {
   const denied = await refuse(locationId);
   if (denied) return denied;
 
-  return settle(locationId, await provisionNumberForLocation({ locationId }), {
+  return settle(locationId, await provisionNumberForLocation({ locationId, areaCode }), {
     portfolio: false,
   });
 }
@@ -386,13 +407,16 @@ export async function setFallbackNumberAction(
  *
  *  This CAN provision a number, which is the one act in the feature with
  *  no undo -- but only after it has proved reuse is impossible from a
- *  freshly derived account state, and only after every cheaper step has
- *  been tried. The confirmation that guards the standalone provision
- *  button is a misclick guard on a button whose ONLY act is to spend;
- *  this button's job is to get a restaurant answering the phone, and its
- *  real guard is go-live.ts's refusal to mint while any number can be
- *  reused. */
-export async function makeItLiveAction(locationId: string): Promise<MakeItLiveActionResult> {
+ *  freshly derived account state, only after every cheaper step has been
+ *  tried, and only in an `areaCode` a person answered a confirmation
+ *  with. Without one, go-live.ts halts the number step and turns nothing
+ *  on: the area code is the half of a new number a customer reads off a
+ *  door, so a run that reaches the mint stops and asks rather than
+ *  taking the record's suggestion unread. */
+export async function makeItLiveAction(
+  locationId: string,
+  areaCode?: string,
+): Promise<MakeItLiveActionResult> {
   const denied = await refuse(locationId);
   if (denied) {
     // The gate's own sentence, in this action's shape. Nothing
@@ -413,7 +437,7 @@ export async function makeItLiveAction(locationId: string): Promise<MakeItLiveAc
     };
   }
 
-  const result = await makeItLive({ locationId, base });
+  const result = await makeItLive({ locationId, base, areaCode });
 
   // Both paths, on failure too, for the reason settle()'s comment gives:
   // a run that reached Vapi and then failed has already changed the

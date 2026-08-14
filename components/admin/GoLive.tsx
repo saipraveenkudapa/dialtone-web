@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, useTransition, type RefObject } from "react";
 import { Corners } from "@/components/Corners";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@/app/admin/[locationId]/actions";
 import type {
   AttachableNumber,
+  GoLiveCheckKey,
   GoLiveCheckStatus,
   GoLiveState,
   MakeItLiveStep,
@@ -94,6 +96,24 @@ const OUTCOME_STATE: Record<MakeItLiveStepOutcome, GoLiveCheckStatus> = {
   refused: "blocked",
   failed: "blocked",
   "not-reached": "na",
+};
+
+/** Where a checklist row goes when you press it.
+ *
+ *  The row already NAMES the thing it is about -- "Menu — Ready, 14
+ *  items on the menu" -- and the operator's report was that naming it is
+ *  where the product stopped: "I can't able to see the menus from my
+ *  iPad ... I should be able to see everything." A row that states a
+ *  fact about the menu and cannot show you the menu is the defect.
+ *
+ *  Only the three whose subject is a thing the operator TYPES are here.
+ *  `assistant`, `number` and `forwarding` are this panel's own business
+ *  and their controls are inches below the row; sending those to the
+ *  editor would walk the operator away from the buttons that fix them. */
+const CHECK_ANCHOR: Partial<Record<GoLiveCheckKey, string>> = {
+  menu: "#menu",
+  hours: "#hours",
+  fallback: "#answering",
 };
 
 /** The titles the checklist above already uses for the same four things,
@@ -175,7 +195,13 @@ function handoverOf(location: Location, e164: string): NewNumberHandover {
  *  below covers all of them and there is never a second mechanism to
  *  keep in step with the first. */
 type Dialog =
-  | { kind: "provision" }
+  /** `then` is which button opened it, and it is the whole reason this
+   *  confirm is shared. Both roads to a brand-new number end in the same
+   *  irreversible act and must therefore settle the same fact -- the
+   *  area code -- in the same words, before anything is spent. What
+   *  differs is only what happens after the number exists: "number"
+   *  stops there, "live" carries on and turns the restaurant on. */
+  | { kind: "provision"; then: "number" | "live" }
   | { kind: "repair" }
   /** `onRecord` is "this number is in locations.twilio_number", and it
    *  is carried rather than compared at render time for one reason: the
@@ -249,8 +275,21 @@ function num(value: string) {
   return <span className="num">{value}</span>;
 }
 
+/** The same three-digit rule lib/vapi/phone-numbers.ts refuses on.
+ *
+ *  A deliberate copy, for the same reason readable() above is one: that
+ *  module opens with `import "server-only"`, so only its types cross
+ *  into this file. This one decides whether the confirm button is
+ *  pressable; the server decides whether a number is issued, and it
+ *  re-derives this rule twice before it does. A drift here can only ever
+ *  cost an extra round trip that comes back with a sentence. */
+function looksLikeAreaCode(value: string): boolean {
+  return /^[2-9][0-9]{2}$/.test(value.trim());
+}
+
 export function GoLive({ state }: { state: GoLiveState }) {
-  const { location, checks, canGoLive, numbers, vapiError, ownershipError } = state;
+  const { location, checks, canGoLive, numbers, vapiError, ownershipError, defaultAreaCode } =
+    state;
 
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<GoLiveActionResult | null>(null);
@@ -266,6 +305,14 @@ export function GoLive({ state }: { state: GoLiveState }) {
   const [focusFallback, setFocusFallback] = useState(false);
 
   const [fallback, setFallback] = useState(location.fallback_human_number ?? "");
+
+  /** The area code the new number will be issued in. Pre-filled from the
+   *  restaurant's own numbers by the server and re-seeded every time the
+   *  confirm opens, so a code typed and then cancelled never rides along
+   *  into the next press. Empty when nothing derived one: the operator
+   *  types it, and nothing here picks one for them -- this is the part
+   *  of the number their customers will read off a door and dial. */
+  const [areaCode, setAreaCode] = useState(defaultAreaCode ?? "");
 
   // Take a fresh server value during render rather than in an effect, so
   // the field never sits there showing an edit the database has already
@@ -351,6 +398,29 @@ export function GoLive({ state }: { state: GoLiveState }) {
   // it. Everything the handover states comes off this same row.
   const ourNumber = location.twilio_number;
 
+  /* Whether one press could reach the one-way door, from the same facts
+     planNumber decides it from: a number already on file is attached or
+     halted at and never replaced, an unreadable claimant read refuses
+     everything including minting, and any attachable row is reused
+     before anything is bought.
+
+     The fallback number is in here for the run's ORDER rather than for
+     the plan: the run verifies it before it touches the number at all,
+     so a restaurant without one never reaches the mint, and asking for
+     an area code first would be asking a question the press cannot get
+     to the point of using.
+
+     A prediction, and deliberately only that. It decides whether to ASK,
+     never whether to spend -- the server re-derives all of it from a
+     fresh read and refuses to mint without a confirmed code regardless,
+     so a stale prop here costs one press and can never cost a number. */
+  const mayMint =
+    needsNumber &&
+    !ownershipError &&
+    !ourNumber &&
+    attachable.length === 0 &&
+    Boolean(location.fallback_human_number);
+
   function run(action: () => Promise<GoLiveActionResult>, { handover = false } = {}) {
     setMessage(null);
     setDialog(null);
@@ -378,7 +448,12 @@ export function GoLive({ state }: { state: GoLiveState }) {
     });
   }
 
-  function runMakeItLive() {
+  /** `confirmed` is the area code the operator answered this run's
+   *  confirmation with, and it is undefined on every run that was never
+   *  going to mint. The server refuses to mint without one either way,
+   *  so a run that arrives here without a code because this component
+   *  read a stale prop halts on the number step rather than spending. */
+  function runMakeItLive(confirmed?: string) {
     setMessage(null);
     setDialog(null);
     setReport(null);
@@ -386,7 +461,7 @@ export function GoLive({ state }: { state: GoLiveState }) {
     setProgress({ stages: stagesFor(!needsAssistant, !needsNumber), at: 0 });
     startTransition(async () => {
       try {
-        const result = await makeItLiveAction(location.id);
+        const result = await makeItLiveAction(location.id, confirmed);
         setMessage(
           result.ok ? { ok: true, message: result.message } : { ok: false, error: result.error },
         );
@@ -482,16 +557,56 @@ export function GoLive({ state }: { state: GoLiveState }) {
     <>The number on file rings the assistant.</>
   );
 
+  const areaCodeOk = looksLikeAreaCode(areaCode);
+
   const confirmCopy =
     dialog?.kind === "provision"
       ? {
-          title: "Get a new phone number?",
+          title:
+            dialog.then === "live"
+              ? "Get a new phone number and turn this on?"
+              : "Get a new phone number?",
           body: (
             <>
               <p>
                 This provisions a real, dialable number on the Vapi account and points it at{" "}
                 {location.name}&rsquo;s assistant.
+                {dialog.then === "live"
+                  ? " There is nothing on the account left to reuse, which is the only reason " +
+                    "this step is here — the run repairs the assistant, takes this number, and " +
+                    "then turns the line on."
+                  : ""}
               </p>
+              {/* Inside the confirmation rather than beside the button,
+                  because this is the one decision being confirmed that
+                  is not "yes": the area code is the half of the new
+                  number that customers read off a door, and it is
+                  settled here, once, before anything is spent. */}
+              <div className="field">
+                <label htmlFor="golive-area-code">Area code customers will dial</label>
+                <input
+                  id="golive-area-code"
+                  className="input"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="510"
+                  value={areaCode}
+                  disabled={busy}
+                  onChange={(event) => setAreaCode(event.target.value)}
+                />
+              </div>
+              <p>
+                {defaultAreaCode
+                  ? "Taken from this restaurant’s own number. Vapi issues the new number inside this area code, so it is what a customer sees on the door and dials — change it if this restaurant should be reachable somewhere else."
+                  : "This restaurant has no number of its own on file to take one from, so type the area code it wants. Vapi issues the new number inside it, and it is what a customer sees on the door and dials — nothing here will pick one."}
+              </p>
+              {areaCodeOk ? null : (
+                <p>
+                  Three digits, and never starting with 0 or 1. Nothing is requested until this
+                  is one.
+                </p>
+              )}
               <p>
                 It uses one of the account&rsquo;s free numbers, and every call it takes bills
                 per minute from the moment somebody dials it. Handing a number back later
@@ -500,8 +615,12 @@ export function GoLive({ state }: { state: GoLiveState }) {
               </p>
             </>
           ),
-          cta: "Get a number",
-          go: () => run(() => provisionNumberAction(location.id), { handover: true }),
+          cta: dialog.then === "live" ? "Get a number and go live" : "Get a number",
+          ready: areaCodeOk,
+          go:
+            dialog.then === "live"
+              ? () => runMakeItLive(areaCode)
+              : () => run(() => provisionNumberAction(location.id, areaCode), { handover: true }),
         }
       : dialog?.kind === "repair"
         ? {
@@ -525,6 +644,10 @@ export function GoLive({ state }: { state: GoLiveState }) {
               </>
             ),
             cta: "Repair",
+            // Nothing to fill in first: this confirm asks for a yes and
+            // takes nothing else. The flag exists so both dialogs answer
+            // the one question the shared footer below asks.
+            ready: true,
             go: () => run(() => repairAssistantAction(location.id)),
           }
         : null;
@@ -573,16 +696,32 @@ export function GoLive({ state }: { state: GoLiveState }) {
       ) : null}
 
       <div className="golive-list">
-        {checks.map((check) => (
-          <div key={check.key} className={`golive-item is-${check.status}`}>
-            <div className="golive-body">
+        {checks.map((check) => {
+          const anchor = CHECK_ANCHOR[check.key];
+          const body = (
+            <>
               <div className="golive-title">{check.title}</div>
               <p className="golive-note">
                 {STATE_WORD[check.status]} — {check.note}
               </p>
+            </>
+          );
+
+          return (
+            <div key={check.key} className={`golive-item is-${check.status}`}>
+              {anchor ? (
+                <Link
+                  className="golive-body golive-link"
+                  href={`/admin/${location.id}/edit${anchor}`}
+                >
+                  {body}
+                </Link>
+              ) : (
+                <div className="golive-body">{body}</div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* The paved road, first, so it is read before the row of
@@ -596,7 +735,23 @@ export function GoLive({ state }: { state: GoLiveState }) {
             className="btn btn-primary golive-go"
             disabled={busy}
             aria-describedby="golive-paved"
-            onClick={runMakeItLive}
+            onClick={() => {
+              /* The one press that can reach the one-way door stops here
+                 first. The area code is the half of a new number a
+                 customer reads off a door and dials, and this panel is
+                 the last place a person sees it before Vapi issues it --
+                 so it is asked for in the same confirm, in the same
+                 words, as the standalone button's. Re-seeded from the
+                 server's suggestion on every open: a code typed and then
+                 cancelled is the one value here that would otherwise be
+                 spent without being read. */
+              if (mayMint) {
+                setAreaCode(defaultAreaCode ?? "");
+                setDialog({ kind: "provision", then: "live" });
+              } else {
+                runMakeItLive();
+              }
+            }}
           >
             {progress ? progress.stages[progress.at].label : "Make it live"}
           </button>
@@ -622,6 +777,20 @@ export function GoLive({ state }: { state: GoLiveState }) {
                 restaurant already has, then a free one on the account, and taking a brand-new one
                 only if neither exists — and then the line goes on. The controls below stay for
                 fixing one thing at a time.
+                {mayMint ? (
+                  <>
+                    {" "}
+                    There is nothing here to reuse, so this press will have to take a brand-new
+                    number. It asks which area code to issue it in before it does
+                    {defaultAreaCode ? (
+                      <>
+                        , offering {num(defaultAreaCode)} — the code this restaurant&rsquo;s own
+                        number is in
+                      </>
+                    ) : null}
+                    . That is the part a customer reads off a door, and nothing here picks it.
+                  </>
+                ) : null}
               </>
             )}
           </p>
@@ -734,7 +903,14 @@ export function GoLive({ state }: { state: GoLiveState }) {
               type="button"
               className="btn btn-secondary"
               disabled={busy}
-              onClick={() => setDialog({ kind: "provision" })}
+              onClick={() => {
+                // Re-seeded on every open, from the server's derivation
+                // rather than from whatever was last typed here. An area
+                // code left over from a cancelled press is the one value
+                // on this panel that would be spent without being read.
+                setAreaCode(defaultAreaCode ?? "");
+                setDialog({ kind: "provision", then: "number" });
+              }}
             >
               Get a new number…
             </button>
@@ -897,7 +1073,7 @@ export function GoLive({ state }: { state: GoLiveState }) {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={busy}
+                disabled={busy || !confirmCopy.ready}
                 onClick={confirmCopy.go}
               >
                 {confirmCopy.cta}

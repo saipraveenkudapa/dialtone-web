@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantSecretWriteError } from "@/lib/provisioning/assistant";
+import { NoNumberInAreaCodeError, NumberOutcomeUnknownError } from "@/lib/vapi/phone-numbers";
 import type { AttachableNumber, GoLiveFacts } from "./go-live";
 import type { VapiPhoneNumber } from "@/lib/vapi/phone-numbers";
 
@@ -47,7 +48,15 @@ vi.mock("@/lib/vapi/provision", async (importOriginal) => ({
 const listPhoneNumbers = vi.fn();
 const bindPhoneNumber = vi.fn();
 const createPhoneNumber = vi.fn();
-vi.mock("@/lib/vapi/phone-numbers", () => ({
+/* Partial, for the same reason the assistant mock below is: NoNumberInAreaCodeError
+   has to be the REAL class or `err instanceof NoNumberInAreaCodeError` in
+   go-live.ts is testing a different constructor than the one the product
+   throws -- and that branch is the one that tells an operator to try a
+   neighbouring area code rather than to go and debug a deployment.
+   areaCodeOf and isAreaCode come through unmocked for the same reason
+   spokenNumber does: they are the rule under test, not a collaborator. */
+vi.mock("@/lib/vapi/phone-numbers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/vapi/phone-numbers")>()),
   listPhoneNumbers: (...args: unknown[]) => listPhoneNumbers(...args),
   bindPhoneNumber: (...args: unknown[]) => bindPhoneNumber(...args),
   createPhoneNumber: (...args: unknown[]) => createPhoneNumber(...args),
@@ -446,7 +455,12 @@ describe("who may change any of this", () => {
       "attachNumberToLocation",
       () => attachNumberToLocation({ locationId: NONNA, phoneNumberId: "62aa9658-4974-45e2-aff1-e640e0aa7e15" }),
     ],
-    ["provisionNumberForLocation", () => provisionNumberForLocation({ locationId: NONNA })],
+    [
+      "provisionNumberForLocation",
+      // A well-formed area code on purpose: this asserts the GATE refuses,
+      // not the shape check in front of it.
+      () => provisionNumberForLocation({ locationId: NONNA, areaCode: "510" }),
+    ],
     ["repairAssistant", () => repairAssistant({ locationId: NONNA, base: "https://dialtone.example.com" })],
   ];
 
@@ -818,9 +832,110 @@ describe("changing the state of the line", () => {
       { id: "n1", number: "+15105550000", name: "Marty's", provider: "vapi", assistantId: ASSISTANT, status: "active" },
     ]);
 
-    const result = await provisionNumberForLocation({ locationId: MARTY });
+    const result = await provisionNumberForLocation({ locationId: MARTY, areaCode: "510" });
     expect(result.ok).toBe(false);
     expect(createPhoneNumber).not.toHaveBeenCalled();
+  });
+
+  /* ── the area code a new number is issued in ─────────────────────── */
+
+  it.each([
+    ["begins with 0", "015"],
+    ["begins with 1", "115"],
+    ["is two digits", "51"],
+    ["is four digits", "5105"],
+    ["is not numeric", "bay"],
+    ["is empty", ""],
+  ])("refuses an area code that %s before it reads anything at all", async (_why, value) => {
+    // A typo in this field should cost nothing whatsoever -- not a Vapi
+    // read, not a Postgres read, and above all not a number. The gate
+    // runs first and this runs second, ahead of stateForWrite.
+    const result = await provisionNumberForLocation({ locationId: MARTY, areaCode: value });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toMatch(/not an area code/);
+    expect(listPhoneNumbers).not.toHaveBeenCalled();
+    expect(createPhoneNumber).not.toHaveBeenCalled();
+    expect(store.writes).toEqual([]);
+  });
+
+  it("asks Vapi for a number in the area code the operator confirmed", async () => {
+    // Not the derived default, and not anything this file worked out:
+    // the operator typed 925 in the confirmation, so 925 is what is
+    // spent. Marty's own numbers would have offered 878.
+    createPhoneNumber.mockResolvedValue({
+      id: "n-new",
+      number: "+19255551234",
+      name: "Marty's",
+      provider: "vapi",
+      assistantId: ASSISTANT,
+      status: "active",
+    });
+
+    await expect(
+      provisionNumberForLocation({ locationId: MARTY, areaCode: "925" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(createPhoneNumber).toHaveBeenCalledWith("vapi-test-key", {
+      assistantId: ASSISTANT,
+      name: "Marty's",
+      areaCode: "925",
+    });
+    expect(marty().twilio_number).toBe("+19255551234");
+  });
+
+  it("tells an operator to try a neighbouring area code, not that something is broken", async () => {
+    // An empty pool in one area code is Vapi working correctly. Reported
+    // as a generic failure it sends somebody to check a deployment that
+    // is fine, while the one move that would work -- 925 instead of 510
+    // -- goes unsaid. Nothing was issued, so there is nothing to undo.
+    createPhoneNumber.mockRejectedValue(new NoNumberInAreaCodeError("510"));
+
+    const result = await provisionNumberForLocation({ locationId: MARTY, areaCode: "510" });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/no free number in area code 510/);
+    expect(result.ok === false && result.error).toMatch(/neighbouring area code/);
+    // Distinct: the generic road appends this sentence and this one must
+    // not, or the two failures read as the same failure again.
+    expect(result.ok === false && result.error).not.toMatch(/No number was issued\./);
+    expect(marty().twilio_number).toBeNull();
+    expect(store.writes).toEqual([]);
+  });
+
+  it("still reports an ordinary Vapi failure as one", async () => {
+    createPhoneNumber.mockRejectedValue(new Error("Vapi returned 402 on POST /phone-number"));
+
+    const result = await provisionNumberForLocation({ locationId: MARTY, areaCode: "510" });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/402/);
+    expect(result.ok === false && result.error).toMatch(/No number was issued/);
+  });
+
+  it("offers the restaurant's own area code, business phone first", async () => {
+    // The number its customers already dial. Marty's fallback would
+    // offer 878, so this also proves the order.
+    marty().business_phone = "(510) 555-0142";
+
+    await expect(getGoLiveState(MARTY)).resolves.toMatchObject({ defaultAreaCode: "510" });
+  });
+
+  it("falls back to the human number when there is no business phone", async () => {
+    // A person at this restaurant is the next best evidence of where the
+    // restaurant is. Marty's fixture has no business_phone.
+    expect(marty().business_phone).toBeNull();
+
+    await expect(getGoLiveState(MARTY)).resolves.toMatchObject({ defaultAreaCode: "878" });
+  });
+
+  it("offers nothing when neither number yields an area code", async () => {
+    // The state that must NOT produce a default. A London fallback has
+    // no NANP area code in it, and "442" is not one.
+    marty().business_phone = null;
+    marty().fallback_human_number = "+442071838750";
+
+    await expect(getGoLiveState(MARTY)).resolves.toMatchObject({ defaultAreaCode: null });
   });
 
   it("reconnects a record that lost its assistant id, without touching Vapi", async () => {
@@ -1034,7 +1149,7 @@ describe("changing the state of the line", () => {
       () => setLocationLive({ locationId: MARTY, live: true }),
       () => setFallbackNumber({ locationId: MARTY, number: "+15105550123" }),
       () => attachNumberToLocation({ locationId: MARTY, phoneNumberId: "n-free" }),
-      () => provisionNumberForLocation({ locationId: MARTY }),
+      () => provisionNumberForLocation({ locationId: MARTY, areaCode: "510" }),
       () => repairAssistant({ locationId: MARTY, base: "https://dialtone.example.com" }),
     ]) {
       await expect(call()).resolves.toMatchObject({ ok: false });
@@ -1334,6 +1449,16 @@ describe("a number set for reading down a phone", () => {
 });
 
 describe("turning a restaurant on with one button", () => {
+  /** What the operator answered when this run's confirmation asked which
+   *  area code a brand-new number should be issued in.
+   *
+   *  Every run below that reaches the mint carries one, because a run
+   *  that does not cannot reach it -- see "refuses to mint in an area
+   *  code nobody confirmed". It is deliberately NOT the code either of
+   *  Marty's numbers would suggest: an argument that happens to equal
+   *  the derivation proves nothing about which of the two was spent. */
+  const CONFIRMED = "925";
+
   beforeEach(() => {
     // reset, not clear: several tests below install implementations that
     // reach over and re-arm another mock (a number Vapi issues turns up
@@ -1453,7 +1578,7 @@ describe("turning a restaurant on with one button", () => {
     assistantGetsBuilt();
     vapiIssues();
 
-    const result = await makeItLive({ locationId: MARTY, base: BASE });
+    const result = await makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED });
 
     expect(result.ok).toBe(true);
     expect(marty().vapi_assistant_id).toBe(NEW_ASSISTANT);
@@ -1475,7 +1600,7 @@ describe("turning a restaurant on with one button", () => {
     assistantGetsBuilt();
     vapiIssues("+15106268819");
 
-    const result = await makeItLive({ locationId: MARTY, base: BASE });
+    const result = await makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED });
 
     expect(result.newNumber).toEqual({
       // Vapi's own string, verbatim -- the Twilio voice route matches
@@ -1651,7 +1776,7 @@ describe("turning a restaurant on with one button", () => {
   it("says so and stays offline when Vapi refuses to issue a number", async () => {
     createPhoneNumber.mockRejectedValue(new Error("Vapi returned 402"));
 
-    const result = await makeItLive({ locationId: MARTY, base: BASE });
+    const result = await makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED });
 
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toMatch(/No number was issued/);
@@ -1659,6 +1784,130 @@ describe("turning a restaurant on with one button", () => {
     expect(marty().twilio_number).toBeNull();
     expect(marty().is_live).toBe(false);
     expect(step(result, "live").outcome).toBe("not-reached");
+  });
+
+  it("mints in the area code the operator confirmed, not the one the record suggests", async () => {
+    /* The record suggests 510 -- business_phone -- and the operator
+       typed 925 into the confirmation before pressing. 925 is the code
+       a customer will read off the door, so 925 is what Vapi is asked
+       for. The suggestion is a suggestion; what a person answered is
+       what gets spent. */
+    marty().business_phone = "(510) 555-0142";
+    vapiIssues("+19255559999");
+
+    await expect(
+      makeItLive({ locationId: MARTY, base: BASE, areaCode: "925" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(createPhoneNumber).toHaveBeenCalledWith("vapi-test-key", {
+      assistantId: ASSISTANT,
+      name: "Marty's",
+      areaCode: "925",
+    });
+  });
+
+  it("refuses to mint in an area code nobody confirmed, however plainly the record suggests one", async () => {
+    /* The regression, and the reason the confirmation exists. This is
+       the common first-run shape: a restaurant with its own line, an
+       assistant, a fallback, and an account with nothing on it to
+       reuse. One press used to reach POST /phone-number and issue a
+       real, billed, unreturnable number in whatever area code
+       business_phone happened to be in -- a code that appeared nowhere
+       on the screen before or during the press.
+
+       A suggestion nobody looked at is a guess with a citation, so the
+       run stops at the number step, turns nothing on, and names the
+       code it WOULD offer so the next press is one press. */
+    marty().business_phone = "(510) 555-0142";
+    vapiIssues();
+
+    const result = await makeItLive({ locationId: MARTY, base: BASE });
+
+    expect(result.ok).toBe(false);
+    // The assertion that matters: nothing left this process. A rejected
+    // promise proves nothing once a number can exist.
+    expect(createPhoneNumber).not.toHaveBeenCalled();
+    expect(marty().twilio_number).toBeNull();
+    expect(marty().is_live).toBe(false);
+    expect(result.newNumber).toBeNull();
+    expect(result.ok === false && result.halt).toBe("area-code");
+    expect(step(result, "number")).toMatchObject({ outcome: "refused", action: null, number: null });
+    expect(result.ok === false && result.error).toMatch(/510/);
+    expect(result.ok === false && result.error).toMatch(/nothing was spent/i);
+    expect(step(result, "live").outcome).toBe("not-reached");
+  });
+
+  it("refuses an area code that is not one, before it asks Vapi for anything", async () => {
+    // A hand-rolled POST to the action id can carry anything at all, and
+    // the shape is checked on this road exactly as it is on the
+    // standalone one -- before a number is asked for, not after.
+    marty().business_phone = "(510) 555-0142";
+    vapiIssues();
+
+    for (const bogus of ["115", "015", "51", "5105", "bay", ""]) {
+      const result = await makeItLive({ locationId: MARTY, base: BASE, areaCode: bogus });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.halt).toBe("area-code");
+    }
+    expect(createPhoneNumber).not.toHaveBeenCalled();
+    expect(marty().twilio_number).toBeNull();
+    expect(marty().is_live).toBe(false);
+  });
+
+  it("never says a number was not issued when nobody could read whether it was", async () => {
+    /* A deadline, a gateway 5xx or an unparseable 201 on a POST that
+       ALLOCATES leaves one question open, and the one answer that must
+       never be given to it is "No number was issued" -- an operator who
+       reads that presses the button again, and the second press is the
+       one that mints the duplicate. */
+    createPhoneNumber.mockRejectedValue(
+      new NumberOutcomeUnknownError("Vapi did not answer within 20s (POST /phone-number)."),
+    );
+
+    const result = await makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).not.toMatch(/No number was issued/);
+    expect(result.ok === false && result.error).toMatch(/cannot tell whether a number was issued/);
+    expect(result.ok === false && result.error).toMatch(/Vapi dashboard/);
+    expect(marty().twilio_number).toBeNull();
+    expect(marty().is_live).toBe(false);
+  });
+
+  it("refuses to guess an area code, and mints nothing, when neither number yields one", async () => {
+    /* The whole point of the field. A guessed area code is a real,
+       billed, unreturnable number in the wrong city, printed on a door
+       -- and it only becomes visible after it cannot be taken back. So
+       this step stops exactly as the missing-fallback step stops, and
+       the sentence names the button that fixes it. */
+    marty().business_phone = null;
+    marty().fallback_human_number = "+442071838750";
+    vapiIssues();
+
+    const result = await makeItLive({ locationId: MARTY, base: BASE });
+
+    expect(result.ok).toBe(false);
+    expect(createPhoneNumber).not.toHaveBeenCalled();
+    expect(marty().twilio_number).toBeNull();
+    expect(marty().is_live).toBe(false);
+    expect(result.newNumber).toBeNull();
+    expect(step(result, "number")).toMatchObject({ outcome: "refused", action: null, number: null });
+    expect(result.ok === false && result.error).toMatch(/no area code to get a number in/i);
+    // The button that fixes it, named, and on this panel.
+    expect(result.ok === false && result.error).toMatch(/Get a new number/);
+    expect(step(result, "live").outcome).toBe("not-reached");
+  });
+
+  it("carries an empty area code through as its own sentence, not as a broken deployment", async () => {
+    createPhoneNumber.mockRejectedValue(new NoNumberInAreaCodeError("878"));
+
+    const result = await makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/no free number in area code 878/);
+    expect(result.ok === false && result.error).toMatch(/neighbouring area code/);
+    expect(result.newNumber).toBeNull();
+    expect(marty().is_live).toBe(false);
   });
 
   it("keeps a number Vapi issued, names it, and shows the handover even though the run failed", async () => {
@@ -1670,7 +1919,7 @@ describe("turning a restaurant on with one button", () => {
     vapiIssues("+15105557777");
     store.updateFailures = { locations: { code: "57014" } };
 
-    const result = await makeItLive({ locationId: MARTY, base: BASE });
+    const result = await makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED });
 
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toMatch(/\+15105557777/);
@@ -1691,7 +1940,7 @@ describe("turning a restaurant on with one button", () => {
       return { id: "n-new", number: "+15105558888", name: "Marty's", provider: "vapi", assistantId: ASSISTANT, status: "active" };
     });
 
-    const result = await makeItLive({ locationId: MARTY, base: BASE });
+    const result = await makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED });
 
     expect(result.ok).toBe(false);
     expect(marty().twilio_number).toBe("+15105551111");
@@ -1850,8 +2099,8 @@ describe("turning a restaurant on with one button", () => {
     vapiIssues();
 
     const [first, second] = await Promise.all([
-      makeItLive({ locationId: MARTY, base: BASE }),
-      makeItLive({ locationId: MARTY, base: BASE }),
+      makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED }),
+      makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED }),
     ]);
 
     // A single flight per restaurant: the second press joins the first
@@ -1866,8 +2115,10 @@ describe("turning a restaurant on with one button", () => {
   it("does not issue a second number when it is pressed again after it worked", async () => {
     vapiIssues();
 
-    await expect(makeItLive({ locationId: MARTY, base: BASE })).resolves.toMatchObject({ ok: true });
-    const again = await makeItLive({ locationId: MARTY, base: BASE });
+    await expect(
+      makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED }),
+    ).resolves.toMatchObject({ ok: true });
+    const again = await makeItLive({ locationId: MARTY, base: BASE, areaCode: CONFIRMED });
 
     // Every irreversible decision is re-derived from a fresh read, so
     // the second run simply finds a restaurant that is already right.

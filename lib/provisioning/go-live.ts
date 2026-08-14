@@ -15,8 +15,13 @@ import {
   tagAssistantForLocation,
 } from "@/lib/vapi/provision";
 import {
+  AREA_CODE_REFUSAL,
+  NoNumberInAreaCodeError,
+  NumberOutcomeUnknownError,
+  areaCodeOf,
   bindPhoneNumber,
   createPhoneNumber,
+  isAreaCode,
   listPhoneNumbers,
   type VapiPhoneNumber,
 } from "@/lib/vapi/phone-numbers";
@@ -148,6 +153,18 @@ export type GoLiveState = {
    *  honest answer to every number is "we do not know", and the one
    *  answer that must never be reached by losing a read is "yes". */
   ownershipError: string | null;
+  /** The area code to offer when a new number is asked for, read out of
+   *  this restaurant's OWN numbers -- business_phone first, then
+   *  fallback_human_number. Null when neither yields one.
+   *
+   *  A suggestion and never a decision. Vapi issues the number out of
+   *  whatever area code it is handed, that code is what a customer reads
+   *  off a door and dials, and there is no undo once it is issued -- so
+   *  the operator confirms it every time, and null here means they have
+   *  to type one rather than that anything will pick one for them.
+   *  Derived here so the panel, the standalone button and the one-click
+   *  all offer the same code out of the same two columns. */
+  defaultAreaCode: string | null;
 };
 
 export type GoLiveResult =
@@ -870,6 +887,13 @@ export async function getGoLiveState(locationId: string): Promise<GoLiveState | 
     numbers,
     vapiError,
     ownershipError: claimsKnown ? null : NO_OWNERSHIP,
+    // The restaurant's own line first: that is the area code its
+    // customers already dial and the one a forwarded call should look
+    // like it came from. The fallback second -- it is a person at this
+    // restaurant, so it is the next best evidence of where the
+    // restaurant is. Neither is invented if neither parses.
+    defaultAreaCode:
+      areaCodeOf(location.business_phone) ?? areaCodeOf(location.fallback_human_number),
   };
 }
 
@@ -1365,6 +1389,7 @@ export async function attachNumberToLocation({
 async function runProvision(
   state: GoLiveState,
   vapiKey: string,
+  areaCode: string,
 ): Promise<
   | { ok: true; message: string; number: string }
   | { ok: false; error: string; number: string | null }
@@ -1392,13 +1417,34 @@ async function runProvision(
 
   let created;
   try {
-    created = await createPhoneNumber(vapiKey, { assistantId, name: state.location.name });
+    created = await createPhoneNumber(vapiKey, {
+      assistantId,
+      name: state.location.name,
+      areaCode,
+    });
   } catch (err) {
+    // An empty pool in one area code is not a fault, and reporting it as
+    // one sends an operator to check a deployment that is working. It
+    // has its own sentence, which already says nothing was issued, and
+    // it names the move that actually helps: a neighbouring area code.
+    if (err instanceof NoNumberInAreaCodeError) {
+      console.error("[go-live] no number free in that area code", { areaCode: err.areaCode });
+      return { ok: false, error: err.message, number: null };
+    }
+    // A POST that allocates, whose outcome nobody read: a deadline, a
+    // 5xx, a body that would not parse. Its own message already says
+    // that much and says the dashboard is the only place that settles
+    // it, and NOTHING may be added to it -- "No number was issued" here
+    // is how one ambiguous failure becomes two billed numbers.
+    if (err instanceof NumberOutcomeUnknownError) {
+      console.error("[go-live] a new number's fate could not be read", { locationId: state.location.id });
+      return { ok: false, error: err.message, number: null };
+    }
     console.error("[go-live] could not get a number", err instanceof Error ? err.message : err);
-    // Deliberately not `number: created?.number` -- there is no record to
-    // read. createPhoneNumber's own message already says a number may
-    // exist and that the Vapi dashboard is the only place that settles
-    // it, which is the one thing worth saying here.
+    // Everything left is Vapi refusing the request outright -- a 4xx,
+    // which never reached the pool. That, and only that, is what earns
+    // the second sentence. Deliberately not `number: created?.number`:
+    // there is no record to read.
     return { ok: false, error: `${vapiMessage(err)} No number was issued.`, number: null };
   }
 
@@ -1434,14 +1480,31 @@ async function runProvision(
  *  The one-way door. Every caller must have asked first -- but the
  *  guard that counts is here: a restaurant that already has a number
  *  cannot mint a second one by clicking twice, and there is no undo to
- *  offer if it does. */
+ *  offer if it does.
+ *
+ *  `areaCode` is one of the two values this module accepts from a
+ *  browser -- makeItLive takes the same one, for the same act -- and
+ *  unlike a phone-number id it is a VALUE rather than a
+ *  selector -- there is no set to re-derive it against, because the
+ *  operator is choosing where the restaurant's new number will appear to
+ *  be. So it is checked for shape here, before a single read runs, and
+ *  checked again in createPhoneNumber before a request is built. It
+ *  reaches no query, no column and no log line; it reaches Vapi as three
+ *  digits or it reaches nothing at all. */
 export async function provisionNumberForLocation({
   locationId,
+  areaCode,
 }: {
   locationId: string;
+  areaCode: string;
 }): Promise<GoLiveResult> {
   const denied = await gate(locationId);
   if (denied) return denied;
+
+  // Before the Postgres read and before the two Vapi reads behind
+  // stateForWrite: a typo in this field costs nothing at all, and it
+  // should cost nothing at all.
+  if (!isAreaCode(areaCode)) return { ok: false, error: AREA_CODE_REFUSAL };
 
   const vapiKey = process.env.VAPI_PRIVATE_KEY;
   if (!vapiKey) {
@@ -1452,7 +1515,7 @@ export async function provisionNumberForLocation({
   const read = await stateForWrite(locationId);
   if ("refusal" in read) return read.refusal;
 
-  const done = await runProvision(read.state, vapiKey);
+  const done = await runProvision(read.state, vapiKey, areaCode);
   return done.ok ? { ok: true, message: done.message } : { ok: false, error: done.error };
 }
 
@@ -1899,6 +1962,12 @@ export type NewNumberHandover = {
 export type MakeItLiveHalt =
   /** A fact only a human knows. */
   | "fallback"
+  /** The other fact only a human knows, and the second of the two with
+   *  a control on this panel: a number would have to be minted and no
+   *  person has said which area code to mint it in. The confirmation
+   *  behind "Make it live" is where it gets answered, and "Get a new
+   *  number…" is the other way to the same field. */
+  | "area-code"
   /** Nothing may be turned on against facts nobody could read. */
   | "vapi-unreadable"
   /** Reuse cannot be proved impossible, so nothing may be minted. */
@@ -2105,6 +2174,55 @@ const FALLBACK_REFUSAL =
   "out for you. Transfers, allergy hand-offs and the kill switch all dial it. Type the number a " +
   "caller should reach when the agent cannot help, save it, and press this again.";
 
+/* WHAT THE ONE-CLICK DOES ABOUT THE AREA CODE, AND WHY.
+ *
+ * It never picks one. It mints only in a code a person handed it, and
+ * when it has none it refuses this one step, names where the code gets
+ * typed, and turns nothing on.
+ *
+ * The area code is not an implementation detail of provisioning. It is
+ * the visible half of a number that goes on a door, a menu and a Google
+ * listing, that a customer reads and dials, and that no undo in this
+ * feature can take back once Vapi has issued it -- lib/vapi/phone-numbers.ts
+ * ships no release wrapper on purpose. There is no honest source for a
+ * guess: the operator's own area code is wherever the operator happens
+ * to be sitting, a house constant would put a Pittsburgh number on a
+ * Berkeley door, and Vapi's own default is whatever its pool hands over.
+ * Every one of those is a mistake that only becomes visible after the
+ * number is real and unreturnable.
+ *
+ * GoLiveState.defaultAreaCode -- business_phone, then
+ * fallback_human_number -- is a SUGGESTION and is treated as one on both
+ * roads. The standalone button offers it in a field the operator can
+ * change; this run does not read it at all. Nor could it honestly: the
+ * second source is a person's mobile, and areaCodeOf cannot tell a bare
+ * ten-digit foreign number from a NANP one either. Both are fine to
+ * offer a person and neither is fit to spend unread.
+ *
+ * So `areaCode` arrives from the confirmation the operator answered, or
+ * it does not arrive and this stops -- exactly as it stops on a missing
+ * fallback number, and for the same reason: it has hit a fact only a
+ * person has. Refusing costs one more press of a button that is already
+ * under the operator's thumb. Guessing costs the number. */
+const NO_AREA_CODE_NOTE =
+  "There is no area code to get a number in. This restaurant has no number of its own on file " +
+  "to take one from, and nothing here will pick one for it — the area code is the part of the " +
+  "new number its customers will see and dial. Use “Get a new number…” below and type the one " +
+  "this restaurant wants, or put its own phone number on the record first and press this again.";
+
+/** The same refusal when the record DOES suggest a code, which changes
+ *  only what there is to say next: there is something to offer, and it
+ *  still has to be looked at by somebody before it is spent. */
+function mintNeedsAreaCode(suggestion: string): string {
+  return (
+    "Nothing on the account can be reused, so this restaurant needs a brand-new number — and " +
+    "the area code it is issued in is the part its customers read off a door and dial, which " +
+    `nothing here will choose on their behalf. This restaurant's own number is in ${suggestion}. ` +
+    "Press “Make it live” again to confirm that one or type another, or use “Get a new number…” " +
+    "below. Nothing was requested and nothing was spent."
+  );
+}
+
 type StepBag = {
   fallback: Extract<MakeItLiveStep, { key: "fallback" }>;
   assistant: Extract<MakeItLiveStep, { key: "assistant" }>;
@@ -2194,9 +2312,18 @@ const inFlight = new Map<string, Promise<MakeItLiveResult>>();
 export async function makeItLive({
   locationId,
   base,
+  areaCode,
 }: {
   locationId: string;
   base: string;
+  /** What the operator answered when this run's confirmation asked
+   *  which area code a brand-new number should be issued in. Undefined
+   *  when they were never asked, which is most runs -- almost none of
+   *  them reach the mint. It is a VALUE and not a selector, so it is
+   *  checked for shape here and again in createPhoneNumber, it reaches
+   *  no query, no column and no log line, and its absence is a refusal
+   *  rather than a default. */
+  areaCode?: string;
 }): Promise<MakeItLiveResult> {
   // First statement, before any argument is looked at, and before the
   // single-flight map: joining a run in progress is itself an answer,
@@ -2210,7 +2337,7 @@ export async function makeItLive({
 
   const run = (async () => {
     try {
-      return await runMakeItLive(locationId, base);
+      return await runMakeItLive(locationId, base, areaCode);
     } finally {
       inFlight.delete(locationId);
     }
@@ -2219,7 +2346,11 @@ export async function makeItLive({
   return run;
 }
 
-async function runMakeItLive(locationId: string, base: string): Promise<MakeItLiveResult> {
+async function runMakeItLive(
+  locationId: string,
+  base: string,
+  areaCode: string | undefined,
+): Promise<MakeItLiveResult> {
   const steps = untriedSteps();
 
   const stopped = (
@@ -2418,9 +2549,32 @@ async function runMakeItLive(locationId: string, base: string): Promise<MakeItLi
       action: plan.because === "own" ? "attached-own" : "attached-free",
       number: attached.number,
     };
+  } else if (!isAreaCode(areaCode)) {
+    /* The one-way door, and no person has said which area code it opens
+       onto. See the memo above NO_AREA_CODE_NOTE for why this refuses
+       rather than picks -- and note that it refuses just as flatly when
+       the record DOES suggest a code, because a suggestion nobody looked
+       at is a guess with a citation. Nothing was requested and nothing
+       was spent. */
+    const note = state.defaultAreaCode
+      ? mintNeedsAreaCode(state.defaultAreaCode)
+      : NO_AREA_CODE_NOTE;
+    steps.number = {
+      key: "number",
+      outcome: "refused",
+      note,
+      action: null,
+      number: null,
+    };
+    return stopped(`Not turned on. ${note}`, {
+      halt: "area-code",
+      final: finalOf(state),
+      blockedBy: blockersOf(state.checks),
+    });
   } else {
-    // The one-way door, reached only because reuse was proved impossible.
-    const got = await runProvision(state, vapiKey);
+    // The one-way door, reached only because reuse was proved
+    // impossible, in the area code a person confirmed.
+    const got = await runProvision(state, vapiKey, areaCode.trim());
     if (got.number) newNumber = handoverOf(state.location, got.number);
     if (!got.ok) {
       steps.number = {

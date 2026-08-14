@@ -562,6 +562,29 @@ a:hover { color: var(--color-accent); }
 .fact-row dt { flex: none; width: 120px; }
 .fact-row dd { margin: 0; flex: 1; word-break: break-word; }
 
+/* Seven of the twelve rows on /admin/<id> lead into the editor now, and
+   a 13px line is not a target: three of them render "—" when the column
+   is empty, so the whole press would be a few pixels of em dash. Each
+   value gets the same 34px box .admin-nav-item and .edit-index-link
+   take, and the row is given that height too so the five that are not
+   links stay level with them -- var(--space-2) top and bottom plus the
+   hairline the rule above draws. Keyed on a card that actually holds
+   links, so the read-only copy of this card on /edit is untouched. */
+.admin-facts:has(.row-link) .fact-row {
+  align-items: center;
+  min-height: calc(34px + var(--space-2) * 2 + 1px);
+}
+/* Accent alone would leave "which of these can I change" carried by hue
+   -- .page-head .row-link already wears an underline for exactly that
+   reason, and this card's rows are the same choice one click away. */
+.admin-facts .fact-row .row-link {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 @media (max-width: 900px) {
   .admin-bar { padding: var(--space-3) 16px; flex-wrap: wrap; }
   .admin-who { width: 100%; margin-left: 0; order: 3; }
@@ -1192,6 +1215,30 @@ iframe.review-image { height: 62vh; }
    .tag and .review-item's 3px left border, and .golive-item above wears
    the last of those. */
 .golive-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* The three checklist rows whose subject is a thing the operator types
+   are links into the editor card that holds it. The row keeps its shape
+   -- this only undoes the anchor's own colour and rule, and gives the
+   press somewhere to land. The whole body is the target rather than a
+   word inside it: on the tablet this was reported from, the row is the
+   thumb-sized thing on the screen. */
+.golive-link { color: inherit; text-decoration: none; }
+/* The mark has to be a RESTING one. This defect was reported from an
+   iPad: :hover never fires there, and a row left pixel-identical to the
+   three unlinked ones beside it tells the operator who said "I can't
+   able to see the menus" nothing at all. Accent and an underline
+   together, so it is never hue alone -- the same pair .page-head
+   .row-link wears. The note under it stays plain: the title is the
+   subject, and underlining a two-line instruction as well would make
+   the row look like a paragraph of links. */
+.golive-link .golive-title {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* Press feedback, for the screen that has no hover to give any. */
+.golive-link:hover .golive-title,
+.golive-link:active .golive-title { color: var(--color-accent-900); }
+.golive-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .golive-title {
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
@@ -1481,3 +1528,119 @@ iframe.review-image { height: 62vh; }
 /* The closed toggle is a 12px label wrapped round a checkbox. The box
    grows to the row's target height; the text does not. */
 .holiday-row .hours-closed { min-height: 36px; }
+
+/* ── the editor's section index ────────────────────────────────────── */
+
+/* The list of the editor's sections, worn on both screens that lead into
+   them: on /admin/<id> as the way in, on /edit as a sticky index that
+   also marks where you are.
+
+   The complaint it answers is a measurement. On an iPad the Menu heading
+   on /edit sits 5275px down the page and Hours 1485px, with seven cards
+   in between and nothing to jump with; the operator's words were "I
+   can't able to see the menus from my iPad".
+
+   One shape, two behaviours, and the difference is only what the strip
+   costs where it sits: in the flow it wraps, so nothing is ever past an
+   edge; stuck to the top of the viewport it must not, because its height
+   is subtracted from every screen below it for as long as the page is
+   open.
+
+   The system's .nav IS that shape, worn directly -- both places render
+   `nav edit-index`, exactly as the operator bar renders `nav admin-nav`
+   -- so `display/align-items` and every rule on `.nav a`, plain text at
+   rest and accent on hover, come from industry.css and stay in step with
+   it. What is below is only what a section index needs on top. */
+.edit-index {
+  /* Wraps HERE, on /admin/<id>, where it is a block in the flow and the
+     only cost of a second line is a second line. Nothing may be past an
+     edge on the screen that was reported blind: at 768px the eight
+     entries take two rows and every one of them is readable without
+     discovering that anything scrolls. */
+  flex-wrap: wrap;
+  /* .nav is a bar of four or five links and spaces them for it; this is
+     eight, each carrying its own 34px box, and they are separated by
+     that box rather than by air. */
+  gap: var(--space-1);
+  /* .nav carries a bar's own padding. This one is a rule across a page
+     that already has margins, so only the vertical half is wanted. */
+  padding: var(--space-2) 0;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-divider);
+}
+.edit-index-kicker { flex: none; margin-right: var(--space-2); }
+.edit-index-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  /* The same target .admin-nav-item takes, and for the same reason: the
+     ink is a 13px word, the box is a thumb on a tablet. */
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  white-space: nowrap;
+}
+/* .nav a sets 14px, which is right for a bar of five. Eight entries have
+   to fit the 736px an iPad leaves, and 13px is what puts Menu -- the
+   entry the complaint was actually about -- inside that edge. Two
+   classes deep because `.nav a` is a class and a type and would
+   otherwise win on specificity alone. */
+.edit-index .edit-index-link { font-size: 13px; }
+.edit-index-link:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.edit-index-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* Where you are. Accent alone would make it a colour-only signal, so the
+   condensed face carries it too -- the same pair .admin-nav-item and
+   .side-nav-item use to mark the current page. */
+.edit-index-link[aria-current] {
+  color: var(--color-accent);
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+}
+
+/* On /edit the same strip stays put. .page is the scrolling column, so
+   `top: 0` pins it under nothing; the opaque background is what stops
+   seven screens of fields reading through it.
+
+   The z-index is not decoration: every card below is a .card.blueprint,
+   which is `position: relative`, and at z-index auto a positioned
+   element paints over one that came BEFORE it in the document -- the
+   strip would be scrolled over rather than under. Same rule the two
+   .dialog-backdrop lines above were written for. */
+.edit-index.is-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* And it does NOT wrap here. A sticky strip that grows to three rows
+     on a narrow screen is three rows of navigation permanently over the
+     fields; one row that scrolls sideways costs 48.6px at every width,
+     which is what scroll-margin-top below is measured against. */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  /* The sideways scroll ends at this strip rather than dragging the
+     page -- or, on iOS, the tab -- along with it. */
+  overscroll-behavior-x: contain;
+}
+
+/* And the same rule turned around: a fixed backdrop at z-index auto
+   paints under a stacking context that has a value, so the menu's three
+   confirms would come up behind the strip. Same fix, and the same value,
+   as .review .dialog-backdrop and .golive .dialog-backdrop. */
+.setup-stack .dialog-backdrop { z-index: 5; }
+
+/* Every section the strip points at clears the strip. Without this the
+   anchor works and looks broken: the card's heading lands underneath the
+   index and an operator arrives at a card whose title they cannot read.
+   The strip is 48.6px -- a 34px target plus var(--space-2) above and
+   below plus its hairline -- and this is that, rounded up through the
+   tokens, with var(--space-3) of air over the heading. */
+.setup-stack > section[id] { scroll-margin-top: calc(var(--space-8) * 2 + var(--space-3)); }
+
+/* The jump this exists for is 5275px. Smooth is what keeps it a movement
+   between two parts of one page rather than a teleport that leaves the
+   operator asking what they are now looking at. Guarded: to a reader who
+   has asked for less motion, a 5275px slide is precisely the motion they
+   asked to be spared, and the instant jump is the better answer anyway.
+   Scoped to the page that has the sticky index, so no other route's
+   scrolling changes underneath it. */
+@media (prefers-reduced-motion: no-preference) {
+  html:has(.edit-index.is-sticky) { scroll-behavior: smooth; }
+}
