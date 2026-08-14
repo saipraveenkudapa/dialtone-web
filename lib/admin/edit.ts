@@ -842,8 +842,12 @@ export function normaliseItemName(value: string): string {
  *    name                   -> {{business_name}}, twice, in the system
  *                              prompt, and the greeting fallback
  *    address                -> {{address}}
- *    timezone               -> {{current_datetime}} (Intl formats `now`
- *                              in it at build time)
+ *    timezone               -> {{current_datetime}}, which is no longer a
+ *                              date but the Liquid template Vapi renders
+ *                              per call -- the zone name is interpolated
+ *                              INTO that template, so this column is
+ *                              still baked into the prompt and still
+ *                              needs a push when it changes
  *    order_types            -> {{takeout_delivery_settings}}
  *    fallback_human_number  -> nativeTransferTool's destination number
  *
@@ -853,13 +857,14 @@ export function normaliseItemName(value: string): string {
  *  of those is queried from Postgres inside the call, so they land on
  *  the next call with nothing to push.
  *
- *  `hours` is the near miss. {{hours_today}} is a frozen snapshot of the
- *  day the assistant was built -- but the prompt orders the model to
- *  call get_hours, and app/api/agent/hours/route.ts queries Postgres
- *  (with holiday_hours) per call. So an hours edit takes effect on the
- *  next call and does NOT drag a rebuild along with it. Rebuilding for
- *  hours would only refresh a line the model is told not to trust, at
- *  the cost of rotating the tool secret. saveHours therefore returns
+ *  `hours` was the near miss, and is not one any more. The prompt used
+ *  to carry {{hours_today}}, a frozen snapshot of the day the assistant
+ *  was built; that line is gone, replaced by an instruction to call
+ *  get_hours, and app/api/agent/hours/route.ts queries Postgres (with
+ *  holiday_hours) per call. So an hours edit takes effect on the next
+ *  call and does NOT drag a rebuild along with it -- there is now no
+ *  stale copy of the hours anywhere to refresh, at any price, let alone
+ *  at the cost of rotating the tool secret. saveHours therefore returns
  *  phone: "not-needed", and the UI must say the edit is live rather than
  *  claim a push it did not do. */
 export const SYNCED_COLUMNS = [

@@ -2554,7 +2554,37 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
   // read aloud. Any {{...}} at all is a bug: every real placeholder is
   // always substituted by lib/agent/prompt.ts::buildSystemPrompt before
   // this route returns.
-  const hasUnfilledPlaceholder = /\{\{[^{}]+\}\}/.test(prompt ?? "");
+  //
+  // With ONE exception, and it is the point of the stale-date fix rather
+  // than a hole in this check. The date line is now a LiquidJS template
+  // that VAPI renders at the start of every call, in the location's own
+  // timezone:
+  //
+  //     {{"now" | date: "%A, %B %d, %Y, %I:%M %p", "America/Los_Angeles"}}
+  //
+  // Before that it was formatted at build time -- so a static assistant
+  // told every caller it was whatever day it was last pushed, and
+  // resolved "tomorrow" against that wrong day, silently booking
+  // reservations for the wrong date. The exact template is cut out
+  // before this check runs, rather than the pattern being loosened:
+  // loosening it is precisely how a genuinely unfilled placeholder gets
+  // through, which is what the note above is about.
+  const VAPI_DATE_TEMPLATE = '\\{\\{"now" \\| date: "[^"]*", "[^"]*"\\}\\}';
+  // And the template has to actually BE there. Without this line, a
+  // regression that put a build-time date back would make this check
+  // easier to pass, not harder.
+  const hasVapiDateTemplate = new RegExp(VAPI_DATE_TEMPLATE).test(prompt ?? "");
+  const hasUnfilledPlaceholder = /\{\{[^{}]+\}\}/.test(
+    (prompt ?? "").replace(new RegExp(VAPI_DATE_TEMPLATE, "g"), ""),
+  );
+  // The other half of that fix: one day's hours are no longer baked into
+  // the text, where they were wrong on every other weekday and could
+  // never honour a holiday override. The prompt points at get_hours,
+  // which queries Postgres per call.
+  const hasLiveHoursPointer =
+    typeof prompt === "string" &&
+    prompt.includes("Hours: call get_hours - never state hours from memory.") &&
+    !prompt.includes("Hours today:");
   // A prompt this short could not possibly contain the safety rules
   // below -- an empty string, or a stub, passed the old length-blind
   // regex check vacuously. 3000 is comfortably below the real prompt's
@@ -2575,9 +2605,14 @@ async function runChecks(demoLocation, cacioPepe, canaries) {
       "If anyone mentions an allergy, an intolerance, celiac, or asks what is in a dish for a health reason, stop.",
     );
   check(
-    "prompt is substantial, contains load-bearing spec lines, and has no unfilled placeholders",
-    isSubstantial && hasPaymentRule && hasAllergyRule && !hasUnfilledPlaceholder,
-    `length=${typeof prompt === "string" ? prompt.length : "n/a"} payment_rule=${hasPaymentRule} allergy_rule=${hasAllergyRule} unfilled={{...}}=${hasUnfilledPlaceholder}`,
+    "prompt is substantial, contains load-bearing spec lines, renders its date per call, and has no unfilled placeholders",
+    isSubstantial &&
+      hasPaymentRule &&
+      hasAllergyRule &&
+      hasVapiDateTemplate &&
+      hasLiveHoursPointer &&
+      !hasUnfilledPlaceholder,
+    `length=${typeof prompt === "string" ? prompt.length : "n/a"} payment_rule=${hasPaymentRule} allergy_rule=${hasAllergyRule} vapi_date_template=${hasVapiDateTemplate} live_hours_pointer=${hasLiveHoursPointer} unfilled={{...}}=${hasUnfilledPlaceholder}`,
   );
 
   // Fail-closed. The brief did not know this route could refuse at all --

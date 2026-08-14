@@ -1,6 +1,4 @@
-import { supabaseAdmin } from "@/lib/supabase/admin";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
-import { openState, type HolidayRow, type HoursRow } from "@/lib/agent/hours";
 import { buildGreeting, buildSystemPrompt } from "@/lib/agent/prompt";
 
 // How long a consumer may treat a response as fresh. Short on purpose:
@@ -21,17 +19,16 @@ const CONFIG_TTL_MS = 5 * 60 * 1000;
  *  are inlined rather than shared: `respond.ts` is the Vapi tool
  *  envelope, full stop.
  *
- *  Callers of this route MUST fetch it fresh for every call, never cache
- *  or store the response. `system_prompt` has the date and today's hours
- *  baked into its text at the instant this responds (see `assembled_at`
- *  below) -- a copy held from an earlier call recites a stale day's
- *  hours as today's and, worse, resolves words like "tomorrow" or
- *  "Friday" against the wrong date, so a reservation lands on the wrong
- *  day or gets rejected as already past. `assembled_at` and
- *  `expires_at` let a consumer detect a copy it is holding onto for too
- *  long; they cannot force a platform that caches this call to fetch it
- *  again -- that wiring is this route's caller's job, tracked
- *  separately.
+ *  `system_prompt` no longer has the date or today's hours baked into
+ *  its text. The date is a Liquid template Vapi renders at the start of
+ *  every call, and the hours line points at `get_hours` -- so a copy of
+ *  this response held overnight no longer recites yesterday's date or a
+ *  stale day's hours, which is what used to make a reservation land on
+ *  the wrong day. `assembled_at` / `expires_at` still ride along: this
+ *  response also carries `greeting`, `fallback_number`, `kill_switch_on`
+ *  and `is_live`, all of which an owner can change at any moment, so a
+ *  consumer still needs to be able to tell how old a copy it is holding
+ *  is.
  *
  *  `kill_switch_on` / `is_live` are enforced here, not just reported:
  *  when either says the assistant should not run, `assistant_enabled`
@@ -39,10 +36,15 @@ const CONFIG_TTL_MS = 5 * 60 * 1000;
  *  than usable text, so a caller cannot accidentally hand a live caller
  *  a working config for a location whose owner switched the agent off.
  *  `fallback_number` still rides along either way so the platform can
- *  route to a human. Whatever wires this location to the voice platform
- *  must check `assistant_enabled` before using anything else in this
- *  response, the same way `app/api/twilio/voice/route.ts` checks
- *  `kill_switch_on || !is_live` before ever dialing the assistant. */
+ *  route to a human.
+ *
+ *  That is a PROVISIONING guard, not the call-time one, and the two must
+ *  not be confused: scripts/provision-vapi.mjs refuses to build an
+ *  assistant for a disabled location because of these fields, but no
+ *  caller ever reaches this route. The kill switch is enforced on the
+ *  call path by app/api/vapi/webhook/route.ts, which answers Vapi's
+ *  `assistant-request` with a transfer to a person instead of an
+ *  assistant id. */
 export async function POST(request: Request) {
   const location = await locationForSecret(agentSecretFromRequest(request));
   if (!location) return Response.json({ ok: false, error: "Not authorised" }, { status: 401 });
@@ -64,45 +66,20 @@ export async function POST(request: Request) {
     });
   }
 
-  const supabase = supabaseAdmin();
-  const [hours, holidays] = await Promise.all([
-    supabase.from("hours").select("*").eq("location_id", location.id),
-    supabase.from("holiday_hours").select("*").eq("location_id", location.id),
-  ]);
-
-  if (hours.error || holidays.error) {
-    console.error("[agent] hours read failed", {
-      location_id: location.id,
-      code: (hours.error ?? holidays.error)?.code ?? null,
-    });
-    return Response.json(
-      { ok: false, error: "I can't put the assistant together right now." },
-      { status: 500 },
-    );
-  }
-
-  // One instant for both the open/closed calculation and the prompt's
-  // own date text, so they cannot straddle a day or DST boundary and
-  // disagree with each other mid-assembly.
+  // The `hours` / `holiday_hours` read and the `openState()` call that
+  // used to sit here fed exactly one thing: the day's hours, baked into
+  // the prompt text. The prompt now points the agent at `get_hours`
+  // instead of carrying a value that is wrong on every other weekday and
+  // cannot honour a holiday override, so there is nothing left for them
+  // to compute -- and this route no longer has a database read that can
+  // fail between a caller ringing and an assistant existing.
   const now = new Date();
-
-  const state = openState({
-    now,
-    timezone: location.timezone,
-    hours: (hours.data ?? []) as HoursRow[],
-    holidays: (holidays.data ?? []) as HolidayRow[],
-  });
-
   const expiresAt = new Date(now.getTime() + CONFIG_TTL_MS);
 
   return Response.json({
     ok: true,
     assistant_enabled: true,
-    system_prompt: buildSystemPrompt({
-      location,
-      hoursToday: state.today,
-      now,
-    }),
+    system_prompt: buildSystemPrompt({ location }),
     greeting: buildGreeting(location),
     fallback_number: location.fallback_human_number,
     kill_switch_on: location.kill_switch_on,

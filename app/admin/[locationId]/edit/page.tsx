@@ -308,10 +308,16 @@ function stamp(timezone: string, iso: string): string {
  * a change to lib/agent/prompt.ts cannot make this report a
  * disagreement that does not exist.
  *
- * Whole-prompt equality would be meaningless: {{current_datetime}} and
- * {{hours_today}} are frozen at build time and always differ by the next
- * day. So the comparison is per line, anchored, and a line that cannot
- * be found at all is `unknown` -- never `matches`. */
+ * Whole-prompt equality USED to be meaningless: {{current_datetime}} and
+ * {{hours_today}} were frozen at build time and always differed by the
+ * next day. Neither is any more -- the date is a Liquid template Vapi
+ * renders per call and the hours line is a pointer at get_hours, so the
+ * prompt is now deterministic for a given location row and whole-prompt
+ * equality would mean something. Widening this comparison is a separate
+ * change with its own failure modes (a prompt edited on Vapi by hand
+ * would start reporting drift on every line at once); it is deliberately
+ * not made here. So the comparison stays per line, anchored, and a line
+ * that cannot be found at all is `unknown` -- never `matches`. */
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -417,7 +423,7 @@ async function readAssistantDrift(location: EditableLocation): Promise<Assistant
   // destination need no timezone and are still compared.
   let expected: string | null = null;
   try {
-    expected = buildSystemPrompt({ location: row, hoursToday: "", now: new Date() });
+    expected = buildSystemPrompt({ location: row });
   } catch {
     expected = null;
   }

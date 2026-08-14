@@ -20,11 +20,7 @@ const location = {
 } as unknown as LocationRow;
 
 describe("system prompt", () => {
-  const prompt = buildSystemPrompt({
-    location,
-    hoursToday: "5:00 PM to 10:30 PM",
-    now: new Date("2026-08-13T02:00:00Z"),
-  });
+  const prompt = buildSystemPrompt({ location });
 
   it("fills every placeholder", () => {
     expect(prompt).not.toMatch(/\{\{[a-z_]+\}\}/);
@@ -34,8 +30,71 @@ describe("system prompt", () => {
     expect(prompt).toContain("Nonna Rosa");
   });
 
-  it("carries today's hours", () => {
-    expect(prompt).toContain("5:00 PM to 10:30 PM");
+  // Was `toContain("5:00 PM to 10:30 PM")`, and that assertion was
+  // certifying the defect. This assistant is static -- the phone number
+  // resolves straight to an assistant id and the prompt is whatever text
+  // was last pushed -- so ONE day's hours baked into it is wrong on every
+  // other weekday, and it cannot honour a holiday override at all
+  // (openState merges holiday_hours; a frozen string cannot). The single
+  // day where being wrong is most expensive and most public -- "are you
+  // open Thanksgiving?" -- is exactly the day a baked value gets wrong.
+  //
+  // Baking the whole WEEK instead was considered and rejected: it
+  // re-creates this same defect class one notch slower, correct only
+  // until an owner edits hours and nobody re-pushes the assistant. The
+  // live tool already returns the only three facts the agent can say out
+  // loud about hours (open_now, today, next_open), and the prompt has
+  // mandated calling it in "## Closed hours" all along.
+  it("points at get_hours instead of baking one day's hours into the text", () => {
+    expect(prompt).toContain("Hours: call get_hours - never state hours from memory.");
+    expect(prompt).not.toContain("Hours today:");
+    expect(prompt).not.toContain("5:00 PM to 10:30 PM");
+  });
+
+  // F2, the half that made reservations land on the wrong day: the date
+  // must be a template Vapi renders at the start of every call, never a
+  // value formatted when the assistant was last pushed. The live
+  // assistant was still saying "Thursday, August 13, 2026 at 10:58 AM"
+  // on Friday 14 August, and it would have kept drifting one day further
+  // every day.
+  //
+  // The exact string is asserted, not a loose shape, because every part
+  // of it is load-bearing: `{{`/`}}` is what makes Vapi render it at all,
+  // `date` is the LiquidJS filter, the strftime string is the filter's
+  // own documented format, and the third argument is the IANA zone -- a
+  // date rendered in UTC would put a 9pm Pacific caller on tomorrow.
+  it("renders the date at call time, in the location's zone, not at build time", () => {
+    expect(prompt).toContain(
+      'Today\'s date and time: {{"now" | date: "%A, %B %d, %Y, %I:%M %p", "America/Los_Angeles"}}',
+    );
+    // No build-time date survived anywhere: the old line always began
+    // with a weekday name straight from Intl.
+    expect(prompt).not.toMatch(
+      /Today's date and time: (Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day/,
+    );
+  });
+
+  // The consequence that makes the fix verifiable rather than merely
+  // plausible: with nothing in the text derived from "when was this
+  // built", the same location row must produce the same bytes forever.
+  // If this ever fails, something time-dependent has crept back in --
+  // which is precisely how F2 happened the first time.
+  it("is deterministic: the same location row always builds the same bytes", () => {
+    expect(buildSystemPrompt({ location })).toBe(buildSystemPrompt({ location }));
+  });
+
+  // The Intl.DateTimeFormat construction in buildSystemPrompt formats
+  // nothing now, and it must not be deleted as dead. locations.timezone
+  // has no CHECK constraint, and this is the loud, build-time failure
+  // that app/admin/[locationId]/edit/page.tsx:411-421 wraps in a
+  // try/catch -- "the dead-air bug the timezone <select> exists to
+  // prevent". Remove it and a bad zone stops failing here and starts
+  // failing silently inside Vapi's Liquid engine, mid-call, on a
+  // restaurant's live number.
+  it("still refuses a timezone Intl does not know, rather than shipping it to Vapi", () => {
+    expect(() =>
+      buildSystemPrompt({ location: { ...location, timezone: "Mars/Olympus_Mons" } }),
+    ).toThrow(RangeError);
   });
 
   it("keeps the allergy rule verbatim", () => {
@@ -297,22 +356,62 @@ describe("system prompt", () => {
     // the work. The half of that line that is NOT about place_order --
     // never translate a menu item name when you say it out loud -- stays
     // in "## Language", and is asserted below.
-    expect(prompt.length).toBeLessThan(8800);
+    //
+    // Fifth, from 8800 to 8900, for the stale-date fix -- and this one
+    // is different from the four above in a way that matters, because
+    // what the MODEL reads did not grow the way this number did.
+    //
+    // The date line is now a Liquid template Vapi renders at the start
+    // of each call. We measure the template (66 characters for
+    // "America/Los_Angeles"); the model reads what it renders to (35,
+    // "Wednesday, August 12, 2026, 7:00 PM"). So 31 of the characters
+    // this assertion counts are never read by anything. The hours line
+    // is a real +22 the model does read, and it is a straight swap: a
+    // value that was wrong on six days out of seven, for the instruction
+    // to fetch the right one.
+    //
+    // Measured, all three zones below: the model-visible prompt is 8768
+    // characters -- constant, and under the OLD ceiling. The measured
+    // string is 8799 for Los_Angeles and 8810 for the longest zones.
+    // Nothing was cut to buy this room, because by the measure this
+    // ceiling exists to defend -- how much the model reads before it can
+    // answer -- nothing was spent. The ceiling moved to stop counting
+    // template syntax as if it were instructions.
+    //
+    // The 100 characters also cover the other new variable: the IANA
+    // zone name is interpolated into that template, so the MEASURED
+    // length is now a function of the location's timezone (the rendered
+    // one is not -- Vapi replaces the whole template). The fixture's
+    // "America/Los_Angeles" is 19 characters; the longest zones are
+    // around 30 ("America/Argentina/Buenos_Aires"). The test below pins
+    // the long-zone case, so a location in Argentina cannot quietly ship
+    // a prompt this fixture says is fine.
+    expect(prompt.length).toBeLessThan(8900);
+  });
+
+  // The ceiling has to hold for every location, not just the one this
+  // file happens to fixture. Since F2 the prompt carries the location's
+  // IANA zone name inside the date template, so its length varies by
+  // location -- and a test that only ever measures a 19-character zone
+  // would stay green while a restaurant with a 30-character one shipped
+  // a prompt over budget.
+  it("stays under the ceiling for the longest timezone names too", () => {
+    for (const timezone of [
+      "America/Argentina/Buenos_Aires",
+      "America/North_Dakota/New_Salem",
+      "America/Indiana/Indianapolis",
+    ]) {
+      expect(buildSystemPrompt({ location: { ...location, timezone } }).length).toBeLessThan(
+        8900,
+      );
+    }
   });
 
   it("falls back to 'not on file' when the address is empty or blank", () => {
-    const empty = buildSystemPrompt({
-      location: { ...location, address: "" },
-      hoursToday: "5:00 PM to 10:30 PM",
-      now: new Date("2026-08-13T02:00:00Z"),
-    });
+    const empty = buildSystemPrompt({ location: { ...location, address: "" } });
     expect(empty).toContain("Address: not on file");
 
-    const whitespace = buildSystemPrompt({
-      location: { ...location, address: "   " },
-      hoursToday: "5:00 PM to 10:30 PM",
-      now: new Date("2026-08-13T02:00:00Z"),
-    });
+    const whitespace = buildSystemPrompt({ location: { ...location, address: "   " } });
     expect(whitespace).toContain("Address: not on file");
   });
 });
@@ -336,12 +435,16 @@ describe("template", () => {
     const found = [...SYSTEM_PROMPT_TEMPLATE.matchAll(/\{\{([a-z_]+)\}\}/g)].map(
       (m) => m[1],
     );
+    // `hours_today` was removed with F2: the template no longer has a
+    // slot for a day's hours to be baked into, which is the whole point.
+    // `current_datetime` stays -- it is still a substitution, but what
+    // gets substituted in is now a Liquid template Vapi renders per call
+    // rather than a date formatted at build time.
     expect(new Set(found)).toEqual(
       new Set([
         "business_name",
         "address",
         "current_datetime",
-        "hours_today",
         "takeout_delivery_settings",
       ]),
     );
@@ -358,13 +461,23 @@ describe("template", () => {
   // accident: confirm the diff to SYSTEM_PROMPT_TEMPLATE is intended,
   // then recompute the hash below (`sha256` of the template string) and
   // update this literal as part of that same, reviewed change.
+  //
+  // Re-blessed once, for F2, and this is that reviewed record of it. The
+  // previous hash was 99042b5046cd347fd6cd11128f969a8b2cc83f3d9c0a95c20a54e2260a414cea.
+  // Exactly one line of the template changed:
+  //     -Hours today: {{hours_today}}
+  //     +Hours: call get_hours - never state hours from memory.
+  // Nothing else in the 8757 bytes moved -- the date line still reads
+  // `Today's date and time: {{current_datetime}}`; what changed there is
+  // what buildSystemPrompt substitutes INTO it, which is not part of this
+  // template and so not part of this hash.
   it("matches the blessed hash of the prompt text", () => {
     const hash = crypto
       .createHash("sha256")
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "99042b5046cd347fd6cd11128f969a8b2cc83f3d9c0a95c20a54e2260a414cea",
+      "529b3a8f9cb294080b93b6f4eac54876e115f4c5ecbe256200beb3155d841de1",
     );
   });
 

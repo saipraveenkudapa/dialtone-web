@@ -118,7 +118,11 @@ export type MenuImportRow = {
 export type CallRow = {
   id: string;
   location_id: string;
-  twilio_call_sid: string;
+  /** NULL for a call that did not come through Twilio, which is every
+   *  call on a Vapi-provisioned number -- see
+   *  supabase/migrations/20260814000100_vapi_calls.sql. Vapi's own id
+   *  for the call lives in `provider_call_id`; the two are never mixed. */
+  twilio_call_sid: string | null;
   from_number: string | null;
   from_city: string | null;
   from_state: string | null;

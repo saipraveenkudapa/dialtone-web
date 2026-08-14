@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { hashAgentSecret } from "@/lib/agent/auth";
 import { buildGreeting, buildSystemPrompt } from "@/lib/agent/prompt";
-import { openState, type HoursRow } from "@/lib/agent/hours";
+import { type HoursRow } from "@/lib/agent/hours";
 import { buildAssistantPayload, upsertAssistant } from "@/lib/vapi/provision";
 import type { LocationRow } from "@/lib/supabase/types";
 
@@ -35,18 +35,26 @@ import type { LocationRow } from "@/lib/supabase/types";
  *  lib/agent/auth.ts's locationForSecret matches a tool call against. */
 export async function provisionAssistantForLocation({
   location,
-  hours,
   base,
   vapiKey,
-  now = new Date(),
 }: {
   location: LocationRow;
+  /** Not read any more, and deliberately still accepted.
+   *
+   *  The system prompt used to carry one day's hours as text; it now
+   *  tells the agent to call `get_hours` instead, so there is nothing
+   *  left here to bake in. Each of this function's three callers
+   *  (create-restaurant, the operator's edit-screen rebuild, go-live)
+   *  reads these rows from Postgres itself and has its own tested
+   *  "could not read this restaurant's hours" branch around that read.
+   *  Dropping the parameter would make those reads dead and pull four
+   *  more files, plus their error paths, into a change about a stale
+   *  date -- so the parameter stays and the value is ignored. */
   hours: HoursRow[];
   /** Origin of this deployment, no trailing slash. Every tool's
    *  `server.url` is built from it. */
   base: string;
   vapiKey: string;
-  now?: Date;
 }): Promise<{ secret: string; assistantId: string; created: boolean }> {
   if (!location.fallback_human_number) {
     throw new Error(
@@ -55,8 +63,6 @@ export async function provisionAssistantForLocation({
     );
   }
 
-  const state = openState({ now, timezone: location.timezone, hours, holidays: [] });
-
   const secret = crypto.randomBytes(32).toString("base64url");
 
   const payload = buildAssistantPayload({
@@ -64,7 +70,7 @@ export async function provisionAssistantForLocation({
     base,
     agentSecret: secret,
     config: {
-      system_prompt: buildSystemPrompt({ location, hoursToday: state.today, now }),
+      system_prompt: buildSystemPrompt({ location }),
       greeting: buildGreeting(location),
       fallback_number: location.fallback_human_number,
     },

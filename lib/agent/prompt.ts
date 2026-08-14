@@ -150,7 +150,7 @@ When the order or booking is done, confirm it in one line, say thanks, and end. 
 Name: {{business_name}}
 Address: {{address}}
 Today's date and time: {{current_datetime}}
-Hours today: {{hours_today}}
+Hours: call get_hours - never state hours from memory.
 Order type available: {{takeout_delivery_settings}}`;
 
 const ORDER_TYPE_WORDS: Record<string, string> = {
@@ -159,29 +159,52 @@ const ORDER_TYPE_WORDS: Record<string, string> = {
   both: "pickup and delivery",
 };
 
-export function buildSystemPrompt({
-  location,
-  hoursToday,
-  now,
-}: {
-  location: LocationRow;
-  hoursToday: string;
-  now: Date;
-}) {
-  const when = new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
+/** The date line, as a template Vapi renders at the START OF EVERY CALL
+ *  rather than a value frozen when the assistant was last pushed.
+ *
+ *  This assistant is static: the phone number resolves straight to an
+ *  assistant id, and `model.messages[0].content` is whatever text was
+ *  pushed to Vapi last. A date formatted here, at build time, is
+ *  therefore correct for exactly one day and drifts one day further
+ *  every day after -- the live assistant was still telling callers it
+ *  was Thursday 13 August on Friday 14 August, which is how "book me in
+ *  for tomorrow" lands on the wrong day with a caller who believes they
+ *  have a table.
+ *
+ *  Vapi renders dynamic variables in the system prompt with LiquidJS at
+ *  call time, and its `date` filter takes an IANA zone as its second
+ *  argument -- this is that filter's own documented format string,
+ *  unchanged, so there is no unproven character in it:
+ *
+ *    {{"now" | date: "%A, %B %d, %Y, %I:%M %p", "America/Los_Angeles"}}
+ *      -> Monday, January 01, 2024, 03:45 PM
+ *
+ *  Two consequences worth knowing. The prompt is now DETERMINISTIC for a
+ *  given location row -- nothing in it is a function of when it was
+ *  built. And the string we measure is longer than the string the model
+ *  reads, because the template collapses to about 37 characters when
+ *  Vapi renders it; see the length test in prompt.test.ts. */
+function currentDatetimeTemplate(timeZone: string) {
+  return `{{"now" | date: "%A, %B %d, %Y, %I:%M %p", "${timeZone}"}}`;
+}
+
+export function buildSystemPrompt({ location }: { location: LocationRow }) {
+  // Kept for one reason only, now that no date is formatted here:
+  // `locations.timezone` has no CHECK constraint, and this throws
+  // RangeError on a zone Intl does not know. That loud, build-time
+  // failure is what app/admin/[locationId]/edit/page.tsx's try/catch is
+  // written against -- "the dead-air bug the timezone <select> exists to
+  // prevent". Without it a bad zone would stop failing here and start
+  // failing silently inside Vapi's Liquid engine, mid-call. The resolved
+  // (canonical) zone is what goes into the template, so this value is
+  // used rather than discarded.
+  const timeZone = new Intl.DateTimeFormat("en-US", {
     timeZone: location.timezone,
-  }).format(now);
+  }).resolvedOptions().timeZone;
 
   return SYSTEM_PROMPT_TEMPLATE.replaceAll("{{business_name}}", location.name)
     .replaceAll("{{address}}", location.address?.trim() || "not on file")
-    .replaceAll("{{current_datetime}}", when)
-    .replaceAll("{{hours_today}}", hoursToday)
+    .replaceAll("{{current_datetime}}", currentDatetimeTemplate(timeZone))
     .replaceAll(
       "{{takeout_delivery_settings}}",
       ORDER_TYPE_WORDS[location.order_types] ?? "pickup only",

@@ -56,14 +56,16 @@ provisioned) is never matched by any tool call -- `lib/agent/auth.ts`
 excludes it explicitly, not just incidentally, so an unconfigured location
 fails closed rather than accepting requests from nobody-in-particular.
 
-## 2. Wire the assistant per call -- do not paste a static prompt
+## 2. Point Vapi at `/api/vapi/webhook` -- not at `/api/agent/assistant`
 
-`POST /api/agent/assistant` (auth: `x-dialtone-secret`, empty body) returns
-the system prompt, but it is not something you paste into a static
-assistant configuration once and forget. The response carries
-`assembled_at` and `expires_at` because the prompt has the current date,
-time, and today's hours baked into its text at the instant this endpoint
-runs:
+Two routes are easy to confuse, and wiring the wrong one at the wrong
+place fails every inbound call. They are not interchangeable.
+
+**`POST /api/agent/assistant` is a provisioning-time config endpoint, and
+Vapi must never be pointed at it.** Its one consumer is
+`scripts/provision-vapi.mjs` (step 3), which asserts `!res.ok || !json?.ok`
+and then reads `config.assistant_enabled` and `config.system_prompt`. Its
+response envelope is ours, not Vapi's:
 
 ```jsonc
 {
@@ -79,56 +81,121 @@ runs:
 }
 ```
 
-If a platform fetches this once at setup and reuses the same `system_prompt`
-for every call afterward, the agent will keep telling callers today's date
-is whatever day you happened to set it up, and will resolve "tomorrow" or
-"Friday" against that same wrong day forever -- silently booking
-reservations for the wrong date. `assembled_at` / `expires_at` let a
-consumer detect that it is holding a stale copy. **They cannot make Vapi
-fetch a fresh one.** That wiring is on you: configure this route as a
-**per-call** assistant source, not a value copied into a field once.
-Concretely, that means using whatever mechanism your voice platform offers
-for building the assistant dynamically at call time (Vapi calls theirs an
-`assistant-request` server webhook: your phone number has no assistant
-attached, and Vapi POSTs to a server URL at the start of every inbound call
-asking for one). If Vapi's current docs describe a different mechanism or a
-different response envelope by the time you read this, follow those, not
-this paragraph -- the load-bearing fact is "fetched fresh every call,"
-not the exact webhook name.
+Vapi's `assistant-request` contract accepts exactly one of four
+**top-level, unwrapped** shapes -- `{"assistant":{...}}`,
+`{"assistantId":"..."}`, `{"destination":{...}}` or `{"error":"..."}` --
+and the object above is none of them. An earlier version of this document
+told you to configure this route as the per-call assistant source. That
+advice was wrong and has been removed: following it wires a route whose
+every answer Vapi rejects, on a live restaurant's number.
 
-Whatever mechanism you use, budget for it being time-constrained: Vapi
-documents a hard ~7.5s end-to-end budget for answering an `assistant-request`
-before the underlying telephony leg gives up. This endpoint does two
-`await`ed Postgres reads (`hours`, `holidays`, run in parallel) before it
-can respond -- fine under normal load, but it is one more reason a flaky
-database is not a "keeps working, just slower" failure for this route.
+**`POST /api/vapi/webhook` is the Vapi-facing route.** Register it on the
+phone number, not on the assistant -- `assistant-request` fires when there
+is no assistant yet, so only `phoneNumber.server` can receive it, and
+registering there means the assistant object is never written to and the
+tool secret cannot rotate. One URL receives all three message types it
+cares about:
 
-**Fail closed, and check it.** If the location's kill switch is on, or the
-location is not marked live, this returns:
+| `message.type` | what it does |
+| --- | --- |
+| `assistant-request` | answers who should take this call: `{"assistantId": ...}`, or `{"destination": {...}}` to a human when the kill switch is on / the location is not live |
+| `status-update` | creates the `calls` row **while the call is happening**, so tool calls made during it can find it |
+| `end-of-call-report` | closes the row: transcript, recording, costs, why it ended |
+
+It authenticates with the same per-location `x-dialtone-secret` as the
+nine tool routes, so it needs no new credential and no new environment
+variable. An unresolvable secret gets 401 and writes nothing.
+
+### The two PATCHes, in this order
+
+Both are performed by a human against `api.vapi.ai`, and the order is not
+a preference.
+
+**First**, while `assistantId` is still set -- this changes nothing for
+callers, and starts the flow of `status-update` and `end-of-call-report`:
 
 ```jsonc
+PATCH /phone-number/<phone-number-id>
 {
-  "ok": true,
-  "assistant_enabled": false,
-  "disabled_reason": "kill_switch",     // or "not_live"
-  "system_prompt": null,
-  "greeting": null,
-  "fallback_number": "+15105550142",
-  "kill_switch_on": true,
-  "is_live": true
+  "server": {
+    "url": "https://<your-app>/api/vapi/webhook",
+    "headers": { "x-dialtone-secret": "<this location's secret>" }
+  },
+  "fallbackDestination": { "type": "number", "number": "<fallback_human_number>" }
 }
 ```
 
-`assistant_enabled` is not advisory. Whatever wires this location to Vapi
-**must** check it before doing anything else with the response -- there is
-no code path in the route that produces a usable `system_prompt` for a
-disabled location, and there must be no code path on your side that starts
-an AI turn anyway because `system_prompt` happened to be truthy last time.
-When it's `false`, route the call to `fallback_number` instead, the same
-way `app/api/twilio/voice/route.ts` does for numbers still on the plain
-Twilio path. `fallback_number` rides along in both the enabled and
-disabled shapes specifically so you never have to make a second request to
-find out where to send a call the AI can't take.
+Place one call and confirm a row appears in `calls` before going further.
+
+**Second, and only then**, clear `assistantId` so `assistant-request`
+starts firing and the kill switch becomes real. `fallbackDestination` must
+already be set from the first PATCH: Vapi documents that a number with no
+`assistantId`, no `squadId` and no working `assistant-request` **hangs up
+on the caller** when there is no `fallbackDestination` -- the one outcome a
+kill switch must never produce. (Corroborated by the `endedReason` value
+`call-start-error-neither-assistant-nor-server-set`.) Rollback is one
+PATCH restoring `assistantId`.
+
+⚠ `UpdateVapiPhoneNumberDTO.assistantId` is not declared nullable in
+Vapi's OpenAPI document, so `PATCH {"assistantId": null}` is unproven.
+Find out whether it works in the Vapi dashboard, not on a live number at
+dinner service.
+
+### Budget: 7.5 seconds, fixed
+
+Vapi documents a hard ~7.5s end-to-end budget for answering an
+`assistant-request` before the underlying telephony leg gives up, and it is
+not configurable. `/api/vapi/webhook` does exactly one Postgres read on
+that path -- the `locations` lookup that authentication already performs --
+and nothing else.
+
+### What the system prompt no longer contains
+
+The prompt used to carry the current date and one day's hours as literal
+text, which is why this section used to be about fetching it fresh. It
+does not any more:
+
+- the date is a LiquidJS template (`{{"now" | date: ..., "<timezone>"}}`)
+  that **Vapi renders at the start of every call**, in the location's own
+  timezone;
+- the hours line is `Hours: call get_hours - never state hours from
+  memory.`, so the agent fetches them live and gets holiday overrides
+  right.
+
+The prompt is therefore deterministic for a given location row, and a
+static assistant no longer drifts one day further out of date every day.
+What still needs re-pushing when an owner edits it: the name, the address,
+the order types, and the greeting.
+
+### Fail closed, and check it
+
+If the location's kill switch is on, or the location is not marked live,
+`/api/vapi/webhook` answers `assistant-request` with a transfer to a
+person rather than an assistant:
+
+```jsonc
+{
+  "destination": {
+    "type": "number",
+    "number": "+15105550142",
+    "message": "One moment, I'm connecting you."
+  }
+}
+```
+
+and, if that location has no `fallback_human_number` at all, with
+`{"error": "Sorry, we can't take your call right now."}`, which Vapi speaks
+to the caller. It is never silent.
+
+The veto is evaluated **once, at answer time**. A caller already talking to
+the agent when the owner flips the switch stays with the agent until they
+hang up: the kill switch governs the next call, not the one in progress.
+Say that plainly to owners -- worst-case exposure is one call's length.
+
+`/api/agent/assistant` reports the same two flags in `assistant_enabled` /
+`disabled_reason`, and `scripts/provision-vapi.mjs` refuses to provision a
+disabled location because of them. That is a provisioning guard, not a
+call-time one; the call-time enforcement is the route above.
 
 ## 3. Provision the assistant and its tools
 
@@ -248,9 +315,14 @@ apart. A prompt that describes only the narrow transfer without naming
 `take_message` leaves every other caller apologised to and nothing written
 down.
 
-`requested_at` must be a full ISO 8601 timestamp. The system prompt is
-told the current date and time as part of `system_prompt` itself (see step
-2) and is expected to resolve "tomorrow at seven" against that.
+`requested_at` must be a full ISO 8601 timestamp. The agent is told the
+current date and time by the system prompt itself, as a LiquidJS template
+Vapi renders in the location's timezone at the start of every call (see
+step 2), and is expected to resolve "tomorrow at seven" against that. It
+is worth knowing which way this fails: while that date was frozen at
+build time, a static assistant resolved "tomorrow" against whatever day
+it was last pushed, and the booking landed on the wrong date with a
+caller who believed they had a table.
 
 ### Alternatives, and opening hours
 
@@ -854,8 +926,9 @@ Work through this list. Every line is a way these break in the field.
 - [ ] Ask for something that names two items on this menu ("fries" where there are Hand Cut Fries and Cheese Fries). It must ask which one and say both names. It must not guess and must not hand the call off.
 - [ ] Run `scripts/exercise-tools.mjs` against the environment Vapi will actually hit, and confirm all 71 checks pass. Don't onboard on top of a red run.
 - [ ] Run `scripts/provision-vapi.mjs <location-id> <base-url>` (no `--dry-run`) against that same environment, put the printed assistant id in `VAPI_ASSISTANT_ID`, and attach that assistant to this location's number.
-- [ ] Confirm your Vapi wiring fetches `/api/agent/assistant` **fresh at the start of every call**, not once at setup. Leave the integration alone overnight and call it again the next morning; it must state the correct date and today's real hours, not yesterday's.
-- [ ] Flip the location's kill switch on the dashboard mid-session and call again immediately. The very next call must not reach the AI -- confirm it lands on a human, not just that `/api/agent/assistant` reports `assistant_enabled:false` in isolation.
+- [ ] Leave the integration alone overnight and call it again the next morning. It must state the correct date and today's real hours, not yesterday's. The date is a LiquidJS template Vapi renders per call, so the way to prove it before the morning is one call plus `GET /call/{id}`: `artifact.messages[0].message` must show a rendered date, not the literal `{{"now" | ...}}`. That field is byte-identical to the assistant's stored prompt, so the difference is unambiguous. If it comes back literal, Liquid is not being applied to the system prompt and the fallback is `assistantOverrides.variableValues` on the `assistant-request` response -- which is legal alongside `assistantId` and costs nothing extra now that `/api/vapi/webhook` answers that message.
+- [ ] Place one call and confirm a row appears in `calls` with `provider_call_id` set, a transcript, and a `recording_path`. Zero real calls were ever logged before `/api/vapi/webhook` existed, because the number is Vapi-provisioned and the Twilio routes are not in the path. Then open an order or booking taken on that call and confirm its `call_id` is not null -- that is the `status-update` half doing its job, and it is the half that only works if the row exists *during* the call.
+- [ ] Flip the location's kill switch on the dashboard mid-session and call again immediately. The very next call must not reach the AI -- confirm it lands on a human, not just that `/api/vapi/webhook` would answer `assistant-request` with a `destination` in isolation. This only works once the phone number's `assistantId` has been cleared (step 2's second PATCH); while the number still carries an assistantId, Vapi never asks us who should answer and the switch cannot be consulted. Note the veto is evaluated at answer time only: a call already in progress when you flip it stays with the agent.
 - [ ] Set the location live to `false` and confirm the same thing happens for that condition independently of the kill switch.
 - [ ] Confirm `fallback_human_number` is set and correct for this location. `transfer_to_human` fails outright without one, and it's the destination for both the kill switch and every AI-initiated transfer.
 - [ ] Check the location's hours don't cross midnight (e.g. open past 12am). If they do, `get_hours` and the assistant will report the location closed at every hour, forever -- see the gaps above.
