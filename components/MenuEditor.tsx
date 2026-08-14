@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { Corners } from "./Corners";
 import { useMenu, type ItemPatch } from "./MenuStore";
 import { parseDollarsToCents } from "@/lib/money";
 import { money } from "@/lib/format";
@@ -432,7 +433,8 @@ function ItemRow({
 
         {confirmPriceCents !== null ? (
           <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby={`price-confirm-${item.id}`}>
-            <div className="dialog">
+            <div className="dialog blueprint">
+              <Corners />
               <div id={`price-confirm-${item.id}`} className="dialog-title">
                 Change the price of {item.name}?
               </div>

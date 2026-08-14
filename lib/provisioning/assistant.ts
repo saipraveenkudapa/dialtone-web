@@ -47,7 +47,7 @@ export async function provisionAssistantForLocation({
   base: string;
   vapiKey: string;
   now?: Date;
-}): Promise<{ secret: string; assistantId: string }> {
+}): Promise<{ secret: string; assistantId: string; created: boolean }> {
   if (!location.fallback_human_number) {
     throw new Error(
       "This location has no fallback number, so its assistant has nowhere to transfer a " +
@@ -73,7 +73,7 @@ export async function provisionAssistantForLocation({
   // Throws ProvisioningError on any Vapi failure. Deliberately not
   // caught here: nothing has been written yet, so the caller's own
   // rollback has strictly less to undo the earlier this escapes.
-  const { assistant } = await upsertAssistant({ vapiKey, locationId: location.id, payload });
+  const { assistant, created } = await upsertAssistant({ vapiKey, locationId: location.id, payload });
 
   const { error } = await supabaseAdmin()
     .from("locations")
@@ -89,18 +89,26 @@ export async function provisionAssistantForLocation({
     throw new AssistantSecretWriteError(
       "The AI assistant was created, but saving its secret failed.",
       assistant.id,
+      created,
     );
   }
 
-  return { secret, assistantId: assistant.id };
+  return { secret, assistantId: assistant.id, created };
 }
 
 /** Thrown when Vapi accepted the assistant but the hash write did not
- *  land. Carries the assistant id so the caller can clean it up. */
+ *  land. Carries the assistant id so the caller can clean it up.
+ *
+ *  `created` is what makes cleaning it up safe. upsertAssistant PATCHes
+ *  an assistant Vapi already has tagged for this location and only POSTs
+ *  a new one when there is none -- so a caller that deletes on this
+ *  error without reading this flag can take a restaurant that is
+ *  answering calls off the air to tidy up a failed write. */
 export class AssistantSecretWriteError extends Error {
   constructor(
     message: string,
     readonly assistantId: string,
+    readonly created: boolean = true,
   ) {
     super(message);
   }

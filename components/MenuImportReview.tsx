@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { Corners } from "./Corners";
 import { useMenu } from "./MenuStore";
 import { money } from "@/lib/format";
 import { INGREDIENTS_CAVEAT, type MenuExtraction } from "@/lib/menu-imports/extraction";
@@ -619,7 +620,8 @@ function PublishDialog({
       aria-modal="true"
       aria-labelledby="publish-title"
     >
-      <div className="dialog review-dialog">
+      <div className="dialog blueprint review-dialog">
+        <Corners />
         <div id="publish-title" className="dialog-title">
           Put {items} item{items === 1 ? "" : "s"} on the live menu?
         </div>

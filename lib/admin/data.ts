@@ -9,6 +9,11 @@ import type {
   OrderRow,
 } from "@/lib/supabase/types";
 
+/** The four words the portfolio's health badge understands. Changing one
+ *  means changing app/admin/page.tsx's HEALTH_LABEL, which maps them by
+ *  name. */
+export type LocationHealth = "live" | "kill-switch" | "not-live" | "no-forwarding";
+
 export type PortfolioRow = {
   location: LocationRow & { org_name: string };
   answered: number;
@@ -19,9 +24,35 @@ export type PortfolioRow = {
   transferred: number;
   spendCents: number;
   lastCallAt: string | null;
-  /** Live if the agent is answering: on, not killed, forwarding proven. */
-  health: "live" | "kill-switch" | "not-live" | "no-forwarding";
+  /** One word for what a caller gets right now. See locationHealth. */
+  health: LocationHealth;
 };
+
+/** What a caller dialling this restaurant gets, in one word.
+ *
+ *  "no-forwarding" is deliberately narrow. Forwarding only means
+ *  anything when the restaurant has a line of its own that is being
+ *  forwarded to us -- business_phone -- and somebody has to ring it once
+ *  to prove the carrier did what it was told. A restaurant that simply
+ *  publishes the Dialtone number forwards nothing, so there is nothing
+ *  to prove, and it used to be demoted from "Answering" to "Forwarding
+ *  unproven" forever for a step it could never take. It is answering;
+ *  the badge now says so.
+ *
+ *  Unproven forwarding is a warning either way, never a reason a
+ *  restaurant cannot be live -- lib/provisioning/go-live.ts draws the
+ *  same line on the same column, and the two must agree. */
+export function locationHealth(
+  location: Pick<
+    LocationRow,
+    "is_live" | "kill_switch_on" | "business_phone" | "forwarding_verified_at"
+  >,
+): LocationHealth {
+  if (!location.is_live) return "not-live";
+  if (location.kill_switch_on) return "kill-switch";
+  if (location.business_phone && !location.forwarding_verified_at) return "no-forwarding";
+  return "live";
+}
 
 /** Every restaurant on the platform, with today's numbers in each one's
  *  own timezone.
@@ -111,13 +142,7 @@ export async function getPortfolio(): Promise<PortfolioRow[]> {
         0,
       ),
       lastCallAt: lastCall ?? null,
-      health: !location.is_live
-        ? "not-live"
-        : location.kill_switch_on
-          ? "kill-switch"
-          : !location.forwarding_verified_at
-            ? "no-forwarding"
-            : "live",
+      health: locationHealth(location),
     };
   });
 }

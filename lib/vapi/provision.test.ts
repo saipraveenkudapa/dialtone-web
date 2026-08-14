@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { AGENT_TOOLS, buildAssistantPayload } from "./provision";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  AGENT_TOOLS,
+  ProvisioningError,
+  buildAssistantPayload,
+  getAssistant,
+  tagAssistantForLocation,
+  vapiRequest,
+} from "./provision";
 
 const config = {
   system_prompt: "You are answering the phone for Nonna Rosa.",
@@ -133,5 +140,124 @@ describe("buildAssistantPayload", () => {
     });
     expect(p.model.provider).toBe("anthropic");
     expect(p.model.model).toBe("claude");
+  });
+});
+
+/* ── talking to Vapi ───────────────────────────────────────────────── */
+
+/* The failure shapes that actually happen to this product, and how each
+ * one has to read to the caller.
+ *
+ * The sharp one is the hang. A load balancer with no healthy backend
+ * accepts the connection and never answers, and `fetch` with no signal
+ * waits on undici's 300s headersTimeout -- which, on the operator's
+ * go-live page, means the only screen carrying "Take offline" and the
+ * kill switch does not paint for five minutes because a third party
+ * stopped responding. Every other Vapi failure in this file is already
+ * handled; a hang was the one that was not.
+ */
+describe("one request against Vapi", () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    vi.restoreAllMocks();
+  });
+
+  function respond(status: number, body: unknown) {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }),
+    ) as typeof fetch;
+  }
+
+  it("gives every request a deadline, and never an unbounded one", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await vapiRequest("key", "GET", "/assistant");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("turns a hang into a sentence, rather than waiting five minutes on undici", async () => {
+    // The abort a deadline produces, named exactly as the platform names
+    // it. Reported as its own fact: Vapi answered nothing, which is not
+    // the same as refusing.
+    globalThis.fetch = vi.fn(async () => {
+      const err = new Error("The operation was aborted due to timeout");
+      err.name = "TimeoutError";
+      throw err;
+    }) as unknown as typeof fetch;
+
+    await expect(vapiRequest("key", "GET", "/phone-number", undefined, { timeoutMs: 5000 })).rejects.toThrow(
+      /did not answer within 5s/,
+    );
+  });
+
+  it("carries the HTTP status, so 'that assistant is gone' is not guessed from a string", async () => {
+    respond(404, { message: "Not Found" });
+
+    const err = await vapiRequest("key", "GET", "/assistant/x").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProvisioningError);
+    expect((err as ProvisioningError).status).toBe(404);
+  });
+
+  it("still names the key, and only the variable, on a 401", async () => {
+    respond(401, { message: "Unauthorized" });
+
+    const err = await vapiRequest("super-secret-key", "GET", "/assistant").catch((e: unknown) => e);
+    expect((err as ProvisioningError).status).toBe(401);
+    expect((err as Error).message).toMatch(/VAPI_PRIVATE_KEY/);
+    expect((err as Error).message).not.toMatch(/super-secret-key/);
+  });
+});
+
+describe("the assistant a record names", () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("reads null only when Vapi says there is no such assistant", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ message: "Not Found" }), { status: 404 }),
+    ) as unknown as typeof fetch;
+
+    await expect(getAssistant("key", "a1")).resolves.toBeNull();
+  });
+
+  it("throws on anything else, because 'could not ask' is not 'not there'", async () => {
+    // The caller above turns null into "build a replacement", which
+    // forks a live assistant and rotates its tool secret. A 500 must
+    // never take that path.
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ message: "boom" }), { status: 500 }),
+    ) as unknown as typeof fetch;
+
+    await expect(getAssistant("key", "a1")).rejects.toThrow(ProvisioningError);
+  });
+
+  it("re-labels in place, keeping metadata another tool wrote", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: "a1" }), { status: 200 }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await tagAssistantForLocation(
+      "key",
+      { id: "a1", metadata: { someone_elses: "keep me" } },
+      "loc-1",
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.vapi.ai/assistant/a1");
+    expect(init.method).toBe("PATCH");
+    // Only metadata, and the existing keys survive: this is a repair on
+    // an assistant that may be on a live call, not a rebuild.
+    expect(JSON.parse(init.body as string)).toEqual({
+      metadata: { someone_elses: "keep me", dialtone_location_id: "loc-1" },
+    });
   });
 });

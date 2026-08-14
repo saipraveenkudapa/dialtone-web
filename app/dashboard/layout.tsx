@@ -1,7 +1,9 @@
+import Link from "next/link";
 import { AgentStatusProvider } from "@/components/AgentStatus";
 import { MenuProvider } from "@/components/MenuStore";
 import { Sidebar } from "@/components/Sidebar";
 import { KillBanner } from "@/components/KillBanner";
+import { currentPlatformAdmin } from "@/lib/admin/auth";
 import { getCurrentLocation, getMenu } from "@/lib/data";
 import { supabaseConfigured } from "@/lib/supabase/env";
 import { signOut } from "@/app/login/actions";
@@ -26,7 +28,14 @@ export default async function DashboardLayout({
     );
   }
 
-  const location = await getCurrentLocation();
+  // In parallel: two independent round trips, and the admin check is only
+  // ever used to decide whether to draw a link back to the console. It is
+  // a server-side check on purpose -- a restaurant owner must see no trace
+  // that /admin exists, and currentPlatformAdmin() fails closed to null.
+  const [location, admin] = await Promise.all([
+    getCurrentLocation(),
+    currentPlatformAdmin(),
+  ]);
 
   // Signed in, but attached to no restaurant. There is deliberately
   // nothing to offer here any more: restaurants are created by the
@@ -40,13 +49,34 @@ export default async function DashboardLayout({
     return (
       <div className="page">
         <h1>No restaurant yet</h1>
-        <p className="text-muted">
-          This account is not attached to a restaurant. Dialtone sets those up — ask
-          your contact there to attach this account, or sign in with the address
-          they gave you.
-        </p>
-        {/* Without this the account is stuck: no sidebar here means no
-            other way to sign out and try a different one. */}
+        {admin ? (
+          // Staff land here whenever they follow a link to /dashboard --
+          // they belong to no organization on purpose. Telling them to
+          // "ask your contact at Dialtone" is telling them to ask
+          // themselves, so they get the sentence that is true for them.
+          <p className="text-muted">
+            This operator account is not attached to a restaurant, which is how
+            operator accounts are meant to be. Everything you run the platform
+            with is in the console.
+          </p>
+        ) : (
+          <p className="text-muted">
+            This account is not attached to a restaurant. Dialtone sets those up — ask
+            your contact there to attach this account, or sign in with the address
+            they gave you.
+          </p>
+        )}
+        {/* The link staff need, above the button an owner needs. Without
+            one of these the account is stuck: no sidebar here means no
+            other way off this screen. The link comes first because it is
+            the constructive exit -- nobody should have to consider
+            destroying their session to leave a screen they reached by
+            clicking a link in their own console. */}
+        {admin ? (
+          <Link href="/admin" className="operator-back">
+            ← Operator console
+          </Link>
+        ) : null}
         <form action={signOut}>
           <button type="submit" className="btn btn-secondary">
             Sign out
@@ -62,7 +92,7 @@ export default async function DashboardLayout({
     <AgentStatusProvider location={location}>
       <MenuProvider locationId={location.id} initialCategories={categories}>
         <div className="shell">
-          <Sidebar />
+          <Sidebar isPlatformAdmin={admin !== null} />
           <main className="main">
             <KillBanner />
             <div className="page">{children}</div>

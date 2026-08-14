@@ -85,7 +85,6 @@ export default async function OperatorPage() {
                   <th>Revenue</th>
                   <th>Spend</th>
                   <th>Last call</th>
-                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -94,7 +93,19 @@ export default async function OperatorPage() {
                   return (
                     <tr key={r.location.id}>
                       <td>
-                        <div>{r.location.name}</div>
+                        {/* The name is the link. Not a JS row click: that
+                            would make this page a client component, kill
+                            text selection, and break cmd-click / middle
+                            click / "open in new tab", while announcing a
+                            <tr> to a screen reader as if it were a button. */}
+                        <div>
+                          <Link
+                            href={`/admin/${r.location.id}`}
+                            className="row-title-link"
+                          >
+                            {r.location.name}
+                          </Link>
+                        </div>
                         <div className="caller-city">
                           {r.location.org_name} · {r.location.timezone}
                         </div>
@@ -109,11 +120,6 @@ export default async function OperatorPage() {
                       <td className="num">{money(r.spendCents)}</td>
                       <td className="num">
                         {r.lastCallAt ? relative(r.lastCallAt) : "never"}
-                      </td>
-                      <td>
-                        <Link href={`/admin/${r.location.id}`} className="row-link">
-                          Open
-                        </Link>
                       </td>
                     </tr>
                   );

@@ -167,6 +167,24 @@ a:hover { color: var(--color-accent); }
 .page-head .sub { font-size: 13px; }
 .page-head .actions { margin-left: auto; display: flex; gap: 8px; }
 .page-head .actions .btn { padding: 10px 18px; }
+/* The way out of a detail page. .row-link is already the shared shape --
+   /admin/new, /admin/<id> and /dashboard/calls/<id> all render the same
+   "← somewhere" anchor above their h1 -- so it is upgraded in place
+   rather than joined by a second class that would leave the four back
+   links looking like two different things one click apart. Scoped to
+   .page-head because .row-link is also a bare tag wrapper inside tables
+   (see /dashboard/calls), where a box and an underline do not belong.
+   Its own line, a real 28px target, and underlined at rest: unadorned
+   13px jammed against a 38px heading reads as a caption belonging to the
+   title, not as navigation. */
+.page-head .row-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  margin-bottom: var(--space-2);
+  text-decoration: underline;
+}
+.page-head .row-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
 /* ── live call strip ───────────────────────────────────────────────── */
 
@@ -1019,4 +1037,290 @@ iframe.review-image { height: 62vh; }
   .review-tally-go { margin-left: 0; }
   .review-tally-go .setup-note { text-align: left; }
   .review-item-actions .btn-primary { margin-left: 0; }
+}
+
+/* ── console navigation ────────────────────────────────────────────── */
+
+/* The operator bar's own nav. The system's .nav IS the nav here, worn
+   directly (components/admin/AdminNav.tsx renders `nav admin-nav`), so
+   `display/align-items/gap` and every rule on `.nav a` -- plain text at
+   rest, accent on hover and for the current page -- come from
+   industry.css and stay in step with it. What is left below is only what
+   the operator bar genuinely needs on top: .nav carries its own bar
+   padding, and this one lives INSIDE .admin-bar, which supplies it. */
+.admin-nav { padding: 0; flex-wrap: wrap; }
+.admin-nav-item {
+  display: inline-flex;
+  align-items: center;
+  /* The mockup's links are bare text; a bare 14px line is a mean target
+     in a bar whose other children are 36px buttons. The box grows, the
+     ink does not. */
+  min-height: 34px;
+  padding: 0 var(--space-1);
+}
+/* .nav a[aria-current='page'] already turns this accent. Accent alone
+   would make "which page am I on" a colour-only signal, so the condensed
+   face carries it too -- the same way .side-nav-item marks the current
+   tab in the owner sidebar. */
+.admin-nav-item[aria-current="page"] {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+}
+.admin-nav-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* The way back to /admin from inside the owner shell, for staff only.
+   Appears in .sidebar-head and on the "No restaurant yet" screen, whose
+   .page is a flex column -- without align-self it would stretch into a
+   full-width click target spanning the whole page. */
+.operator-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  font-size: 13px;
+  color: var(--color-accent-700);
+  text-decoration: none;
+}
+.operator-back:hover,
+.operator-back:focus-visible { color: var(--color-accent); text-decoration: underline; }
+.operator-back:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.sidebar-head .operator-back { margin-top: var(--space-2); }
+
+/* A table row's primary name, made a real link. Colour is inherited on
+   purpose: the whole first column turning accent would read as a wall of
+   links, and the name still has to hold its own against the
+   .table tbody tr:hover wash. The underline on hover is the affordance --
+   it appears exactly where the eye already is. */
+.row-title-link {
+  display: inline-block;
+  padding: 2px 0;
+  color: inherit;
+  text-decoration: none;
+}
+.row-title-link:hover,
+.row-title-link:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.row-title-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* ── go live (operator: /admin/[locationId]) ───────────────────────── */
+
+/* The readiness panel: one line saying what callers get right now, then
+   one row per check, then the controls. Self-sufficient -- it draws its
+   own frame and padding whether or not it is combined with .card. */
+.golive {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-divider);
+}
+.golive > h4 { margin: 0; }
+
+/* The answer to the only question the operator opened this page with.
+   Big enough to be read before anything else on the panel. */
+.golive-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin: 0;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 25px;
+  line-height: 1.1;
+}
+.golive-state .status-dot { width: 10px; height: 10px; }
+.golive-state .sub {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+.golive-list { display: flex; flex-direction: column; gap: var(--space-2); }
+
+/* One check. The left edge carries the state, as in .review-item, so a
+   column of these can be scanned for what is still in the way. */
+.golive-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  border-left-width: 3px;
+}
+
+/* There is deliberately no glyph chip here. Two dark blues separate
+   "blocked" from "warn", which would be colour-only -- but the fix the
+   house already uses is words: components/admin/GoLive.tsx opens every
+   note with the state ("Blocked —", "Worth fixing —"), which survives
+   being read aloud, printed and colour-blindness alike. A column of
+   ✓/✕/!/– badges appears nowhere in design/Dialtone.html, which has no
+   `content:` glyph at all; the status vocabulary here is .status-dot,
+   .tag and .review-item's 3px left border, and .golive-item above wears
+   the last of those. */
+.golive-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.golive-title {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 15px;
+  line-height: 1.2;
+}
+/* The note is the instruction, not a caption -- kept a step darker than
+   .text-muted because on a blocked row it is the thing to be acted on. */
+.golive-note {
+  margin: 0;
+  font-size: 13px;
+  max-width: 70ch;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+
+.golive-item.is-ok {
+  border-left-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+.golive-item.is-blocked { border-left-color: var(--color-accent-900); }
+.golive-item.is-warn { border-left-color: var(--color-accent-800); }
+
+/* Not applicable: present, so the operator can see it was considered,
+   and quiet, so it never competes with something that needs doing. */
+.golive-item.is-na { border-left-color: var(--color-neutral-400); }
+.golive-item.is-na .golive-title { color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+
+/* The controls, fenced off from the checklist above them the same way
+   .setup-actions is fenced off from its form.
+   flex-end, not center: the buttons here act on the field beside them
+   and have to sit on its bottom line, which is what .setup-row,
+   .menu-category-head and .add-item-form all do. Centred, a 36px button
+   floats halfway up a 58px label-plus-input stack. */
+.golive-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-divider);
+}
+/* Same shape as .add-item-form's. Without a basis the number <select>
+   sizes to its longest option -- which names two restaurants and a
+   reason -- and without min-width: 0 it refuses to shrink back, pushing
+   the whole 1.6fr column sideways. */
+.golive-actions .field { flex: 1 1 220px; min-width: 0; }
+/* Phone numbers, set as figures. The house does this everywhere a number
+   is shown (.num, .stat-value, .menu-item-row .price); an <option> and a
+   tel input cannot carry the class, so the rule comes to them. */
+.golive-actions .input { font-variant-numeric: tabular-nums; }
+.golive-actions form { display: flex; }
+.golive-actions .golive-note { flex: 1 1 100%; }
+
+@media (max-width: 700px) {
+  .golive { padding: var(--space-3); }
+  .golive-state { font-size: 20px; }
+  .golive-actions .btn { flex: 1 1 auto; }
+}
+
+/* The paved road. The only .btn-primary on this panel, and the only
+   control here whose label changes while it is pressed -- so it is given
+   a floor wide enough for the longest of them ("The fallback number…",
+   measured in the button's own Barlow Condensed). A button that resizes
+   under the cursor as it steps from one leg of the run to the next is a
+   button an operator stops trusting mid-run. */
+.golive-go { min-width: 22ch; }
+
+/* What the run is doing, and afterwards what it did. Same stack shape as
+   .golive-list above it, because it is the same four subjects in the
+   same four words -- the account of a run and the checklist of a state
+   have to be legible as one vocabulary, or the operator has to learn
+   two. */
+.golive-run {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.golive-run .golive-list { gap: var(--space-2); }
+
+/* ── the handover ─────────────────────────────────────────────────── */
+
+/* Every dialog this panel opens -- the two confirms as well as the
+   handover -- is rendered inside <section class="golive">, which sits
+   earlier in the document than the account panel beside it. That panel
+   is a .card.blueprint, so it is `position: relative`, so at z-index
+   auto it paints OVER a fixed backdrop that came before it and the
+   dialog is read through somebody else's table. Same fix, and the same
+   value, as .review .dialog-backdrop above. */
+.golive .dialog-backdrop { z-index: 5; }
+
+/* Wider and taller than a confirm, for the same reason as
+   .review-dialog: this is read, not answered, and it is the one screen
+   in the product an operator reads down a phone to somebody else. Opaque
+   from the same token, because the system's dialog is a transparent
+   blueprint frame -- right behind a two-line confirm, unreadable behind
+   two tables. .dialog sets `width`, so `max-width` alone does nothing. */
+.handover-dialog {
+  width: min(560px, 100%);
+  /* .dialog-backdrop is a grid with an implicit, auto-sized row, so a
+     `max-height: 100%` here would resolve against this box's OWN content
+     and clamp nothing -- the dialog would simply grow past the bottom of
+     the screen with the Done button off it. Bound to the viewport the
+     backdrop already covers, less that backdrop's own padding:
+     --space-8 is exactly twice --space-4. */
+  max-height: calc(100dvh - var(--space-8));
+  background: var(--color-bg);
+  box-shadow: var(--shadow-lg);
+}
+.handover-dialog .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.handover-dialog .dialog-body p { margin: 0 0 var(--space-3); }
+.handover-dialog .card-kicker { margin-bottom: var(--space-2); }
+.handover-dialog .table { margin-bottom: var(--space-3); }
+.handover-dialog .missing-list { margin-bottom: var(--space-3); }
+
+/* The number, and the two ways of taking it away with you. One object:
+   the figure is useless without something to copy it into.
+
+   It is shown exactly as it is stored -- app/api/twilio/voice/route.ts
+   matches an inbound call on that string, and the mobile forwarding
+   codes below carry the country code with them -- so it is set large and
+   in figures rather than reformatted into something friendlier that
+   would paste wrong. The grouped, say-it-out-loud version sits under it
+   as prose, where nobody will copy it by accident. */
+.handover-number {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  margin-bottom: var(--space-3);
+}
+.handover-number .card-kicker { flex: 1 1 100%; margin: 0; }
+.handover-number .num {
+  flex: 1 1 auto;
+  /* Family AND weight, together, the way .stat-value, .golive-state,
+     .golive-title and .review-tally-number all pair them. app/layout.tsx
+     loads Barlow Condensed at 500/600/700 only, so a family set on its
+     own leaves this inheriting body's 400 -- which matches no loaded
+     face and renders the largest, most-read figure in the product
+     lighter than the dialog title six lines above it. */
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  user-select: all;
+}
+.handover-say {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+}
+.handover-say .num { flex: none; font-size: inherit; letter-spacing: normal; }
+
+@media (max-width: 700px) {
+  .golive-go { min-width: 0; }
+  .handover-number .num { font-size: 22px; }
 }

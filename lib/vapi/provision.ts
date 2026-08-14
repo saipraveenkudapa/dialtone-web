@@ -44,7 +44,33 @@
 
 export const VAPI_API = "https://api.vapi.ai";
 
-export class ProvisioningError extends Error {}
+/** How long any one Vapi request may take before it is given up on.
+ *
+ *  There has to be a number here. `fetch` with no signal waits on
+ *  undici's headersTimeout, which is five minutes, and the outage shape
+ *  that actually happens -- a load balancer that accepts the connection
+ *  and never answers -- is precisely the one that hits it. Five minutes
+ *  of a hung read is worse than a failure everywhere in this product,
+ *  and on the operator's go-live page it is the difference between
+ *  "Vapi is down" and "the only page with Take offline on it will not
+ *  paint". Callers that are drawing a page pass something much shorter;
+ *  this default is for the writes, which are allowed to be slow because
+ *  somebody asked for them and is watching. */
+export const VAPI_TIMEOUT_MS = 20_000;
+
+/** A Vapi call that did not work. `status` is the HTTP status when Vapi
+ *  answered with one, so a caller can tell "that assistant is not there"
+ *  (404) apart from "Vapi is broken" -- getAssistant() is the only
+ *  caller that needs the difference, and guessing it from the message
+ *  string would be worse. */
+export class ProvisioningError extends Error {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 /** What an assistant needs to say and do for one call. The same three
  *  fields POST /api/agent/assistant returns alongside assembled_at /
@@ -529,20 +555,42 @@ export type VapiAssistant = { id: string; [key: string]: unknown };
  *  same failure the same way -- an operator reading a terminal and an
  *  owner reading a web page both need to know a 401 here means the key
  *  is wrong, not that anything about the location is. */
+export type VapiRequestOptions = {
+  /** Overrides VAPI_TIMEOUT_MS. A caller rendering a page passes a short
+   *  one, because a page that has not painted cannot be acted on. */
+  timeoutMs?: number;
+};
+
 export async function vapiRequest(
   vapiKey: string,
   method: string,
   path: string,
   body?: unknown,
+  options?: VapiRequestOptions,
 ): Promise<unknown> {
+  const timeoutMs = options?.timeoutMs ?? VAPI_TIMEOUT_MS;
+
   let res: Response;
   try {
     res = await fetch(`${VAPI_API}${path}`, {
       method,
       headers: { Authorization: `Bearer ${vapiKey}`, "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
+      // Covers the response body too, not just the headers: undici
+      // aborts the whole exchange on this signal, so a stalled stream
+      // cannot outlive the deadline either.
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
+    // A deadline is a different fact from "the host does not resolve",
+    // and an operator reading this needs to know Vapi answered nothing
+    // rather than refused.
+    if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+      throw new ProvisioningError(
+        `Vapi did not answer within ${Math.round(timeoutMs / 1000)}s (${method} ${path}). It is ` +
+          "reachable but not responding, so nothing was read and nothing was changed.",
+      );
+    }
     throw new ProvisioningError(
       `Could not reach Vapi (${VAPI_API}${path}): ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -556,12 +604,14 @@ export async function vapiRequest(
       `Vapi rejected VAPI_PRIVATE_KEY (401 on ${method} ${path}). The key is wrong, revoked, or ` +
         "this is the public key instead of the private one -- get a fresh private key from the " +
         "Vapi dashboard's API Keys page.",
+      401,
     );
   }
   if (!res.ok) {
     const detail = json?.message ?? json?.error ?? text.slice(0, 500) ?? "(empty body)";
     throw new ProvisioningError(
       `Vapi returned ${res.status} on ${method} ${path}: ${Array.isArray(detail) ? detail.join("; ") : detail}`,
+      res.status,
     );
   }
   return json;
@@ -576,12 +626,13 @@ export async function vapiRequest(
 export async function findAssistantForLocation(
   vapiKey: string,
   locationId: string,
+  options?: VapiRequestOptions,
 ): Promise<VapiAssistant | null> {
   let cursor: string | undefined;
   for (let page = 0; page < 50; page++) {
     const qs = new URLSearchParams({ limit: "1000" });
     if (cursor) qs.set("createdAtLt", cursor);
-    const list = (await vapiRequest(vapiKey, "GET", `/assistant?${qs}`)) as VapiAssistant[];
+    const list = (await vapiRequest(vapiKey, "GET", `/assistant?${qs}`, undefined, options)) as VapiAssistant[];
     const match = list.find((a) => a?.metadata && (a.metadata as Record<string, unknown>).dialtone_location_id === locationId);
     if (match) return match;
     if (list.length < 1000) return null;
@@ -592,6 +643,72 @@ export async function findAssistantForLocation(
     "Walked 50,000 assistants without finding a match or reaching the end of the list -- " +
       "something is wrong with pagination here. Check the Vapi dashboard by hand.",
   );
+}
+
+/** Does the assistant this record NAMES still exist?
+ *
+ *  findAssistantForLocation() answers a different question -- "which
+ *  assistant is tagged for this location" -- and the two come apart the
+ *  moment somebody clones, restores or edits an assistant in the Vapi
+ *  dashboard, because that is where the tag gets lost. An assistant that
+ *  exists and is answering calls, with metadata that no longer carries
+ *  dialtone_location_id, is invisible to the search and would otherwise
+ *  read as "gone".
+ *
+ *  Null means Vapi says there is no such assistant. Anything else --
+ *  a 500, a timeout, a bad key -- throws, because "we could not ask" is
+ *  not evidence of absence and the caller above turns absence into
+ *  building a replacement. */
+export async function getAssistant(
+  vapiKey: string,
+  assistantId: string,
+  options?: VapiRequestOptions,
+): Promise<VapiAssistant | null> {
+  try {
+    const body = await vapiRequest(
+      vapiKey,
+      "GET",
+      `/assistant/${encodeURIComponent(assistantId)}`,
+      undefined,
+      options,
+    );
+    return body && typeof body === "object" ? (body as VapiAssistant) : null;
+  } catch (err) {
+    // 404 is "no such assistant". 400 is Vapi refusing the id as a
+    // shape, which for a value that came out of our own column means
+    // the same thing to every caller here: there is nothing to talk to.
+    if (err instanceof ProvisioningError && (err.status === 404 || err.status === 400)) return null;
+    throw err;
+  }
+}
+
+/** Put this location's tag back on an assistant that lost it.
+ *
+ *  A repair, and a deliberately tiny one: the existing metadata is read
+ *  back and spread, so nothing another tool wrote there is dropped, and
+ *  no other field of the assistant is touched. Nothing is created, no
+ *  tool secret is minted, and an assistant that is on a live call at
+ *  this moment keeps every property it is serving that call with -- which
+ *  is the whole reason this exists instead of a rebuild. */
+export async function tagAssistantForLocation(
+  vapiKey: string,
+  assistant: VapiAssistant,
+  locationId: string,
+  options?: VapiRequestOptions,
+): Promise<VapiAssistant> {
+  const metadata =
+    assistant.metadata && typeof assistant.metadata === "object"
+      ? (assistant.metadata as Record<string, unknown>)
+      : {};
+
+  const updated = await vapiRequest(
+    vapiKey,
+    "PATCH",
+    `/assistant/${encodeURIComponent(assistant.id)}`,
+    { metadata: { ...metadata, dialtone_location_id: locationId } },
+    options,
+  );
+  return updated as VapiAssistant;
 }
 
 /** Delete one assistant by id.
