@@ -379,3 +379,387 @@ describe("the two menu editors", () => {
     expect(header).toContain("btn-icon");
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════════
+   The tab strip, and the four ways it could take an operator's typing.
+   Each block below is a defect that shipped in the first tabs pass.
+   ══════════════════════════════════════════════════════════════════════ */
+
+const { EditPanel, EditTabs, ReplacedNote, sectionOfAnchor, EDIT_SECTIONS } = await import(
+  "@/components/admin/EditTabs"
+);
+
+function strip(over: Partial<Parameters<typeof EditTabs>[0]> = {}): string {
+  const { children, ...props } = { initial: "menu" as const, behind: [], ...over };
+  return renderToStaticMarkup(
+    createElement(
+      EditTabs,
+      props as Parameters<typeof EditTabs>[0],
+      children ??
+        createElement(
+          EditPanel,
+          // Both components take their children as the third argument
+          // here, so the props object is legitimately short of the
+          // `children` its type declares.
+          { id: "menu" } as Parameters<typeof EditPanel>[0],
+          "the menu panel",
+        ),
+    ),
+  );
+}
+
+describe("an anchor the browser will hand over unchecked", () => {
+  it("opens the tab its section lives on", () => {
+    // All ten ids stay on their sections; #holidays and #sold-out are
+    // sub-cards and open their parent's tab. GoLive.tsx's three checklist
+    // rows and every link on /admin/<id> ride on this map.
+    expect(sectionOfAnchor("menu")).toBe("menu");
+    expect(sectionOfAnchor("sold-out")).toBe("menu");
+    expect(sectionOfAnchor("holidays")).toBe("hours");
+    expect(sectionOfAnchor("hours")).toBe("hours");
+    expect(sectionOfAnchor("answering")).toBe("answering");
+    expect(sectionOfAnchor("managed")).toBe("managed");
+  });
+
+  it("does not resolve an inherited property, which blanked the editor", () => {
+    // SECTION_OF_ANCHOR is an object literal, so it inherits from
+    // Object.prototype: `SECTION_OF_ANCHOR[hash]` returned a TRUTHY
+    // function for /edit#constructor and sailed past `if (!section)`.
+    // setActive then held a function, so no radio was checked and every
+    // panel's `hidden` was true -- a tab strip with nothing selected
+    // above an empty page, with the arrow keys dead (findIndex -> -1)
+    // and ?section=function%20Object()... written into the URL so a
+    // reload did it again. There is no way back except the address bar.
+    for (const hash of [
+      "constructor",
+      "toString",
+      "valueOf",
+      "hasOwnProperty",
+      "__proto__",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+      "toLocaleString",
+    ]) {
+      expect(sectionOfAnchor(hash)).toBeUndefined();
+    }
+    expect(sectionOfAnchor("")).toBeUndefined();
+    expect(sectionOfAnchor("not-a-section")).toBeUndefined();
+  });
+
+  it("answers with one of the eight tabs, and every tab is reachable by its own id", () => {
+    for (const { id } of EDIT_SECTIONS) expect(sectionOfAnchor(id)).toBe(id);
+  });
+});
+
+describe("what the strip is made of", () => {
+  it("is a radio group and not a tablist that owns no tabs", () => {
+    // It wore role="tablist" with role="tab" on the radios. Both halves
+    // were wrong: every radio sits inside a <label>, so the tablist
+    // owned eight generic elements and nothing could compute "7 of 8";
+    // and role="tab" destroyed the input's own `radio` role while the
+    // code went on depending on the radio group's shared `name` for the
+    // roving tabindex, on a node industry.css renders 0x0 and
+    // opacity:0. A native radio group is what the house's other two
+    // .seg strips already are.
+    const html = strip();
+    expect(html).toContain('role="radiogroup"');
+    expect(html).not.toContain('role="tablist"');
+    expect(html).not.toContain('role="tab"');
+    expect(html).not.toContain("aria-selected");
+    // The one ARIA that ties a choice to what it swaps in, kept.
+    expect(html).toContain('aria-controls="edit-panel-menu"');
+    expect(html).toContain('name="ed-section-tab"');
+  });
+
+  it("names each panel rather than calling it a tabpanel with no tablist", () => {
+    const html = strip();
+    expect(html).not.toContain('role="tabpanel"');
+    expect(html).toContain('role="group"');
+    expect(html).toContain('aria-label="Menu"');
+  });
+
+  it("still renders the chosen panel visible and says which section it is", () => {
+    const html = strip();
+    expect(html).toContain('id="edit-panel-menu"');
+    // The chosen panel is the one WITHOUT hidden, and it keeps
+    // .setup-stack, which is what app.css's [hidden] rule needs to bite.
+    expect(html).toMatch(/id="edit-panel-menu"[^>]*class="setup-stack"/);
+    expect(html).not.toMatch(/id="edit-panel-menu"[^>]*hidden/);
+  });
+});
+
+describe("a re-seed that lands on typing", () => {
+  /* Every action on /edit calls revalidatePath, success or refusal, so
+     ONE write anywhere on the page re-renders all eight panels with
+     fresh props, and each form re-seeds if its own values moved. That
+     is right and stays. What it may not be is silent: seven of the
+     eight panels are display:none, so the loss AND the tab's "Unsaved"
+     chip disappearing both happen off screen, which is
+     indistinguishable from the operator's own save landing.
+
+     Asserted against the source because it is a claim about the SECOND
+     render with new props, and this suite has no DOM to re-render
+     into -- the same reason the re-seed comparisons above are. */
+
+  const editSections = source("../../components/admin/EditSections.tsx");
+  const editor = source("../../components/admin/HoursEditor.tsx");
+  const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+
+  it("says so, in the card and on the tab", () => {
+    const html = renderToStaticMarkup(createElement(ReplacedNote, { when: true }));
+    expect(html).toContain("setup-error");
+    expect(prose(html)).toMatch(/replaced by what is now on file/i);
+    expect(prose(html)).toMatch(/Nothing was saved from it/i);
+    // Absent when there is nothing to report -- a standing warning is
+    // furniture, and furniture is not read.
+    expect(renderToStaticMarkup(createElement(ReplacedNote, { when: false }))).toBe("");
+  });
+
+  it("is reported by all five forms that can be re-seeded", () => {
+    // useSeeded covers business, answering, service, orders, recording.
+    expect(editSections).toContain("useSectionReplaced(section, replaced)");
+    expect(editSections.match(/<ReplacedNote when=\{replaced\} \/>/g)).toHaveLength(5);
+    expect(editor.match(/useSectionReplaced\("hours", replaced\)/g)).toHaveLength(2);
+    expect(menuAdmin.match(/useSectionReplaced\("menu", replaced\)/g)).toHaveLength(2);
+  });
+
+  it("stays quiet on the operator's own save", () => {
+    // Two conditions everywhere: there WAS typing (the form does not
+    // match what it was seeded from) and what arrived is not it (the
+    // form does not match what has just landed). A save satisfies the
+    // first and fails the second, so it must never raise this.
+    expect(editSections).toContain("setReplaced(!same(form, seen) && !same(form, server))");
+    expect(editor).toContain(
+      "setReplaced(daysDiffer(days, seededDays) && daysDiffer(days, fresh))",
+    );
+    expect(editor).toContain(
+      "setReplaced(holidayDiffers(typed, seenSeed) && holidayDiffers(typed, seed))",
+    );
+    expect(menuAdmin).toContain("setReplaced(typedCat !== seen && typedCat !== seedCat)");
+    expect(menuAdmin).toContain("setReplaced(typedItem !== seen && typedItem !== seedItem)");
+  });
+});
+
+describe("the beforeunload guard", () => {
+  /* It was written out by hand in two components and missing from six.
+     A half-edited dish, a half-typed category rename, a half-typed
+     holiday and a half-typed new dish were all destroyed by Ctrl-R with
+     no browser prompt of any kind -- which lib/admin/edit.ts's
+     stale-save refusal actively instructs the operator to do ("Reload
+     the page and make the change again"). Tabs made it likelier still,
+     because the typing is now behind a tab rather than on screen. */
+
+  it("lives in one place, beside the thing that already knows the answer", () => {
+    const tabs = source("../../components/admin/EditTabs.tsx");
+    expect(tabs).toContain("export function useSectionDirty");
+    expect(tabs).toContain('window.addEventListener("beforeunload", warn)');
+  });
+
+  it("is not hand-rolled anywhere on this screen any more", () => {
+    for (const file of [
+      "../../components/admin/EditSections.tsx",
+      "../../components/admin/HoursEditor.tsx",
+      "../../components/admin/MenuAdmin.tsx",
+    ]) {
+      expect(source(file)).not.toContain('addEventListener("beforeunload"');
+    }
+  });
+
+  it("covers every surface on the page that can hold unsaved typing", () => {
+    // Eight reporters: the five useSeeded sections, the week, a holiday
+    // row, the new-holiday form, the category rename, an item row, the
+    // new-item form and the new-category field.
+    const editSections = source("../../components/admin/EditSections.tsx");
+    const editor = source("../../components/admin/HoursEditor.tsx");
+    const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+    expect(editSections).toContain("useSectionDirty(section, dirty)");
+    expect(editor.match(/useSectionDirty\("hours",/g)).toHaveLength(3);
+    expect(menuAdmin.match(/useSectionDirty\(\s*"menu",/g)).toHaveLength(4);
+  });
+});
+
+describe("putting the add-item form away", () => {
+  it("does not take what was typed into it", () => {
+    // Cancel used to unmount <AddItemForm>, which took its name, price
+    // and description useState with it -- no dialog, no dirty check, no
+    // undo -- from a button 6.8px from the one that adds the dish. That
+    // is the identical hazard this file's own Remove dialog exists for.
+    // Hidden, not unmounted: the same mechanism EditPanel uses.
+    const html = menu();
+    expect(html).toContain("add-item-form");
+    // Present in the markup while the disclosure is shut, and hidden.
+    expect(html).toMatch(/class="add-item-form"[^>]*hidden/);
+    expect(prose(html)).toContain("Add item");
+
+    const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+    expect(menuAdmin).toContain("hidden={!adding}");
+    // ...and never conditionally rendered again.
+    expect(menuAdmin).not.toMatch(/\{adding \? \(\s*<AddItemForm/);
+  });
+});
+
+/* ── what only the stylesheet can hold ─────────────────────────────── */
+
+describe("the tab strip's stylesheet", () => {
+  const css = source("../../app/app.css");
+  const head = css.indexOf("/* ── the editor's tab strip");
+  /* Comments stripped: this block argues at length about the rules it no
+     longer has, and a search over the prose would find `position:
+     sticky` in the paragraph explaining why it was taken out. */
+  const block = css
+    .slice(head, css.indexOf(".setup-stack[hidden] { display: none; }", head))
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("does not pin the strip over the panel it names", () => {
+    // `position: sticky; top: 0` put an opaque 36-110px bar over the
+    // top of the viewport, and a control that takes focus underneath it
+    // is not scrolled clear -- the browser considers a field inside the
+    // layout viewport already visible, so Shift+Tab upwards landed on
+    // an .input entirely covered by the strip with no scroll at all.
+    // WCAG 2.2 2.4.11 Focus Not Obscured (Minimum), at AA, on the
+    // ordinary keyboard path through an eight-field card.
+    expect(block).not.toMatch(/position:\s*sticky/);
+    expect(block).not.toMatch(/\.edit-tabs\s*\{[^}]*top:\s*0/);
+  });
+
+  it("draws the divider per option rather than per sibling, because it wraps", () => {
+    // industry.css's `.seg-opt + .seg-opt { border-left }` is DOM
+    // adjacency, not row adjacency: on a wrapped strip the first option
+    // of every row after the first drew a stray hairline one pixel
+    // inside the container's own border, and nothing at all separated
+    // the rows. Every option carrying its own top and left edge, pulled
+    // onto its neighbour by a one-pixel negative margin, is what makes
+    // .seg's `overflow: hidden` clip exactly the hairlines that would
+    // have doubled an edge.
+    expect(block).toMatch(/\.edit-tabs \.seg-opt\s*\{[\s\S]*border-left:\s*1px solid var\(--color-divider\)/);
+    expect(block).toMatch(/\.edit-tabs \.seg-opt\s*\{[\s\S]*border-top:\s*1px solid var\(--color-divider\)/);
+    expect(block).toMatch(/\.edit-tabs \.seg-opt\s*\{[\s\S]*margin-left:\s*-1px/);
+    expect(block).toMatch(/\.edit-tabs \.seg-opt\s*\{[\s\S]*margin-top:\s*-1px/);
+  });
+
+  it("keeps the one hidden panel rule the whole design rests on", () => {
+    expect(css).toContain(".setup-stack[hidden] { display: none; }");
+    expect(css).toContain(".add-item-form[hidden] { display: none; }");
+  });
+});
+
+describe("a menu row in a 300px card", () => {
+  const css = source("../../app/app.css");
+
+  it("keeps its three controls on one line, so Remove never moves", () => {
+    // Measured at 768px: the card is 357.8px, the row 328.6px, and the
+    // controls block gets 230px. At the 160px select cap this shipped
+    // with, the three controls needed 261.6px and wrapped -- putting
+    // Remove, which destroys a dish with no undo, on the second line
+    // for a dish with a description and beside Edit for one without. At
+    // 130px they are 231.6px: one bar, and Remove at the same x on
+    // every row.
+    expect(css).toContain(".menu-item-row .input { max-width: 130px; }");
+    expect(css).toContain(".menu-item-row .menu-edit-row-actions { flex-wrap: nowrap; }");
+    // The same cap .hours-times .input takes, which is what the comment
+    // above it claims to be following.
+    expect(css).toContain(".hours-times .input { max-width: 130px; }");
+  });
+});
+
+describe("a dish the assistant is refusing", () => {
+  /** WCAG 2.x relative luminance of an 8-bit sRGB triple. */
+  function luminance([r, g, b]: number[]): number {
+    const chan = (v: number) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b);
+  }
+
+  function hex(value: string): number[] {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(value.trim());
+    if (!m) throw new Error(`not a hex colour: ${value}`);
+    return [m[1], m[2], m[3]].map((pair) => parseInt(pair, 16));
+  }
+
+  function token(css: string, name: string): string {
+    const m = new RegExp(`${name}:\\s*([^;]+);`).exec(css);
+    if (!m) throw new Error(`no ${name}`);
+    return m[1];
+  }
+
+  it("has its struck-through name still legible", () => {
+    // The name is dimmed with a colour rather than opacity, so the
+    // "Not offered" chip beside it keeps its own contrast -- that part
+    // was right. The percentage was not: 45% was carried over from
+    // .lv-name .name.out, which is 15px on the manager screen, and at
+    // this row's 13px it composited to 2.75:1 -- under the 4.5:1 WCAG
+    // 1.4.3 asks of body text, and dimmer than .text-muted's own 55%,
+    // which made a sold-out dish's NAME the least readable text on the
+    // page.
+    const app = source("../../app/app.css");
+    const industry = source("../../app/industry.css");
+
+    const text = hex(token(industry, "--color-text"));
+    const bg = hex(token(industry, "--color-bg"));
+
+    const rule = app.slice(app.indexOf(".menu-item-row.is-out .name"));
+    const mix = /color-mix\(in srgb, var\(--color-text\) (\d+)%, transparent\)/.exec(rule);
+    expect(mix).not.toBeNull();
+    const alpha = Number(mix![1]) / 100;
+
+    const composited = text.map((channel, i) => alpha * channel + (1 - alpha) * bg[i]);
+    const light = luminance(bg);
+    const dark = luminance(composited);
+    const ratio = (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
+
+    expect(ratio).toBeGreaterThanOrEqual(4.5);
+    // And still visibly stood down: not simply the same ink as a name
+    // that is on sale.
+    expect(alpha).toBeLessThan(1);
+  });
+});
+
+describe("the sentence under the strip", () => {
+  it("names the tabs holding unsaved work and what a navigation does to them", () => {
+    // beforeunload cannot see a client-side route change, and this page
+    // offers six of them -- "Overview & go-live" (the largest button in
+    // the page head), the back link, three AdminNav items and
+    // SystemManaged's own link. Under tabs, seven of the eight surfaces
+    // holding typing are display:none while one of those is pressed, so
+    // a chip on a tab is not enough on its own. Rendered only when
+    // something is actually unsaved.
+    const tabs = source("../../components/admin/EditTabs.tsx");
+    expect(tabs).toContain("unsavedLabels.length > 0");
+    expect(tabs).toContain("Unsaved edits on {sentenceList(unsavedLabels)}");
+    expect(tabs).toMatch(/leaving this page loses them/);
+    // Not on screen when there is nothing to say.
+    expect(strip()).not.toContain("edit-tabs-note");
+  });
+});
+
+describe("the two sort orders on a category card", () => {
+  it("are told apart, because they are different numbers", () => {
+    // The card's .card-meta prints the CATEGORY's sort order and each
+    // row prints its ITEM's. They read alike and were once reported as
+    // duplicated ink; they are not, and the tie warning under the list
+    // names the row number, so an operator who cannot see it has to open
+    // every dish to find which two collide.
+    const html = menu({
+      categories: [{ id: CATEGORY, name: "Pasta", sort_order: 3 }],
+      items: [
+        {
+          id: ITEM,
+          category_id: CATEGORY,
+          name: "Carbonara",
+          description: null,
+          price_cents: 2200,
+          allergen_note: null,
+          sort_order: 7,
+          sold_out_until: null,
+        },
+      ],
+    });
+    const meta = html.slice(html.indexOf("card-meta"), html.indexOf("menu-item-list"));
+    expect(prose(meta)).toContain("sort 3");
+    expect(prose(meta)).not.toContain("sort 7");
+    const row = html.slice(html.indexOf("menu-item-list"));
+    expect(prose(row)).toContain("sort 7");
+  });
+});

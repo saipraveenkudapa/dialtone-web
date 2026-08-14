@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { Corners } from "@/components/Corners";
+import {
+  ReplacedNote,
+  useSectionDirty,
+  useSectionReplaced,
+} from "@/components/admin/EditTabs";
 import { WEEKDAYS } from "@/lib/provisioning/constants";
 import type { DraftHours } from "@/lib/provisioning/draft";
 import type {
@@ -240,6 +245,36 @@ function seedDays(rows: EditableHoursRow[]): DayState[] {
   });
 }
 
+/** One holiday row's four fields, and whether two of them say different
+ *  things. A closed day's times are not part of the row -- they sit
+ *  behind the checkbox and holidayProblem never sees them -- so they are
+ *  not part of the comparison either. Used for "this row is dirty"
+ *  against what is on file, and for "a re-seed landed on typing" against
+ *  what the row was seeded from. */
+type HolidayState = { date: string; closed: boolean; open: string; close: string };
+
+function holidayDiffers(a: HolidayState, b: HolidayState): boolean {
+  return (
+    a.date !== b.date ||
+    a.closed !== b.closed ||
+    (!a.closed && (a.open !== b.open || a.close !== b.close))
+  );
+}
+
+/** Whether two seeded weeks say different things.
+ *
+ *  One definition, used twice: for "this grid is dirty" against the week
+ *  on file, and for "a re-seed landed on typing" against the week it was
+ *  seeded from. A closed day's times are deliberately not compared --
+ *  they sit behind the checkbox and the save does not send them. */
+function daysDiffer(a: DayState[], b: DayState[]): boolean {
+  return a.some(
+    (day, i) =>
+      day.closed !== b[i].closed ||
+      (!day.closed && (day.open !== b[i].open || day.close !== b[i].close)),
+  );
+}
+
 /** The first thing wrong with the week, in lib/admin/edit.ts's own
  *  words -- copied verbatim so an operator reads the same sentence
  *  whether it is caught here or on the server. The server remains the
@@ -338,35 +373,48 @@ function WeeklyHours({
      but not yet saved, with the Unsaved tag and the beforeunload guard
      disappearing along with it.
      The signature is the same value the save sends, so there is exactly
-     one definition of "the week moved" on this screen. */
+     one definition of "the week moved" on this screen.
+
+     What it must not do is take the week SILENTLY. seededDays is the
+     week this grid was last seeded from, kept so the re-seed can tell
+     whether it landed on top of typing, and <ReplacedNote /> below says
+     so when it did. Two conditions, so an operator's own save never
+     trips it: the grid did not match what it was seeded from (there was
+     typing) and it does not match what has just arrived either (this is
+     not that typing coming back). */
   const signature = hoursSignature(hours);
   const [seenSignature, setSeenSignature] = useState(signature);
+  const [seededDays, setSeededDays] = useState<DayState[]>(() => seedDays(hours));
+  const [replaced, setReplaced] = useState(false);
   if (seenSignature !== signature) {
+    const fresh = seedDays(hours);
+    setReplaced(daysDiffer(days, seededDays) && daysDiffer(days, fresh));
     setSeenSignature(signature);
-    setDays(seedDays(hours));
+    setSeededDays(fresh);
+    setDays(fresh);
   }
 
   const onFile = seedDays(hours);
-  const dirty = days.some(
-    (day, i) =>
-      day.closed !== onFile[i].closed ||
-      (!day.closed && (day.open !== onFile[i].open || day.close !== onFile[i].close)),
-  );
+  const dirty = daysDiffer(days, onFile);
   const problem = hoursProblem(days);
+
+  // The account of a loss stands until there is something new to lose.
+  if (replaced && dirty) setReplaced(false);
+
+  /* Both <section>s below live behind the Hours tab, so the strip can
+     show one "Unsaved" chip for the week, any holiday row and the add
+     form together -- and one "Replaced" chip, since the panel holding
+     the loss is display:none seven times out of eight. This also
+     registers the beforeunload guard that used to be written out here
+     by hand; components/admin/EditTabs.tsx has the account. Outside an
+     <EditTabs> -- rendered standalone, or from a test -- the report
+     goes nowhere and the guard still works. */
+  useSectionDirty("hours", dirty);
+  useSectionReplaced("hours", replaced);
 
   const missing = WEEKDAYS.map((_, day) => day).filter(
     (day) => !hours.some((row) => row.day_of_week === day),
   );
-
-  // Closing the tab throws the week away. Say so before it happens
-  // rather than after -- the same guard MenuImportReview puts on its
-  // unsaved draft.
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
 
   function setDay(day: number, patch: Partial<DayState>) {
     setDays((prev) => prev.map((value, i) => (i === day ? { ...value, ...patch } : value)));
@@ -393,6 +441,9 @@ function WeeklyHours({
         The assistant checks these before it books a table or promises when an order will be
         ready.
       </p>
+
+      {/* The account of a re-seed that landed on a retyped week. */}
+      <ReplacedNote when={replaced} />
 
       {/* No chip. .tag.tag-outline is this feature's REBUILD mark -- it
           is the flag on every baked field label and it opens all three
@@ -574,10 +625,21 @@ function HolidayRow({
   // object on every save anywhere on this page, so `seen !== holiday`
   // re-seeded this row -- and threw away a date the operator had typed
   // -- because somebody flipped a dish to sold out three cards down.
+  //
+  // seenSeed is that same previous row kept whole, so the re-seed can
+  // tell whether it landed on typing and say so rather than taking it
+  // in silence. Two conditions, so an operator's own save is quiet: the
+  // row did not match what it was seeded from, and it does not match
+  // what has just arrived either.
   const seed4 = `${seed.date}|${seed.closed}|${seed.open}|${seed.close}`;
   const [seen, setSeen] = useState(seed4);
+  const [seenSeed, setSeenSeed] = useState(seed);
+  const [replaced, setReplaced] = useState(false);
+  const typed = { date, closed, open, close };
   if (seen !== seed4) {
+    setReplaced(holidayDiffers(typed, seenSeed) && holidayDiffers(typed, seed));
     setSeen(seed4);
+    setSeenSeed(seed);
     setDate(holiday.date);
     setClosed(holiday.is_closed);
     setOpen(hhmm(holiday.open_time, DEFAULT_OPEN));
@@ -588,11 +650,18 @@ function HolidayRow({
     // was earned.
   }
 
-  const dirty =
-    date !== seed.date ||
-    closed !== seed.closed ||
-    (!closed && (open !== seed.open || close !== seed.close));
+  const dirty = holidayDiffers(typed, seed);
   const problem = date.trim() === "" ? "Enter the date." : holidayProblem(closed, open, close);
+
+  // The account of a loss stands until there is something new to lose.
+  if (replaced && dirty) setReplaced(false);
+
+  // The chip, and -- new here -- the beforeunload guard. This row never
+  // had one: a half-typed date was destroyed by Ctrl-R with no prompt of
+  // any kind, which lib/admin/edit.ts's stale-save refusal actively
+  // tells the operator to do.
+  useSectionDirty("hours", dirty);
+  useSectionReplaced("hours", replaced);
 
   return (
     <>
@@ -655,6 +724,7 @@ function HolidayRow({
           Remove
         </button>
       </div>
+      <ReplacedNote when={replaced} />
       {dirty && problem ? <p className="setup-error">{problem}</p> : null}
       <WriteResult pending={pending} result={result} dirty={dirty} />
     </>
@@ -676,6 +746,14 @@ function AddHoliday({
   const [close, setClose] = useState(DEFAULT_CLOSE);
 
   const problem = date.trim() === "" ? null : holidayProblem(closed, open, close);
+
+  /* A half-typed new holiday is unsaved work like any other: the chip
+     on the Hours tab makes it visible from whichever tab the operator is
+     on, and useSectionDirty now registers the beforeunload guard this
+     form never had. Before that, a date typed here and then a reload --
+     which lib/admin/edit.ts's stale-save refusal tells the operator to
+     do -- threw it away with no prompt at all. */
+  useSectionDirty("hours", date.trim() !== "");
 
   function add() {
     run(

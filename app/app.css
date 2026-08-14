@@ -756,17 +756,110 @@ a:hover { color: var(--color-accent); }
 .menu-category { padding: var(--space-3); gap: var(--space-2); }
 .menu-category-head { display: flex; align-items: flex-end; gap: var(--space-2); }
 .menu-category-head .field { flex: 1; }
+/* REVIVED, NOT INVENTED, AND IT NO LONGER BELONGS TO THIS SCREEN. This
+   block described /admin/new's item list and has had no consumer since
+   that form grew .add-item-form. It is now the row inside a
+   .menu-item-list in the editor's category cards -- see the menu editor
+   block below -- which is the shape it already was: a flex row, a fluid
+   name, a tabular price, a hairline under it. What is added here is
+   only what a 300px-wide card asks of that shape.
+
+   Its neighbours above (.menu-category, .menu-category-head) are still
+   NewRestaurantForm.tsx's and are untouched. */
 .menu-item-row {
   display: flex;
-  align-items: center;
+  /* Was center. The name cell is two or three lines now -- the name,
+     then the description, then the staff note -- and a price centred
+     against a three-line neighbour floats in the middle of it. */
+  align-items: flex-start;
+  /* At 375px the price, the <select> and the two buttons cannot share a
+     line with the name. They take the next one instead; nothing is ever
+     past an edge and the card never widens the page. */
+  flex-wrap: wrap;
   gap: var(--space-2);
   padding: 6px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
   font-size: 13px;
 }
-.menu-item-row .name { flex: 1; }
-.menu-item-row .price { font-variant-numeric: tabular-nums; }
+/* The name takes the line and gives it back: a basis rather than a bare
+   flex:1, so on a wide card the price and controls keep the right-hand
+   third, and a min-width that stops a long dish name shrinking the
+   column to one word per line. */
+.menu-item-row .name { flex: 1 1 60%; min-width: 140px; }
+.menu-item-row .price { flex: none; font-variant-numeric: tabular-nums; }
+/* The controls leave the row's right edge -- and on a wrapped row, the
+   right edge of whatever line they land on. */
+.menu-item-row .menu-edit-row-actions { margin-left: auto; }
+/* The one control in the row is a <select class="input">, and .input is
+   width:100%: unbound it takes the whole line and the buttons wrap off
+   it on every row. Capped exactly as .hours-times .input is, and for
+   the same reason -- 130px and not the 160px this first shipped with,
+   because 160 did not fit. Measured on the reported iPad: the card's
+   row is 328.6px, the three controls at 160 came to 261.6px against the
+   230px the name and price leave them, so they wrapped on every row and
+   the row stood 116-160px tall against the ~44px a card grid is worth
+   having. At 130 they are 231.6px and the bar is one line. */
+.menu-item-row .input { max-width: 130px; }
+/* And once they fit, they stay put. A wrapped actions block puts Remove
+   -- which destroys a dish with no undo -- on the second line for a dish
+   with a description and beside Edit for one without, so the destructive
+   button moves depending on what the row happens to say. .menu-item-row
+   already wraps as a whole, so the controls still take their own line on
+   a phone; what they may not do is come apart from each other. */
+.menu-item-row .menu-edit-row-actions { flex-wrap: nowrap; }
+/* And the two buttons beside that select are given its height, so the
+   three controls of a row are one bar rather than a 36px box with two
+   32px ones leaning on it. The same 36px, for the same reason, that
+   .holiday-row's Remove and .edit-note's button already take: this is
+   the densest thing on the page, Remove destroys a dish with no undo,
+   it sits four pixels from the Edit an operator is aiming at while a
+   restaurant owner talks, and on the tablet this was reported from
+   there is no hover to warn them first. */
+.menu-item-row .btn { min-height: 36px; }
+/* The description and the staff note are their own line under the name,
+   never a fragment squeezed between the name and the price. Made an
+   atomic inline box on purpose as well as a full-width one: a
+   line-through set on a struck-out name propagates into in-flow block
+   descendants, and the sentence under the name is not what is off. */
+.menu-item-row .menu-edit-desc {
+  display: inline-block;
+  width: 100%;
+  flex-basis: 100%;
+}
+/* Not offered, said three ways and never by colour alone: the words on
+   a .tag-out chip beside the name, the sentence selected in the row's
+   own <select>, and the name struck through and dimmed -- the identical
+   treatment .lv-name .name.out gives it on the manager screen, so the
+   two screens say "off" the same way.
+
+   Dimmed with a colour where .lv-name uses opacity, because there the
+   .name is nothing but the name and here it also carries the chip:
+   opacity dims a subtree and nothing inside can undo it, so the chip --
+   the half of this that survives being printed, read aloud, or read by
+   somebody who cannot separate the two blues -- would lose its contrast
+   with it.
+
+   70% AND NOT 45%. The 45 was carried over from .lv-name .name.out,
+   which is 15px on a different screen; at this row's 13px it composited
+   to rgb(146,147,148) on the card, i.e. 2.75:1 -- under the 4.5:1 WCAG
+   1.4.3 asks of body text, and DIMMER THAN .text-muted's own 55%, so the
+   dish's name was the least readable thing on the page. 70% composites
+   to about 5.6:1 and still reads as plainly stood-down beside an
+   undimmed neighbour, which is all the dimming has to do: the chip and
+   the line-through are the other two marks and they carry it. */
+.menu-item-row.is-out .name {
+  text-decoration: line-through;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
 .add-item-form { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: flex-end; margin-top: var(--space-2); }
+/* Put away, not thrown away. The category card discloses this form and
+   Cancel hides it; unmounting it would take the typed name, price and
+   description with it, from a button 6.8px from the one that adds the
+   dish. Same mechanism, and the same reason, as .setup-stack[hidden]
+   further down: `[hidden] { display: none }` is the user agent's rule at
+   specificity 0,0,1 and `.add-item-form { display: flex }` is 0,1,0, so
+   the attribute alone does nothing. */
+.add-item-form[hidden] { display: none; }
 .add-item-form .field { flex: 1; min-width: 130px; }
 .price-preview { font-size: 12px; flex: none; align-self: center; min-width: 160px; }
 
@@ -824,10 +917,56 @@ a:hover { color: var(--color-accent); }
 .menu-edit .page-head .actions { margin-left: auto; }
 .menu-edit-add { max-width: 420px; }
 
+/* The categories side by side rather than end to end (/edit only --
+   MenuEditor.tsx does not wear this). The operator's words were "can you
+   do it as a card... the section wise, if something is, like, burgers,
+   just put the whole burger section in, so that the user gonna know
+   which one that they have and which they don't have", which is a
+   glance at what sections exist and what is in each. A single column of
+   full-width cards cannot give it: twelve categories is six screens
+   before the last heading has been seen at all.
+
+   auto-fill, not auto-fit: with auto-fit a restaurant with one category
+   gets one card stretched across the full 760px, which is the stacked
+   layout this replaces with a grid drawn round it.
+
+   min(300px, 100%), not a bare 300px: a track minimum wider than the
+   column is a track wider than the column, and at 320px that is a page
+   that scrolls sideways -- the one thing a card grid may never do. So
+   two columns of ~370px in .setup-stack's 760px, one column on a phone,
+   and no edge past the screen at any width between.
+
+   align-items: start, so a three-item card does not stretch itself to
+   the height of a thirty-item neighbour. */
+.menu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+  gap: var(--space-6);
+  align-items: start;
+}
+
 .menu-edit-cat { padding: var(--space-4); gap: var(--space-3); background: var(--color-bg); }
 .menu-edit-cat-head { display: flex; align-items: center; gap: var(--space-3); min-height: 36px; }
 .menu-edit-cat-head h3 { margin: 0; flex: 1; }
 .menu-edit-cat-controls { display: flex; gap: 4px; flex-wrap: wrap; }
+/* The card's own answer to "which ones do I have and which do I not":
+   how many items, and -- only when it is not zero -- how many of them
+   the phone is currently refusing, worded exactly as the chip on the
+   row is ("2 not offered" / "Not offered") so the summary and the rows
+   are visibly the same fact. .card-meta is the house's row for a card's
+   counts and is worn unchanged; the one thing it has to do here that it
+   never had to do on a full-width card is wrap, because two chips and a
+   sort order do not fit one line of a 300px card. */
+.menu-edit-cat .card-meta { flex-wrap: wrap; }
+
+/* The items of one category. A five-column .table cannot survive a
+   342px card, so the rows are a list -- .menu-item-row above is the row
+   and this is only the column they stack in. Its own container with no
+   gap, because .menu-edit-cat is a flex column that spaces its children
+   and hairline-separated rows have to butt together. Named for the
+   menu: .hours-grid is the identical two lines and is named for hours,
+   which is not something to borrow. */
+.menu-item-list { display: flex; flex-direction: column; }
 
 .menu-edit-row-edit {
   display: flex;
@@ -1529,34 +1668,39 @@ iframe.review-image { height: 62vh; }
    grows to the row's target height; the text does not. */
 .holiday-row .hours-closed { min-height: 36px; }
 
-/* ── the editor's section index ────────────────────────────────────── */
+/* ── the section index on /admin/<id> ──────────────────────────────── */
 
-/* The list of the editor's sections, worn on both screens that lead into
-   them: on /admin/<id> as the way in, on /edit as a sticky index that
-   also marks where you are.
+/* TWO SHAPES NOW POINT AT THE SAME EIGHT SECTIONS, AND THIS IS THE
+   FIRST OF THEM. Read this and .edit-tabs below together, or the next
+   reader will delete one as a duplicate of the other.
 
-   The complaint it answers is a measurement. On an iPad the Menu heading
-   on /edit sits 5275px down the page and Hours 1485px, with seven cards
-   in between and nothing to jump with; the operator's words were "I
-   can't able to see the menus from my iPad".
+   This one is the way IN, and it is worn once: <nav class="nav
+   edit-index"> in app/admin/[locationId]/page.tsx, above the
+   restaurant's overview. Eight anchors that LEAVE the page for a
+   section of the editor. They are links, so .nav is the shape -- worn
+   directly, exactly as the operator bar wears `nav admin-nav`, so
+   `display/align-items` and every rule on `.nav a`, plain text at rest
+   and accent on hover, come from industry.css and stay in step with it.
+   What is below is only what a section index needs on top.
 
-   One shape, two behaviours, and the difference is only what the strip
-   costs where it sits: in the flow it wraps, so nothing is ever past an
-   edge; stuck to the top of the viewport it must not, because its height
-   is subtracted from every screen below it for as long as the page is
-   open.
+   .edit-tabs is the other one, on /edit itself, and it is NOT this
+   strip stuck to the top of a scroll -- /edit no longer has one. Its
+   nine stacked cards are eight panels of which exactly one is on
+   screen, so the act there is one of eight chosen in place, which is a
+   segmented control and not a bar of links. Same eight subjects, two
+   different acts, two classes.
 
-   The system's .nav IS that shape, worn directly -- both places render
-   `nav edit-index`, exactly as the operator bar renders `nav admin-nav`
-   -- so `display/align-items` and every rule on `.nav a`, plain text at
-   rest and accent on hover, come from industry.css and stay in step with
-   it. What is below is only what a section index needs on top. */
+   The complaint both answer is a measurement. On an iPad the Menu
+   heading on /edit sat 5346px down an 8210px page with seven cards in
+   between and nothing to jump with; the operator's words were "I can't
+   able to see the menus from my iPad" and, later, "it's like a stack, I
+   just have to scroll all the way to the down. I don't like it". */
 .edit-index {
-  /* Wraps HERE, on /admin/<id>, where it is a block in the flow and the
-     only cost of a second line is a second line. Nothing may be past an
-     edge on the screen that was reported blind: at 768px the eight
-     entries take two rows and every one of them is readable without
-     discovering that anything scrolls. */
+  /* A block in the flow, where the only cost of a second line is a
+     second line. Nothing may be past an edge on the screen that was
+     reported blind: at 768px the eight entries take two rows and every
+     one of them is readable without discovering that anything
+     scrolls. */
   flex-wrap: wrap;
   /* .nav is a bar of four or five links and spaces them for it; this is
      eight, each carrying its own 34px box, and they are separated by
@@ -1596,51 +1740,168 @@ iframe.review-image { height: 62vh; }
   font-weight: var(--font-heading-weight);
 }
 
-/* On /edit the same strip stays put. .page is the scrolling column, so
-   `top: 0` pins it under nothing; the opaque background is what stops
-   seven screens of fields reading through it.
+/* ── the editor's tab strip (/admin/[locationId]/edit) ─────────────── */
 
-   The z-index is not decoration: every card below is a .card.blueprint,
-   which is `position: relative`, and at z-index auto a positioned
-   element paints over one that came BEFORE it in the document -- the
-   strip would be scrolled over rather than under. Same rule the two
-   .dialog-backdrop lines above were written for. */
-.edit-index.is-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  /* And it does NOT wrap here. A sticky strip that grows to three rows
-     on a narrow screen is three rows of navigation permanently over the
-     fields; one row that scrolls sideways costs 48.6px at every width,
-     which is what scroll-margin-top below is measured against. */
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  /* The sideways scroll ends at this strip rather than dragging the
-     page -- or, on iOS, the tab -- along with it. */
-  overscroll-behavior-x: contain;
+/* THE DELTA ON .seg, AND NOTHING ELSE. The strip is
+   <div class="seg edit-tabs"> holding eight <label class="seg-opt">
+   radios, verbatim: the layout, the padding, the divider between
+   options, the checked and hover states and the focus ring all come
+   from industry.css and `:has(input:checked)` supplies the selection.
+   The radio group's shared `name` supplies the roving tabindex, so the
+   eight tabs are one tab stop; EditTabs.tsx handles the arrow keys and
+   Home/End itself on top of that, and its comment says why. Two things
+   industry.css cannot get right for this strip -- the focus ring, and
+   what a WRAPPED .seg looks like -- are the two overrides below.
+
+   .seg is the right class rather than .nav because these are not
+   routes. One of eight, chosen in place, with the panel swapping under
+   it and nothing below it, is what a segmented control MEANS, and the
+   house already wears .seg for exactly that twice: .auth-seg swaps the
+   sign-in form under it, .filter-seg the calls log. This is the third
+   modifier on it, not a third vocabulary.
+
+   It is also not .edit-index.is-sticky under a new name, and that rule
+   is gone rather than renamed. That strip was an index OF a scroll: it
+   marked where you were in 8210px of stacked cards, and it could not
+   wrap, because a second row of it was a permanent tax on every screen
+   of a page seven screens deep. There is no such scroll any more. */
+.edit-tabs-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* The panel column's ceiling. The strip and the sentence under it name
+     the panels, and a header wider than what it names reads as a
+     different page element. */
+  max-width: 760px;
+}
+.edit-tabs {
+  /* .seg is inline-flex, i.e. shrink-to-fit, and the options would then
+     bunch at the left of a 760px column. It takes the column, and
+     .setup-stack's own ceiling with it, because a strip wider than the
+     panels it names would make the page look like it changes width on
+     every press. */
+  display: flex;
+  max-width: 760px;
+  /* It wraps, where the old sticky index could not. Nothing in it may
+     be past an edge: this is the control the operator presses to move,
+     not a shortcut past a scroll, and a tab discovered only by finding
+     that a bar scrolls sideways is the same defect as a heading 5346px
+     down. Measured in the house's 13px Barlow, the eight labels and
+     their padding come to about 630px: one row on the 712px an iPad
+     leaves, three on a 375px phone, and one more only while a chip is
+     showing. A wrapped row costs a row, and the panel below it is one
+     section tall now, so it is not a tax on anything. */
+  flex-wrap: wrap;
+}
+/* AND IT DOES NOT STICK. It was `position: sticky; top: 0; z-index: 2`
+   over an opaque `background`, and all four went together: a bar pinned
+   to the top of the viewport can cover a control that has just taken
+   focus, and the browser will not scroll it clear -- it considers a
+   field inside the layout viewport already visible, so Shift+Tab
+   upwards through a panel lands on an .input sitting entirely
+   underneath the strip with no scroll of any kind. That is WCAG 2.2
+   2.4.11 Focus Not Obscured, at AA, on the ordinary keyboard path
+   through an eight-field card. Neither scroll-margin-top below nor
+   scroll-padding-top reaches it, because nothing scrolls. The
+   background went with the rest: a strip in the flow paints on the same
+   --color-bg the page already is, which is what .seg's own transparent
+   box expects.
+
+   Giving it up costs almost nothing: choosing a tab already returns the
+   panel to the top of the document (EditTabs.tsx's choose()), which is
+   the one moment the strip is wanted, and it is the first thing on the
+   page when it gets there. */
+
+/* WHAT A WRAPPED .seg NEEDS AND industry.css DOES NOT HAVE. .seg is a
+   single-row control taken verbatim from the mockup: one rounded box,
+   `overflow: hidden`, and `.seg-opt + .seg-opt { border-left }` for the
+   divider. That selector is DOM adjacency, not row adjacency, so on a
+   wrapped strip the first option of every row below the first drew a
+   stray hairline one pixel inside the container's own left border -- a
+   doubled left edge -- and there was no rule at all between the rows,
+   which butted together with their vertical dividers out of line.
+
+   So the divider stops depending on which sibling comes first: every
+   option carries it on its own top and left edges, and a one-pixel
+   negative margin pulls those edges onto the neighbour they divide
+   from. At the start of a row and along the top of the strip that
+   neighbour is the container's own border, and .seg's `overflow:
+   hidden` clips to the padding box -- so exactly the hairlines that
+   would have doubled an edge are the ones that disappear, and the ones
+   between two options and between two rows are the ones that stay. */
+.edit-tabs .seg-opt {
+  /* The same 34px box .edit-index-link and .admin-nav-item take, for the
+     same reason: the ink is a 13px word and the device this was reported
+     from is a tablet. .seg-opt's own padding already lands within a
+     pixel of it -- this is the floor, so the tabs stay level with each
+     other whatever they are wearing. */
+  min-height: 34px;
+  border-left: 1px solid var(--color-divider);
+  border-top: 1px solid var(--color-divider);
+  margin-left: -1px;
+  margin-top: -1px;
+}
+/* "Unsaved", "Replaced" and "Phone not updated" ride inside the label,
+   so the state is read out with the tab it belongs to. Never wrapped:
+   broken across two lines a chip stops reading as a chip and starts
+   reading as prose -- the same reason .edit-flag sets this. */
+.edit-tabs .tag { white-space: nowrap; }
+
+/* The chips say which sections are unsaved; this says what happens to
+   them, because the one loss no guard on this page can catch is a
+   client-side route change and the button that does it is the largest
+   one in the page head. Not muted: it is the only warning an operator
+   gets, and it is only on screen when there is something to warn about. */
+.edit-tabs-note { margin: 0; }
+
+/* The one place industry.css's ring cannot work, and it is the tab the
+   keyboard always lands on. `.seg-opt:has(input:focus-visible)` draws
+   `outline: 2px solid var(--color-accent)` inset, and
+   `.seg-opt:has(input:checked)` fills the chosen tab with that same
+   accent -- so the ring is drawn in the fill's own colour and cannot be
+   seen. On a strip of five filter links that is a blemish; here the
+   radio group's roving tabindex means Tab lands on the CHECKED tab
+   every time, so it is the whole of the keyboard's position indicator
+   going missing. The ground colour is what is legible against the fill,
+   and it is the token the checked label already uses for its text.
+   Scoped to .edit-tabs: .auth-seg and .filter-seg have the same
+   blemish, and fixing those is not this screen's change to make. */
+.edit-tabs .seg-opt:has(input:checked):has(input:focus-visible) {
+  outline-color: var(--color-bg);
 }
 
-/* And the same rule turned around: a fixed backdrop at z-index auto
-   paints under a stacking context that has a value, so the menu's three
-   confirms would come up behind the strip. Same fix, and the same value,
-   as .review .dialog-backdrop and .golive .dialog-backdrop. */
+/* One panel is on screen. The other seven are still rendered, still
+   hydrated and still holding every half-typed price in them -- they are
+   only hidden, which is the whole reason switching tabs is safe.
+
+   THIS LINE IS THE MECHANISM, NOT A GUARD -- delete it and all eight
+   sections paint at once, which is the exact defect the tabs were built
+   to end. `[hidden] { display: none }` is the user agent's own rule and
+   it is class-less, at specificity 0,0,1; `.setup-stack { display:
+   flex }` is 0,1,0 and outranks it. So EditPanel's `hidden` attribute
+   does nothing on its own. EditTabs.tsx renders every panel as
+   <div class="setup-stack" hidden> and its comment says the same thing
+   from the other side: the element has to keep wearing .setup-stack for
+   this rule to bite. Neither half is tidyable without the other. */
+.setup-stack[hidden] { display: none; }
+
+/* A fixed backdrop at z-index auto paints under any positioned sibling
+   that has a value of its own, and every panel here holds a
+   .card.blueprint, which is `position: relative`. Same fix, and the same
+   value, as .review .dialog-backdrop and .golive .dialog-backdrop. */
 .setup-stack .dialog-backdrop { z-index: 5; }
 
-/* Every section the strip points at clears the strip. Without this the
-   anchor works and looks broken: the card's heading lands underneath the
-   index and an operator arrives at a card whose title they cannot read.
-   The strip is 48.6px -- a 34px target plus var(--space-2) above and
-   below plus its hairline -- and this is that, rounded up through the
-   tokens, with var(--space-3) of air over the heading. */
-.setup-stack > section[id] { scroll-margin-top: calc(var(--space-8) * 2 + var(--space-3)); }
+/* The hash is still the contract -- #menu, #hours, #holidays and
+   #sold-out are pasted into tickets and linked from /admin/<id> -- and
+   a hash naming a section of the panel on screen still scrolls to it.
+   Air over the heading it lands on, and nothing more: this used to be
+   68px of clearance for a sticky strip, and the strip is not sticky any
+   more, so a jump that stopped 68px short of the top was 68px of
+   nothing.
 
-/* The jump this exists for is 5275px. Smooth is what keeps it a movement
-   between two parts of one page rather than a teleport that leaves the
-   operator asking what they are now looking at. Guarded: to a reader who
-   has asked for less motion, a 5275px slide is precisely the motion they
-   asked to be spared, and the instant jump is the better answer anyway.
-   Scoped to the page that has the sticky index, so no other route's
-   scrolling changes underneath it. */
-@media (prefers-reduced-motion: no-preference) {
-  html:has(.edit-index.is-sticky) { scroll-behavior: smooth; }
-}
+   No scroll-behavior rule accompanies it any more. The 5275px slide the
+   old one existed to soften cannot happen now -- the longest jump on
+   this page is the length of one panel -- and nothing in this block
+   transitions or animates, so there is no motion left here for
+   prefers-reduced-motion to be asked about. */
+.setup-stack > section[id] { scroll-margin-top: var(--space-3); }

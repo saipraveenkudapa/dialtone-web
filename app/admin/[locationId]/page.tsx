@@ -55,10 +55,17 @@ export default async function AdminLocationPage({
 
   /* The editor's subjects, in the order that page renders them, so the
      two screens are one vocabulary read in one order. Kept in step by
-     hand with SECTIONS in components/admin/EditSections.tsx -- which
+     hand with EDIT_SECTIONS in components/admin/EditTabs.tsx -- which
      documents why it is these eight -- because that module is "use
      client", and a server component that dots into a client module's
-     export gets a client reference rather than an array. */
+     export gets a client reference rather than an array. The ids must
+     match it exactly: each one is spent below as ?section=<id>, which
+     /edit validates against the same eight and falls back to Business.
+
+     The labels are the long ones on purpose. This strip is the way IN
+     and has a whole page's width; the tabs are eight abreast in a 760px
+     column and are shortened to fit, with each panel's own <h2> still
+     carrying the full heading. Same subjects, two widths. */
   const sections: { id: string; label: string }[] = [
     { id: "business", label: "The business" },
     { id: "hours", label: "Hours" },
@@ -89,7 +96,7 @@ export default async function AdminLocationPage({
      caller's number as <dd className="num">), and a phone number in
      proportional type is the specific thing that makes a screen look
      unlike the mockup. */
-  /* `to` is the editor section holding the FIELD for this row -- the
+  /* `to` is the editor TAB holding the FIELD for this row -- the
      answer to "where do I change this one", on the row itself rather
      than only in a link at the foot of the card that lands forty fields
      away from it.
@@ -174,10 +181,17 @@ export default async function AdminLocationPage({
 
       {/* And the sections by name, because "Edit details" is not the word
           an operator is looking for when what they want is the menu. The
-          same strip, in the same order, as the index on /edit -- here
-          every entry crosses to it and lands on that card. Above the
-          split, so on a tablet (where the two columns stack) it is read
-          before the checklist rather than after the call log. */}
+          same eight, in the same order, as the tabs on /edit -- here
+          every entry crosses to it and opens that tab. Above the split,
+          so on a tablet (where the two columns stack) it is read before
+          the checklist rather than after the call log.
+
+          ?section=, not #anchor: a hash never reaches the server, so an
+          arrival by hash would paint the first tab and correct itself
+          after hydration. This lands on the right tab in the first byte
+          of HTML. The hashes still work -- /edit#menu is bookmarked and
+          pasted into tickets, and components/admin/GoLive.tsx's three
+          checklist rows still use them -- they simply flash. */}
       {/* `nav` first: the system class supplies this strip's layout and
           its anchors' resting colour, worn rather than re-declared, the
           same way components/admin/AdminNav.tsx wears it. */}
@@ -186,7 +200,7 @@ export default async function AdminLocationPage({
         {sections.map((section) => (
           <Link
             key={section.id}
-            href={`${editHref}#${section.id}`}
+            href={`${editHref}?section=${section.id}`}
             className="edit-index-link"
           >
             {section.label}
@@ -272,7 +286,7 @@ export default async function AdminLocationPage({
                   <dt className="text-muted">{f.label}</dt>
                   <dd className={f.num ? "num" : undefined}>
                     {f.to ? (
-                      <Link href={`${editHref}#${f.to}`} className="row-link">
+                      <Link href={`${editHref}?section=${f.to}`} className="row-link">
                         {f.value}
                       </Link>
                     ) : (

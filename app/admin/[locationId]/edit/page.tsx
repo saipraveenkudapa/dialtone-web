@@ -6,11 +6,11 @@ import {
   BusinessSection,
   OrderRoutingSection,
   RecordingSection,
-  SectionIndex,
   ServiceSection,
   type AssistantDrift,
   type DriftCell,
 } from "@/components/admin/EditSections";
+import { EditPanel, EditTabs, type EditSectionId } from "@/components/admin/EditTabs";
 import { HoursEditor } from "@/components/admin/HoursEditor";
 import { MenuAdmin } from "@/components/admin/MenuAdmin";
 import {
@@ -58,13 +58,58 @@ export const maxDuration = 120;
  * the phone agrees. */
 const PAGE_VAPI_TIMEOUT_MS = 5_000;
 
+/* Which tab this page opens on, and the only new caller-supplied input
+ * on the route.
+ *
+ * SECURITY. `section` is matched against this eight-item literal list
+ * and used for exactly one thing: which panel is visible first. It is
+ * never an id, it never reaches Postgres or Vapi, it is never passed to
+ * a server action, and no "use server" export gained a parameter for it.
+ * locationId is still the only caller-supplied id and is still
+ * uuid-validated before anything is read; getEditableRecord and every
+ * action still re-check currentPlatformAdmin() themselves.
+ *
+ * Written out here rather than imported from EditTabs because that
+ * module is "use client", and a server component that dots into a client
+ * module's export gets a client reference rather than an array -- the
+ * same reason app/admin/[locationId]/page.tsx keeps its own copy. The
+ * TYPE is imported, so a renamed or dropped tab fails to compile here
+ * rather than drifting quietly. */
+const SECTION_IDS: readonly EditSectionId[] = [
+  "business",
+  "hours",
+  "answering",
+  "service",
+  "orders",
+  "recording",
+  "menu",
+  "managed",
+];
+
+const isSection = (value: unknown): value is EditSectionId =>
+  typeof value === "string" && (SECTION_IDS as readonly string[]).includes(value);
+
+/** A drift cell the phone is actually behind on. Same test the sections
+ *  themselves use, so a tab and the card under it can never disagree. */
+const isStale = (cell: DriftCell) => cell.state === "stale";
+
 export default async function EditLocationPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ locationId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { locationId } = await params;
   if (!isUuid(locationId)) notFound();
+
+  /* Read on the server so the chosen panel is in the first byte of HTML.
+     A hash never reaches the server, so a #menu arrival would render
+     Business and correct itself after hydration -- a visible wrong-tab
+     flash. ?section= removes it; the hash still works and EditTabs
+     rewrites it to this form on arrival. */
+  const query = await searchParams;
+  const initial: EditSectionId = isSection(query.section) ? query.section : "business";
 
   // Gated inside: getEditableRecord re-checks currentPlatformAdmin() and
   // returns null for a non-admin, a bad id and a location that does not
@@ -83,6 +128,19 @@ export default async function EditLocationPage({
   // closed tab, and a different operator opening this page.
   const drift = await readAssistantDrift(location);
   const hasAssistant = location.vapi_assistant_id !== null;
+
+  /* Which tabs carry "Phone not updated" before anything is touched.
+     Computed here, off the one Vapi read above, so the chip is painted
+     with the strip and never appears mid-session -- the strip does not
+     reflow under the operator's hand. The groupings are the sections'
+     own: BusinessSection weighs name and address, AnsweringSection the
+     greeting and the transfer destination, ServiceSection the order
+     types. Without this, tabs would bury the drift warning the flag
+     exists to raise. */
+  const behind: EditSectionId[] = [];
+  if (isStale(drift.name) || isStale(drift.address)) behind.push("business");
+  if (isStale(drift.greeting) || isStale(drift.transfer)) behind.push("answering");
+  if (isStale(drift.orderTypes)) behind.push("service");
 
   return (
     <>
@@ -106,102 +164,125 @@ export default async function EditLocationPage({
         </div>
       </div>
 
-      {/* The way through a page seven screens tall. Under the head
-          rather than inside it, so it is the first thing below the title
-          on a tablet -- the screen this was reported from -- and sticky
-          from there down, which is the only place a jump list is any use
-          once the scrolling has started. */}
-      <SectionIndex />
+      {/* One section on screen, nothing below it.
 
-      <div className="setup-stack">
-        <BusinessSection
-          locationId={location.id}
-          orgName={org.name}
-          plan={org.plan}
-          name={location.name}
-          timezone={location.timezone}
-          address={location.address}
-          businessPhone={location.business_phone}
-          carrierName={location.carrier_name}
-          timezones={TIMEZONES}
-          updatedAt={location.updated_at}
-          drift={drift}
-          hasAssistant={hasAssistant}
-        />
+          The operator's words: "it's like a stack ... I just have to
+          scroll all the way to the down. I don't like it ... I just want
+          to click on the section." Nine cards were 8210px of document
+          with the Menu heading 5346px down; asked how a section should
+          open, they chose tabs.
 
-        {/* #hours and #holidays. Second, as on /admin/new, so an
-            operator who created this restaurant last week meets the same
-            fields in the same order. The actions are passed in rather
-            than imported by the component: every one of them gates on
-            currentPlatformAdmin() itself, so nothing is lost, and the
-            editor stays a thing that can be rendered from a test. */}
-        <HoursEditor
-          locationId={location.id}
-          timezone={tz}
-          hours={hours}
-          holidays={holidays}
-          saveHoursAction={saveHoursAction}
-          saveHolidayAction={saveHolidayAction}
-          deleteHolidayAction={deleteHolidayAction}
-        />
+          Every panel below is rendered on every render and the inactive
+          ones are display:none, so a half-typed price in Menu survives a
+          trip to Hours and back -- and so a hidden panel is out of the
+          focus order, out of the a11y tree and out of find-in-page. */}
+      <EditTabs initial={initial} behind={behind}>
+        <EditPanel id="business">
+          <BusinessSection
+            locationId={location.id}
+            orgName={org.name}
+            plan={org.plan}
+            name={location.name}
+            timezone={location.timezone}
+            address={location.address}
+            businessPhone={location.business_phone}
+            carrierName={location.carrier_name}
+            timezones={TIMEZONES}
+            updatedAt={location.updated_at}
+            drift={drift}
+            hasAssistant={hasAssistant}
+          />
+        </EditPanel>
 
-        <AnsweringSection
-          locationId={location.id}
-          greetingText={location.greeting_text}
-          fallbackNumber={location.fallback_human_number}
-          updatedAt={location.updated_at}
-          drift={drift}
-          hasAssistant={hasAssistant}
-        />
+        <EditPanel id="hours">
+          {/* #hours and #holidays. Both stay in one panel: a holiday
+              is an override of a weekly row, and "we close at 3 on
+              Christmas Eve" is unjudgeable without Tuesday's normal
+              hours on the same screen. The actions are passed in rather
+              than imported by the component: every one of them gates on
+              currentPlatformAdmin() itself, so nothing is lost, and the
+              editor stays a thing that can be rendered from a test. */}
+          <HoursEditor
+            locationId={location.id}
+            timezone={tz}
+            hours={hours}
+            holidays={holidays}
+            saveHoursAction={saveHoursAction}
+            saveHolidayAction={saveHolidayAction}
+            deleteHolidayAction={deleteHolidayAction}
+          />
+        </EditPanel>
 
-        <ServiceSection
-          locationId={location.id}
-          taxRateBps={location.tax_rate_bps}
-          orderTypes={location.order_types}
-          pickupPromiseMinutes={location.pickup_promise_minutes}
-          deliveryPromiseMinutes={location.delivery_promise_minutes}
-          seats={location.seats}
-          maxPartySize={location.max_party_size}
-          reservationSlotMinutes={location.reservation_slot_minutes}
-          updatedAt={location.updated_at}
-          drift={drift}
-          hasAssistant={hasAssistant}
-        />
+        <EditPanel id="answering">
+          <AnsweringSection
+            locationId={location.id}
+            greetingText={location.greeting_text}
+            fallbackNumber={location.fallback_human_number}
+            updatedAt={location.updated_at}
+            drift={drift}
+            hasAssistant={hasAssistant}
+          />
+        </EditPanel>
 
-        <OrderRoutingSection
-          locationId={location.id}
-          orderDelivery={location.order_delivery}
-          orderSmsTo={location.order_sms_to}
-          orderEmailTo={location.order_email_to}
-          updatedAt={location.updated_at}
-          hasNumber={location.twilio_number !== null}
-        />
+        <EditPanel id="service">
+          <ServiceSection
+            locationId={location.id}
+            taxRateBps={location.tax_rate_bps}
+            orderTypes={location.order_types}
+            pickupPromiseMinutes={location.pickup_promise_minutes}
+            deliveryPromiseMinutes={location.delivery_promise_minutes}
+            seats={location.seats}
+            maxPartySize={location.max_party_size}
+            reservationSlotMinutes={location.reservation_slot_minutes}
+            updatedAt={location.updated_at}
+            drift={drift}
+            hasAssistant={hasAssistant}
+          />
+        </EditPanel>
 
-        <RecordingSection
-          locationId={location.id}
-          recordingEnabled={location.recording_enabled}
-          recordingRetentionDays={location.recording_retention_days}
-          updatedAt={location.updated_at}
-        />
+        <EditPanel id="orders">
+          <OrderRoutingSection
+            locationId={location.id}
+            orderDelivery={location.order_delivery}
+            orderSmsTo={location.order_sms_to}
+            orderEmailTo={location.order_email_to}
+            updatedAt={location.updated_at}
+            hasNumber={location.twilio_number !== null}
+          />
+        </EditPanel>
 
-        {/* #menu and #sold-out. Last of the editable cards because it is
-            the only unbounded one -- a two-hundred-item menu below the
-            twenty scalars rather than above them. */}
-        <MenuAdmin
-          locationId={location.id}
-          categories={categories}
-          items={items}
-          createCategoryAction={createMenuCategoryAction}
-          saveCategoryAction={saveMenuCategoryAction}
-          deleteCategoryAction={deleteMenuCategoryAction}
-          createItemAction={createMenuItemAction}
-          saveItemAction={saveMenuItemAction}
-          deleteItemAction={deleteMenuItemAction}
-          setSoldOutAction={setMenuItemSoldOutAction}
-        />
+        <EditPanel id="recording">
+          <RecordingSection
+            locationId={location.id}
+            recordingEnabled={location.recording_enabled}
+            recordingRetentionDays={location.recording_retention_days}
+            updatedAt={location.updated_at}
+          />
+        </EditPanel>
 
-        <SystemManaged location={location} org={org} tz={tz} />
-      </div>
+        <EditPanel id="menu">
+          {/* #menu and #sold-out, in one panel and no longer at the
+              foot of eight screens of scrolling. It is the only
+              unbounded section on the page, which used to decide its
+              position and now costs it nothing. */}
+          <MenuAdmin
+            locationId={location.id}
+            categories={categories}
+            items={items}
+            createCategoryAction={createMenuCategoryAction}
+            saveCategoryAction={saveMenuCategoryAction}
+            deleteCategoryAction={deleteMenuCategoryAction}
+            createItemAction={createMenuItemAction}
+            saveItemAction={saveMenuItemAction}
+            deleteItemAction={deleteMenuItemAction}
+            setSoldOutAction={setMenuItemSoldOutAction}
+          />
+        </EditPanel>
+
+        <EditPanel id="managed">
+          <SystemManaged location={location} org={org} tz={tz} />
+        </EditPanel>
+      </EditTabs>
     </>
   );
 }

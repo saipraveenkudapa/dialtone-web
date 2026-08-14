@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { Corners } from "@/components/Corners";
+import {
+  ReplacedNote,
+  useSectionDirty,
+  useSectionReplaced,
+  type EditSectionId,
+} from "@/components/admin/EditTabs";
 import { normalizePhoneToE164 } from "@/lib/phone";
 import { formatBasisPointsAsPercent, parsePercentToBasisPoints } from "@/lib/money";
 import {
@@ -140,12 +146,41 @@ function same(a: Values, b: Values): boolean {
  *  number rewritten to E.164) appears as it was actually stored.
  *
  *  A REFUSED save re-renders with identical props, so nothing moves and
- *  the operator's typed text stays exactly where it was. */
-function useSeeded<T extends Values>(server: T): [T, (patch: Partial<T>) => void, boolean] {
+ *  the operator's typed text stays exactly where it was.
+ *
+ *  ...AND IT SAYS SO WHEN IT DOES. A re-seed that lands on top of typing
+ *  used to be silent. Every action on this route calls revalidatePath,
+ *  so one write anywhere on the page -- a dish flipped to sold out three
+ *  panels away -- hands this form fresh props, and if the record moved
+ *  underneath (a second operator, the owner's own screen) the typing
+ *  went with no account of itself. Under tabs that is worse, not better:
+ *  the card is display:none, so both the loss and the disappearance of
+ *  its "Unsaved" chip happen off screen. The fourth element of the
+ *  tuple is that, and every caller renders <ReplacedNote /> from it.
+ *
+ *  `section` is which tab this form sits behind, and it buys the strip's
+ *  chips and the beforeunload guard. Under tabs the card's own flag can
+ *  be on a panel that is display:none, and the one loss beforeunload
+ *  cannot see is a client-side route change -- pressing "Overview &
+ *  go-live" in the page head. The chip on the tab is then the only
+ *  visible sign that something is unsaved, which is why it is threaded
+ *  through here rather than left to the heading below. Outside an
+ *  <EditTabs> the report goes nowhere and nothing renders differently. */
+function useSeeded<T extends Values>(
+  section: EditSectionId,
+  server: T,
+): [T, (patch: Partial<T>) => void, boolean, boolean] {
   const [form, setForm] = useState<T>(server);
   const [seen, setSeen] = useState<T>(server);
+  const [replaced, setReplaced] = useState(false);
 
   if (!same(seen, server)) {
+    // Two conditions, and the second one is what keeps this quiet on an
+    // ordinary save: there WAS typing (the form does not match the value
+    // this was seeded from) and what arrived is not it (the form does
+    // not match the value that has just landed either). An operator's
+    // own save satisfies the first and fails the second.
+    setReplaced(!same(form, seen) && !same(form, server));
     setSeen(server);
     setForm(server);
   }
@@ -156,20 +191,19 @@ function useSeeded<T extends Values>(server: T): [T, (patch: Partial<T>) => void
   const apply = (p: Partial<T>) => setForm((f) => ({ ...f, ...p }) as T);
   const dirty = !same(form, server);
 
-  // Typing a change and closing the tab throws it away, and the whole
-  // point of this screen is that the operator is doing it while somebody
-  // waits on the phone. Same device components/MenuImportReview.tsx and
-  // components/admin/HoursEditor.tsx already use. It guards a real
-  // unload only -- a client-side route change is out of its reach, which
-  // is why the card also carries an "Unsaved" tag in its heading.
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  // The account of a loss stands until there is something new to lose.
+  // Adjusted during render, the same way the re-seed above is, rather
+  // than in an effect that would paint the stale sentence for a frame.
+  if (replaced && dirty) setReplaced(false);
 
-  return [form, apply, dirty];
+  // Reports the "Unsaved" chip to the strip AND registers the
+  // beforeunload guard for as long as this form is dirty -- the guard
+  // used to be written out here, and in five other components it was
+  // simply missing. components/admin/EditTabs.tsx has the account.
+  useSectionDirty(section, dirty);
+  useSectionReplaced(section, replaced);
+
+  return [form, apply, dirty, replaced];
 }
 
 /** A card. The flags live in the heading because they have to survive
@@ -456,138 +490,6 @@ function phonePreview(raw: string, blank: string): string {
   return e164 ? `Will store ${e164}.` : "Not a number we can dial.";
 }
 
-/* ══ the section index ═════════════════════════════════════════════ */
-
-/** The subjects of this editor, in the order the page renders them.
- *
- *  Eight, not the ten cards on the page: #holidays and #sold-out are
- *  sub-cards of Hours and Menu and sit directly under them. That is not
- *  tidiness, it is width. The strip is one line and the tablet this was
- *  reported from has about 736px of it; measured in the house's 13px
- *  Barlow, ten entries put Menu -- the entry the complaint was ABOUT --
- *  just past the right edge, reachable only by discovering that the
- *  strip scrolls sideways. Eight fit. Being inside a sub-card marks its
- *  parent, which is what an operator in Holidays would say they are in
- *  anyway.
- *
- *  The labels are the cards' own headings, shortened only where a
- *  heading is a sentence ("What the system manages" → System).
- *
- *  Kept in step by hand with the list in app/admin/[locationId]/page.tsx,
- *  which offers the same sections as cross-page links. A const cannot be
- *  shared: this module is "use client", and a server component that dots
- *  into a client module's export gets a client reference rather than an
- *  array. */
-const SECTIONS: { id: string; label: string }[] = [
-  { id: "business", label: "The business" },
-  { id: "hours", label: "Hours" },
-  { id: "answering", label: "Answering the phone" },
-  { id: "service", label: "Money & service" },
-  { id: "orders", label: "Where orders go" },
-  { id: "recording", label: "Recording" },
-  { id: "menu", label: "Menu" },
-  { id: "managed", label: "System" },
-];
-
-/** Where you are on a page seven screens tall, and how to leave for
- *  another part of it.
- *
- *  The complaint this answers is a measurement rather than a taste: on
- *  an iPad the Menu heading sits 5275px down this page and Hours 1485px,
- *  and there was nothing above either of them to jump with. Plain
- *  in-page anchors, so the browser does the work — tab to one, press
- *  Enter, and it is a real fragment navigation that back undoes and that
- *  a copied URL reproduces. next/link is deliberately not used: these
- *  never leave the route.
- *
- *  The mark is measured, not assumed. The strip's own bottom edge is
- *  read off the element on every frame, so the section it marks is the
- *  one whose top has actually passed under it — which stays true when
- *  the strip wraps, when the browser chrome resizes it, or when a card
- *  above grows by an unsaved flag. */
-export function SectionIndex() {
-  const strip = useRef<HTMLElement | null>(null);
-  const [active, setActive] = useState<string | null>(null);
-
-  useEffect(() => {
-    const node = strip.current;
-    if (!node) return;
-
-    let frame = 0;
-
-    const pick = () => {
-      frame = 0;
-      const strip = node.getBoundingClientRect();
-      const line = strip.bottom;
-      let current: string | null = null;
-      /* How far BELOW the strip an arrived-at section deliberately sits.
-         app/app.css gives every section a scroll-margin-top bigger than
-         this strip on purpose, so a heading does not land underneath it
-         -- which means a section reached by pressing its own entry has a
-         top a good way past `line`, and a test of "top has passed the
-         strip" that does not allow for it marks the PREVIOUS section at
-         the one moment this index exists to serve. Read off the element
-         rather than written down again here: the clearance is one
-         number, it lives in the stylesheet, and a copy of it in this
-         file is a copy that drifts. */
-      let clear: number | null = null;
-      for (const section of SECTIONS) {
-        const target = document.getElementById(section.id);
-        if (!target) continue;
-        if (clear === null) {
-          const margin = Number.parseFloat(getComputedStyle(target).scrollMarginTop);
-          clear = Number.isFinite(margin) ? Math.max(0, margin - strip.height) : 0;
-        }
-        // The last section whose top has passed the strip -- give or
-        // take that clearance -- is the one being read. Before the first
-        // one has, nothing is marked: "you are at the top" is not "you
-        // are in the business card".
-        if (target.getBoundingClientRect().top - line <= clear + 1) current = section.id;
-      }
-      setActive(current);
-    };
-
-    // One read per frame at most. A scroll handler that measures ten
-    // elements per event is the classic way to make a long page feel
-    // slower on the tablet this was reported from.
-    const onScroll = () => {
-      if (frame === 0) frame = window.requestAnimationFrame(pick);
-    };
-
-    pick();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll);
-    return () => {
-      if (frame !== 0) window.cancelAnimationFrame(frame);
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onScroll);
-    };
-  }, []);
-
-  return (
-    /* No kicker here, unlike the strip on /admin/<id>: on this page the
-       links are the page's own headings and need no word in front of
-       them, and the 736px of a tablet is spent better on the last entry
-       than on saying "Jump to". The label is on the <nav>. */
-    /* `nav` first: the system class IS this strip's layout and its
-       anchors' resting colour, worn rather than re-declared, the same
-       way components/admin/AdminNav.tsx wears it. .edit-index carries
-       only what a section index needs on top of it. */
-    <nav ref={strip} className="nav edit-index is-sticky" aria-label="Sections of this page">
-      {SECTIONS.map((section) => (
-        <a
-          key={section.id}
-          href={`#${section.id}`}
-          className="edit-index-link"
-          aria-current={active === section.id ? "true" : undefined}
-        >
-          {section.label}
-        </a>
-      ))}
-    </nav>
-  );
-}
-
 /* ══ 1. the business ═══════════════════════════════════════════════ */
 
 export function BusinessSection({
@@ -634,7 +536,7 @@ export function BusinessSection({
     businessPhone: businessPhone ?? "",
     carrierName: carrierName ?? "",
   };
-  const [form, patch, dirty] = useSeeded(server);
+  const [form, patch, dirty, replaced] = useSeeded("business", server);
   const { pending, result, run } = useSection();
 
   const resync = () => run(() => resyncAssistantAction(locationId));
@@ -656,6 +558,9 @@ export function BusinessSection({
       lede="What the assistant tells callers, and the record everything else is filed under."
       flags={flagsFor(dirty, phoneBehind(result, [drift.name, drift.address]))}
     >
+      {/* The account of a re-seed that landed on typing, first child
+          of the card and above the fields it happened to. */}
+      <ReplacedNote when={replaced} />
       {hasAssistant ? (
         <SyncReach pending={pending} onResync={resync}>
           The name, the address and the timezone were written into the assistant when it was made.
@@ -908,7 +813,7 @@ export function AnsweringSection({
   hasAssistant: boolean;
 }) {
   const server = { greetingText, fallbackNumber: fallbackNumber ?? "" };
-  const [form, patch, dirty] = useSeeded(server);
+  const [form, patch, dirty, replaced] = useSeeded("answering", server);
   const { pending, result, run } = useSection();
 
   const resync = () => run(() => resyncAssistantAction(locationId));
@@ -923,6 +828,9 @@ export function AnsweringSection({
       lede="The first thing a caller hears, and where the assistant sends anything it can't handle itself."
       flags={flagsFor(dirty, phoneBehind(result, [drift.greeting, drift.transfer]))}
     >
+      {/* The account of a re-seed that landed on typing, first child
+          of the card and above the fields it happened to. */}
+      <ReplacedNote when={replaced} />
       {hasAssistant ? (
         <SyncReach pending={pending} onResync={resync}>
           Both fields here were written into the assistant when it was made. Saving them rebuilds
@@ -1070,7 +978,7 @@ export function ServiceSection({
     maxPartySize: String(maxPartySize),
     reservationSlotMinutes: String(reservationSlotMinutes),
   };
-  const [form, patch, dirty] = useSeeded(server);
+  const [form, patch, dirty, replaced] = useSeeded("service", server);
   const { pending, result, run } = useSection();
 
   const resync = () => run(() => resyncAssistantAction(locationId));
@@ -1084,6 +992,9 @@ export function ServiceSection({
       lede="Sales tax is typed as a percentage and stored as whole basis points — the database can only hold a whole number of them, so a rate like 6.625% is rounded to the nearest one."
       flags={flagsFor(dirty, phoneBehind(result, [drift.orderTypes]))}
     >
+      {/* The account of a re-seed that landed on typing, first child
+          of the card and above the fields it happened to. */}
+      <ReplacedNote when={replaced} />
       <Reach kind="live">
         The tax rate, the promise times, the seat count, the reservation length and the max party
         size are read out of the database inside the call. Saved here, live on the very next call,
@@ -1291,7 +1202,7 @@ export function OrderRoutingSection({
     orderSmsTo: orderSmsTo ?? "",
     orderEmailTo: orderEmailTo ?? "",
   };
-  const [form, patch, dirty] = useSeeded(server);
+  const [form, patch, dirty, replaced] = useSeeded("orders", server);
   const { pending, result, run } = useSection();
 
   return (
@@ -1301,6 +1212,9 @@ export function OrderRoutingSection({
       lede="Every order the assistant takes is texted to the kitchen the moment it is placed."
       flags={flagsFor(dirty, false)}
     >
+      {/* The account of a re-seed that landed on typing, first child
+          of the card and above the fields it happened to. */}
+      <ReplacedNote when={replaced} />
       <Reach kind="live">
         Read at the moment an order is placed. Saved here, live on the next call, with nothing to
         rebuild.
@@ -1432,7 +1346,7 @@ export function RecordingSection({
     recordingEnabled,
     recordingRetentionDays: String(recordingRetentionDays),
   };
-  const [form, patch, dirty] = useSeeded(server);
+  const [form, patch, dirty, replaced] = useSeeded("recording", server);
   const { pending, result, run } = useSection();
 
   return (
@@ -1442,6 +1356,9 @@ export function RecordingSection({
       lede="Recording is announced to the caller when it is on."
       flags={flagsFor(dirty, false)}
     >
+      {/* The account of a re-seed that landed on typing, first child
+          of the card and above the fields it happened to. */}
+      <ReplacedNote when={replaced} />
       <Reach kind="live">
         This applies to the forwarded line — the path where a caller is put straight through to a
         person. It changes nothing about the assistant&rsquo;s own calls, which carry no recording

@@ -2,6 +2,11 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { Corners } from "@/components/Corners";
+import {
+  ReplacedNote,
+  useSectionDirty,
+  useSectionReplaced,
+} from "@/components/admin/EditTabs";
 import { money } from "@/lib/format";
 import { UNTIL_LABEL } from "@/lib/menu";
 import { parseDollarsToCents } from "@/lib/money";
@@ -44,6 +49,17 @@ import type {
  * to check, and that header is the only thing that can say so. The
  * cheaper shape, if this is ever reworked: an injectable write transport
  * on MenuProvider, so /admin renders MenuEditor itself.
+ *
+ * THE THIRD DIVERGENCE IS THE SHAPE OF THE LIST. MenuEditor stacks its
+ * categories in one column and sets each one's items in a table; this
+ * screen lays the categories out as a grid of cards (.menu-grid) and
+ * sets the items inside each card as rows (.menu-item-list /
+ * .menu-item-row), because on /edit the whole menu is one tab and the
+ * question being asked of it is "which sections do we have, and what in
+ * them are we not offering tonight" -- which is a question about the
+ * heads of the cards, not about any one row. A five-column table cannot
+ * survive a card this wide, so the table went; nothing it carried went
+ * with it except its header row.
  *
  * NO OPTIMISM HERE, ON PURPOSE. MenuStore paints the change first and
  * rolls back on failure, because mid-service there is no save button.
@@ -233,6 +249,16 @@ export function MenuAdmin(props: MenuAdminProps) {
   const soldOut = items.filter((item) => item.sold_out_until !== null);
   const nextSort = categories.reduce((max, c) => Math.max(max, c.sort_order + 1), 0);
 
+  /* Everything below is behind the Menu tab, and every reporter in it is
+     OR'd into one "Unsaved" chip on that tab. This is the biggest panel
+     on the page and the one whose typing is most likely to be a long way
+     from the strip, so the chip is the only thing that can say a
+     half-typed dish is still waiting. It also registers the beforeunload
+     guard this field never had. Outside an <EditTabs> -- on
+     /dashboard/menu, or from a test -- the chip goes nowhere and the
+     guard still works. */
+  useSectionDirty("menu", name.trim() !== "");
+
   return (
     <>
       <section id="menu" className="card blueprint setup-card">
@@ -240,8 +266,10 @@ export function MenuAdmin(props: MenuAdminProps) {
         <h2>Menu</h2>
         <p className="text-muted sub">
           {items.length} item{items.length === 1 ? "" : "s"} across {categories.length}{" "}
-          categor{categories.length === 1 ? "y" : "ies"}. Prices are typed in dollars and stored
-          as whole cents; what will actually be stored is shown beside every price box.
+          categor{categories.length === 1 ? "y" : "ies"}
+          {soldOut.length > 0 ? `, ${soldOut.length} not offered` : ""}. Prices are typed in
+          dollars and stored as whole cents; what will actually be stored is shown beside every
+          price box.
         </p>
 
         {/* No chip. .tag.tag-outline is this feature's REBUILD mark --
@@ -315,22 +343,34 @@ export function MenuAdmin(props: MenuAdminProps) {
         setSoldOutAction={setSoldOutAction}
       />
 
-      {categories.map((category) => (
-        <CategoryCard
-          key={category.id}
-          locationId={locationId}
-          category={category}
-          categoryItems={items.filter((item) => item.category_id === category.id)}
-          allItems={items}
-          categories={categories}
-          saveCategoryAction={props.saveCategoryAction}
-          deleteCategoryAction={props.deleteCategoryAction}
-          createItemAction={props.createItemAction}
-          saveItemAction={props.saveItemAction}
-          deleteItemAction={props.deleteItemAction}
-          setSoldOutAction={props.setSoldOutAction}
-        />
-      ))}
+      {/* One card per category, side by side instead of stacked. The
+          operator's complaint was that a restaurant is a column you
+          scroll to the bottom of; the answer is that a section is a
+          thing you look at, whole, with its name and its counts on its
+          head. Rendered only when there is something to put in it: an
+          empty grid is still a child of the column above, and .setup-stack
+          separates its children by var(--space-6) whether they have any
+          height or not. */}
+      {categories.length > 0 ? (
+        <div className="menu-grid">
+          {categories.map((category) => (
+            <CategoryCard
+              key={category.id}
+              locationId={locationId}
+              category={category}
+              categoryItems={items.filter((item) => item.category_id === category.id)}
+              allItems={items}
+              categories={categories}
+              saveCategoryAction={props.saveCategoryAction}
+              deleteCategoryAction={props.deleteCategoryAction}
+              createItemAction={props.createItemAction}
+              saveItemAction={props.saveItemAction}
+              deleteItemAction={props.deleteItemAction}
+              setSoldOutAction={props.setSoldOutAction}
+            />
+          ))}
+        </div>
+      ) : null}
     </>
   );
 }
@@ -431,6 +471,7 @@ function CategoryCard({
   const [name, setName] = useState(category.name);
   const [sortOrder, setSortOrder] = useState(String(category.sort_order));
   const [confirming, setConfirming] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   // By VALUE, not by identity. Every action on this route revalidates
   // the page, so a save anywhere on it -- a holiday, a dish flipped to
@@ -439,8 +480,14 @@ function CategoryCard({
   // re-seeded a rename the operator had typed and not yet saved, with
   // nothing on screen saying it had gone.
   const seedCat = `${category.name}|${category.sort_order}`;
+  const typedCat = `${name}|${sortOrder}`;
   const [seen, setSeen] = useState(seedCat);
+  const [replaced, setReplaced] = useState(false);
   if (seen !== seedCat) {
+    // ...and it no longer takes a rename in silence. Two conditions, so
+    // the operator's own save is quiet: the field did not match what it
+    // was seeded from, and it does not match what has just arrived.
+    setReplaced(typedCat !== seen && typedCat !== seedCat);
     setSeen(seedCat);
     setName(category.name);
     setSortOrder(String(category.sort_order));
@@ -459,8 +506,17 @@ function CategoryCard({
   );
   const nextSort = categoryItems.reduce((max, item) => Math.max(max, item.sort_order + 1), 0);
   const count = categoryItems.length;
+  const outCount = categoryItems.filter((item) => item.sold_out_until !== null).length;
   const dirty =
     editing && (name !== category.name || sortOrder !== String(category.sort_order));
+
+  // The account of a loss stands until there is something new to lose.
+  if (replaced && dirty) setReplaced(false);
+
+  // The chip, and -- new here -- the beforeunload guard. A half-typed
+  // rename had none: Ctrl-R destroyed it with no prompt of any kind.
+  useSectionDirty("menu", dirty);
+  useSectionReplaced("menu", replaced);
 
   return (
     /* .blueprint and the four registration marks, like every other card
@@ -534,7 +590,6 @@ function CategoryCard({
           <>
             <h3>{category.name}</h3>
             <div className="menu-edit-cat-controls">
-              <span className="text-muted setup-note">sort {category.sort_order}</span>
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -556,37 +611,53 @@ function CategoryCard({
         )}
       </div>
 
+      {/* What the owner asked to be able to see without opening anything:
+          how many dishes this section has, and how many of them the
+          assistant is currently refusing. The second chip is worded
+          exactly as the chip on the rows below it, so the summary and the
+          rows are provably the same fact, and it is absent rather than
+          zero -- a scan down the grid finds the sections with a problem
+          by there being a dark chip on them at all.
+
+          Hidden while the rename form is open: "sort 3" beside a sort
+          order box the operator has just typed 4 into is a stale number,
+          which is why the note it replaces was in the non-editing branch
+          too. */}
+      {editing ? null : (
+        <div className="card-meta">
+          <span className="tag tag-neutral">
+            {count} item{count === 1 ? "" : "s"}
+          </span>
+          {outCount > 0 ? <span className="tag tag-out">{outCount} not offered</span> : null}
+          <span className="text-muted">sort {category.sort_order}</span>
+        </div>
+      )}
+
+      {/* The account of a re-seed that landed on a typed rename. */}
+      <ReplacedNote when={replaced} />
+
       <WriteResult pending={pending} result={result} dirty={dirty} />
 
       {ordered.length === 0 ? (
         <p className="text-muted empty-note">No items yet.</p>
       ) : (
-        <div className="table-scroll">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Price</th>
-                <th>Sort</th>
-                <th>On the phone</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {ordered.map((item) => (
-                <ItemRow
-                  key={item.id}
-                  locationId={locationId}
-                  item={item}
-                  categories={categories}
-                  allItems={allItems}
-                  saveItemAction={saveItemAction}
-                  deleteItemAction={deleteItemAction}
-                  setSoldOutAction={setSoldOutAction}
-                />
-              ))}
-            </tbody>
-          </table>
+        /* Rows, not a table. Five columns and a header row cannot be read
+           in a card a third of the page wide, and the header was the only
+           thing the change costs: every control below is the one that was
+           in the cell beside it, writing what it wrote. */
+        <div className="menu-item-list">
+          {ordered.map((item) => (
+            <ItemRow
+              key={item.id}
+              locationId={locationId}
+              item={item}
+              categories={categories}
+              allItems={allItems}
+              saveItemAction={saveItemAction}
+              deleteItemAction={deleteItemAction}
+              setSoldOutAction={setSoldOutAction}
+            />
+          ))}
         </div>
       )}
 
@@ -597,13 +668,49 @@ function CategoryCard({
         </p>
       ) : null}
 
+      {/* Asked for, not standing open. .add-item-form is three fields, a
+          preview and a button, which wraps to four rows in a card this
+          wide; a dozen categories each holding one open is most of a grid
+          whose entire purpose is that the sections can be seen at once.
+          The form is otherwise untouched -- same fields, same
+          createItemAction, same duplicate-name refusal, same cents
+          preview -- and it stays at the foot of its own card because that
+          is the only thing on screen that says which category it adds to.
+
+          HIDDEN, NOT UNMOUNTED, and for the same reason EditPanel hides
+          the seven other sections instead of dropping them. `adding ?
+          <AddItemForm/> : ...` took the form's name, price and
+          description useState with it, so Cancel destroyed a typed-in
+          dish with no dialog, no dirty check and nothing to restore it
+          from -- from a button sitting 6.8px from the one that adds it,
+          which is the identical hazard the Remove dialog forty lines up
+          was written for. Cancel now only puts the form AWAY: what was
+          typed is still in it when it comes back, and while it is away
+          it goes on reporting "Unsaved" to the Menu tab and goes on
+          holding its beforeunload guard.
+          app/app.css carries the `.add-item-form[hidden]` line that
+          makes `hidden` bite on a flex container. */}
       <AddItemForm
         locationId={locationId}
         categoryId={category.id}
         nextSort={nextSort}
         allItems={allItems}
         createItemAction={createItemAction}
+        hidden={!adding}
+        onCancel={() => setAdding(false)}
       />
+      {adding ? null : (
+        <div className="menu-edit-cat-controls">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={pending}
+            onClick={() => setAdding(true)}
+          >
+            Add item
+          </button>
+        </div>
+      )}
 
       {confirming ? (
         <div
@@ -704,7 +811,23 @@ function ItemRow({
     item.sort_order,
   ].join("|");
   const [seen, setSeen] = useState(seedItem);
+  const [replaced, setReplaced] = useState(false);
+  const typedItem = [
+    name,
+    // The row types dollars and the seed holds cents, so the comparison
+    // is made in cents. A price that is not a price cannot be, and is
+    // kept as typed -- half a price is still typing.
+    parseDollarsToCents(price) ?? `~${price}`,
+    description,
+    allergenNote,
+    categoryId,
+    sortOrder,
+  ].join("|");
   if (seen !== seedItem) {
+    // ...and it no longer takes the typing in silence. Two conditions,
+    // so the operator's own save is quiet: the row did not match what it
+    // was seeded from, and it does not match what has just arrived.
+    setReplaced(typedItem !== seen && typedItem !== seedItem);
     setSeen(seedItem);
     setName(item.name);
     setPrice((item.price_cents / 100).toFixed(2));
@@ -741,6 +864,17 @@ function ItemRow({
     allergenNote !== (item.allergen_note ?? "") ||
     categoryId !== item.category_id ||
     sortOrder !== String(item.sort_order);
+
+  // The account of a loss stands until there is something new to lose.
+  if (replaced && dirty) setReplaced(false);
+
+  // The chip, and -- new here -- the beforeunload guard. This row never
+  // had one: a price changed from 14.00 to 16.00 and left open behind
+  // another tab was destroyed by Ctrl-R with no prompt at all, which is
+  // exactly what lib/admin/edit.ts's stale-save refusal tells the
+  // operator to do.
+  useSectionDirty("menu", dirty);
+  useSectionReplaced("menu", replaced);
 
   function patch(): MenuItemInput {
     return {
@@ -790,25 +924,34 @@ function ItemRow({
   if (!editing) {
     return (
       <>
-        <tr>
-          <td>
-            <div className="name">
-              {item.name}
-              {/* The select in the next-but-one column is the control;
-                  this is so a scan down the list shows what the agent is
-                  refusing without reading every dropdown. */}
-              {out ? <span className="tag tag-out edit-flag">Not offered</span> : null}
-            </div>
+        {/* THREE MARKS, AND NOT ONE OF THEM IS A COLOUR. An operator has
+            to be able to tell at a glance which dishes the agent is
+            refusing, so the state is carried by the word on the chip, by
+            the name being struck through and dimmed (.is-out -- the same
+            treatment the manager screen gives an item that is off, so the
+            two screens say "off" the same way), and by the select itself,
+            whose chosen option is the sentence. Take any one away and the
+            other two still say it. */}
+        <div className={out ? "menu-item-row is-out" : "menu-item-row"}>
+          <div className="name">
+            {item.name}
+            {/* The select further along the row is the control; this is so
+                a scan down the card shows what the agent is refusing
+                without reading every dropdown. */}
+            {out ? <span className="tag tag-out edit-flag">Not offered</span> : null}
             {item.description ? (
               <div className="text-muted menu-edit-desc">{item.description}</div>
             ) : null}
             {item.allergen_note ? (
               <div className="text-muted menu-edit-desc">Staff note: {item.allergen_note}</div>
             ) : null}
-          </td>
-          <td className="num">{money(item.price_cents)}</td>
-          <td className="num">{item.sort_order}</td>
-          <td>
+          </div>
+          <span className="price num">{money(item.price_cents)}</span>
+          {/* The table's third column, kept. The tie warning under this
+              list names a number, and an operator who cannot see it on
+              the rows has to open every dish to find which two collide. */}
+          <span className="text-muted num">sort {item.sort_order}</span>
+          <div className="menu-edit-row-actions">
             {/* One control, one write. The kitchen runs out of branzino
                 at seven and the agent has to stop selling it on the next
                 call -- opening an edit row and re-saving six other
@@ -824,269 +967,266 @@ function ItemRow({
               <option value="reopen">{UNTIL_LABEL.reopen}</option>
               <option value="close">{UNTIL_LABEL.close}</option>
             </select>
-          </td>
-          <td>
-            <div className="menu-edit-row-actions">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={pending}
-                onClick={() => setEditing(true)}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={pending}
-                onClick={() => setConfirmingRemove(true)}
-              >
-                Remove
-              </button>
-            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={pending}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={pending}
+              onClick={() => setConfirmingRemove(true)}
+            >
+              Remove
+            </button>
+          </div>
 
-            {/* Asked, not fired. .menu-edit-row-actions is a 4px flex gap,
-                so Remove is the neighbour of the Edit button an operator
-                is aiming at while a restaurant owner talks -- and one
-                stray click destroyed the row's name, description, price,
-                allergen note and sold-out state with no undo and no
-                trash, and stopped the agent offering the dish on the next
-                call. Deleting a category asks; changing a price asks;
-                this is the same dialog, for a loss of the same kind. */}
-            {confirmingRemove ? (
-              <div
-                className="dialog-backdrop"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby={`ma-item-confirm-${item.id}`}
-              >
-                <div className="dialog blueprint">
-                  <Corners />
-                  <div id={`ma-item-confirm-${item.id}`} className="dialog-title">
-                    Remove {item.name}?
-                  </div>
-                  <div className="dialog-body">
-                    <p>
-                      The assistant stops offering it on the next call. Its price, description
-                      and staff note go with it — there is no undo and nothing to restore it
-                      from. To stop selling it for tonight only, set it to{" "}
-                      {UNTIL_LABEL.close} instead.
-                    </p>
-                  </div>
-                  <div className="dialog-actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() => setConfirmingRemove(false)}
-                      autoFocus
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      disabled={pending}
-                      onClick={() =>
-                        run(() => deleteItemAction(locationId, item.id), () =>
-                          setConfirmingRemove(false),
-                        )
-                      }
-                    >
-                      Remove {item.name}
-                    </button>
-                  </div>
+          {/* Asked, not fired. .menu-edit-row-actions is a 4px flex gap,
+              so Remove is the neighbour of the Edit button an operator is
+              aiming at while a restaurant owner talks -- and one stray
+              click destroyed the row's name, description, price, allergen
+              note and sold-out state with no undo and no trash, and
+              stopped the agent offering the dish on the next call.
+              Deleting a category asks; changing a price asks; this is the
+              same dialog, for a loss of the same kind. */}
+          {confirmingRemove ? (
+            <div
+              className="dialog-backdrop"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={`ma-item-confirm-${item.id}`}
+            >
+              <div className="dialog blueprint">
+                <Corners />
+                <div id={`ma-item-confirm-${item.id}`} className="dialog-title">
+                  Remove {item.name}?
+                </div>
+                <div className="dialog-body">
+                  <p>
+                    The assistant stops offering it on the next call. Its price, description and
+                    staff note go with it — there is no undo and nothing to restore it from. To
+                    stop selling it for tonight only, set it to {UNTIL_LABEL.close} instead.
+                  </p>
+                </div>
+                <div className="dialog-actions">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setConfirmingRemove(false)}
+                    autoFocus
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    disabled={pending}
+                    onClick={() =>
+                      run(() => deleteItemAction(locationId, item.id), () =>
+                        setConfirmingRemove(false),
+                      )
+                    }
+                  >
+                    Remove {item.name}
+                  </button>
                 </div>
               </div>
-            ) : null}
-          </td>
-        </tr>
-        {pending || result ? (
-          <tr>
-            <td colSpan={5}>
-              <WriteResult pending={pending} result={result} />
-            </td>
-          </tr>
-        ) : null}
+            </div>
+          ) : null}
+        </div>
+        {/* Outside the row rather than in it: .menu-item-list is a column,
+            so the account of the write lands on its own line under the row
+            it belongs to instead of fighting the name and the price for
+            width. This is where the table's extra <tr colSpan={5}> went. */}
+        <ReplacedNote when={replaced} />
+        {pending || result ? <WriteResult pending={pending} result={result} /> : null}
       </>
     );
   }
 
   return (
-    <tr>
-      <td colSpan={5}>
-        <div className="menu-edit-row-edit">
-          <div className="field">
-            <label htmlFor={`ma-item-name-${item.id}`}>Item</label>
-            <input
-              id={`ma-item-name-${item.id}`}
-              className="input"
-              type="text"
-              maxLength={120}
-              value={name}
-              disabled={pending}
-              onChange={(e) => setName(e.target.value)}
-              aria-invalid={duplicate ? "true" : undefined}
-              autoFocus
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={`ma-item-price-${item.id}`}>Price ($)</label>
-            <input
-              id={`ma-item-price-${item.id}`}
-              className="input"
-              type="text"
-              inputMode="decimal"
-              value={price}
-              disabled={pending}
-              onChange={(e) => setPrice(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={`ma-item-desc-${item.id}`}>Description</label>
-            <input
-              id={`ma-item-desc-${item.id}`}
-              className="input"
-              type="text"
-              maxLength={500}
-              value={description}
-              disabled={pending}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={`ma-item-allergen-${item.id}`}>Staff note (allergens)</label>
-            <input
-              id={`ma-item-allergen-${item.id}`}
-              className="input"
-              type="text"
-              maxLength={300}
-              value={allergenNote}
-              disabled={pending}
-              onChange={(e) => setAllergenNote(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={`ma-item-cat-${item.id}`}>Category</label>
-            <select
-              id={`ma-item-cat-${item.id}`}
-              className="input"
-              value={categoryId}
-              disabled={pending}
-              onChange={(e) => setCategoryId(e.target.value)}
-            >
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor={`ma-item-sort-${item.id}`}>Sort order</label>
-            <input
-              id={`ma-item-sort-${item.id}`}
-              className="input"
-              type="number"
-              min={0}
-              max={9999}
-              value={sortOrder}
-              disabled={pending}
-              onChange={(e) => setSortOrder(e.target.value)}
-            />
-          </div>
-          <span className="price-preview text-muted">
-            {previewCents === null ? "Not a valid price." : `Stores ${money(previewCents)}.`}
-          </span>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={pending || !dirty || !name.trim() || previewCents === null || duplicate}
-            onClick={beginSave}
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost"
+    <>
+      {/* The account of a re-seed that landed on this open edit form --
+          the one place on the page where it was worst, because `editing`
+          is deliberately not reset and the row simply swapped what was
+          typed for what is on file. */}
+      <ReplacedNote when={replaced} />
+      <div className="menu-edit-row-edit">
+        <div className="field">
+          <label htmlFor={`ma-item-name-${item.id}`}>Item</label>
+          <input
+            id={`ma-item-name-${item.id}`}
+            className="input"
+            type="text"
+            maxLength={120}
+            value={name}
             disabled={pending}
-            onClick={() => {
-              setName(item.name);
-              setPrice((item.price_cents / 100).toFixed(2));
-              setDescription(item.description ?? "");
-              setAllergenNote(item.allergen_note ?? "");
-              setCategoryId(item.category_id);
-              setSortOrder(String(item.sort_order));
-              setEditing(false);
-              setConfirmPriceCents(null);
-              setResult(null);
-            }}
-          >
-            Cancel
-          </button>
+            onChange={(e) => setName(e.target.value)}
+            aria-invalid={duplicate ? "true" : undefined}
+            autoFocus
+          />
         </div>
-
-        <p className="text-muted setup-note">
-          The description is read aloud to callers as what the dish comes with. The staff note is
-          not: lib/agent/menu.ts leaves it out of the assistant&rsquo;s payload on purpose,
-          because an allergy question is transferred to a person rather than answered from a
-          column.
-        </p>
-
-        {duplicate ? (
-          <p className="setup-error">
-            This restaurant already has an item by that name. Two items with the same name make
-            the assistant ask which one the caller meant and then read back two identical names,
-            which is a question nobody can answer.
-          </p>
-        ) : null}
-
-        <WriteResult pending={pending} result={result} dirty={dirty} />
-
-        {confirmPriceCents !== null ? (
-          <div
-            className="dialog-backdrop"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={`ma-price-confirm-${item.id}`}
+        <div className="field">
+          <label htmlFor={`ma-item-price-${item.id}`}>Price ($)</label>
+          <input
+            id={`ma-item-price-${item.id}`}
+            className="input"
+            type="text"
+            inputMode="decimal"
+            value={price}
+            disabled={pending}
+            onChange={(e) => setPrice(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor={`ma-item-desc-${item.id}`}>Description</label>
+          <input
+            id={`ma-item-desc-${item.id}`}
+            className="input"
+            type="text"
+            maxLength={500}
+            value={description}
+            disabled={pending}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor={`ma-item-allergen-${item.id}`}>Staff note (allergens)</label>
+          <input
+            id={`ma-item-allergen-${item.id}`}
+            className="input"
+            type="text"
+            maxLength={300}
+            value={allergenNote}
+            disabled={pending}
+            onChange={(e) => setAllergenNote(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor={`ma-item-cat-${item.id}`}>Category</label>
+          <select
+            id={`ma-item-cat-${item.id}`}
+            className="input"
+            value={categoryId}
+            disabled={pending}
+            onChange={(e) => setCategoryId(e.target.value)}
           >
-            <div className="dialog blueprint">
-              <Corners />
-              <div id={`ma-price-confirm-${item.id}`} className="dialog-title">
-                Change the price of {item.name}?
-              </div>
-              <div className="dialog-body">
-                <p className="price-compare num">
-                  <span className="was">{money(item.price_cents)}</span>
-                  <span className="arrow">→</span>
-                  <span className="now">{money(confirmPriceCents)}</span>
-                </p>
-                <p>
-                  The phone agent quotes this on the next call, within seconds of you confirming.
-                </p>
-              </div>
-              <div className="dialog-actions">
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => setConfirmPriceCents(null)}
-                  autoFocus
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={pending}
-                  onClick={commit}
-                >
-                  Confirm new price
-                </button>
-              </div>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor={`ma-item-sort-${item.id}`}>Sort order</label>
+          <input
+            id={`ma-item-sort-${item.id}`}
+            className="input"
+            type="number"
+            min={0}
+            max={9999}
+            value={sortOrder}
+            disabled={pending}
+            onChange={(e) => setSortOrder(e.target.value)}
+          />
+        </div>
+        <span className="price-preview text-muted">
+          {previewCents === null ? "Not a valid price." : `Stores ${money(previewCents)}.`}
+        </span>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={pending || !dirty || !name.trim() || previewCents === null || duplicate}
+          onClick={beginSave}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={pending}
+          onClick={() => {
+            setName(item.name);
+            setPrice((item.price_cents / 100).toFixed(2));
+            setDescription(item.description ?? "");
+            setAllergenNote(item.allergen_note ?? "");
+            setCategoryId(item.category_id);
+            setSortOrder(String(item.sort_order));
+            setEditing(false);
+            setConfirmPriceCents(null);
+            setResult(null);
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+
+      <p className="text-muted setup-note">
+        The description is read aloud to callers as what the dish comes with. The staff note is
+        not: lib/agent/menu.ts leaves it out of the assistant&rsquo;s payload on purpose,
+        because an allergy question is transferred to a person rather than answered from a
+        column.
+      </p>
+
+      {duplicate ? (
+        <p className="setup-error">
+          This restaurant already has an item by that name. Two items with the same name make
+          the assistant ask which one the caller meant and then read back two identical names,
+          which is a question nobody can answer.
+        </p>
+      ) : null}
+
+      <WriteResult pending={pending} result={result} dirty={dirty} />
+
+      {confirmPriceCents !== null ? (
+        <div
+          className="dialog-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={`ma-price-confirm-${item.id}`}
+        >
+          <div className="dialog blueprint">
+            <Corners />
+            <div id={`ma-price-confirm-${item.id}`} className="dialog-title">
+              Change the price of {item.name}?
+            </div>
+            <div className="dialog-body">
+              <p className="price-compare num">
+                <span className="was">{money(item.price_cents)}</span>
+                <span className="arrow">→</span>
+                <span className="now">{money(confirmPriceCents)}</span>
+              </p>
+              <p>
+                The phone agent quotes this on the next call, within seconds of you confirming.
+              </p>
+            </div>
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setConfirmPriceCents(null)}
+                autoFocus
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={pending}
+                onClick={commit}
+              >
+                Confirm new price
+              </button>
             </div>
           </div>
-        ) : null}
-      </td>
-    </tr>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -1098,6 +1238,8 @@ function AddItemForm({
   nextSort,
   allItems,
   createItemAction,
+  onCancel,
+  hidden,
 }: {
   locationId: string;
   categoryId: string;
@@ -1106,6 +1248,18 @@ function AddItemForm({
   nextSort: number;
   allItems: EditableItem[];
   createItemAction: MenuAdminProps["createItemAction"];
+  /** Puts the form away again. Optional so this stays the same component
+   *  it was: without it the form is simply always open, which is what it
+   *  was before the category card started disclosing it. It does NOT run
+   *  on a successful add -- an operator typing a menu in adds several
+   *  dishes in a row, and closing the form under them after each one is
+   *  the wrong shape for that. */
+  onCancel?: () => void;
+  /** Away, but still mounted and still holding what was typed into it.
+   *  The card discloses this form; unmounting it on Cancel is what would
+   *  make Cancel destructive. `display: none` also takes it out of the
+   *  focus order and out of find-in-page while it is away. */
+  hidden?: boolean;
 }) {
   const { pending, result, run } = useWrite();
 
@@ -1116,9 +1270,20 @@ function AddItemForm({
   const previewCents = parseDollarsToCents(price);
   const duplicate = name.trim() !== "" && allItems.some((other) => sameName(other.name, name));
 
+  /* A half-typed dish is unsaved work like any other. This reports it to
+     the Menu tab's chip -- which matters more now that the form is a
+     disclosure and can be put away inside a card the operator has tabbed
+     away from -- and registers the beforeunload guard the form never
+     had, so a reload asks first instead of taking it. */
+  useSectionDirty(
+    "menu",
+    name.trim() !== "" || price.trim() !== "" || description.trim() !== "",
+  );
+
   return (
     <form
       className="add-item-form"
+      hidden={hidden}
       onSubmit={(e) => {
         e.preventDefault();
         if (!name.trim() || previewCents === null || duplicate) return;
@@ -1195,6 +1360,11 @@ function AddItemForm({
       >
         Add item
       </button>
+      {onCancel ? (
+        <button type="button" className="btn btn-ghost" disabled={pending} onClick={onCancel}>
+          Cancel
+        </button>
+      ) : null}
       {duplicate ? (
         <p className="setup-error">
           This restaurant already has an item by that name. Two items with the same name make the
