@@ -114,6 +114,16 @@ export default async function AdminLocationPage({
             {location.address ?? "no address on file"}
           </div>
         </div>
+        {/* The way in to every field a restaurant can ring up and ask to
+            change. It is a link and not a control, so this page keeps its
+            one job -- does this restaurant answer the phone -- and the
+            forty inputs live one URL away, bookmarkable and pasteable
+            into a ticket. */}
+        <div className="actions">
+          <Link href={`/admin/${locationId}/edit`} className="btn btn-secondary">
+            Edit details
+          </Link>
+        </div>
       </div>
 
       {/* The readiness panel leads the wide column, and the call log sits
@@ -196,6 +206,14 @@ export default async function AdminLocationPage({
                 </div>
               ))}
             </dl>
+            {/* Half of these rows are editable and half are not, and the
+                card gives no sign of which. The link is the answer to
+                "where do I change one of these" -- the editor itself is
+                what draws the line, setting the system-managed rows as
+                facts rather than as fields. */}
+            <Link href={`/admin/${locationId}/edit`} className="row-link">
+              Edit these →
+            </Link>
           </div>
 
           <section className="panel">

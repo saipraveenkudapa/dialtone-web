@@ -763,7 +763,39 @@ a:hover { color: var(--color-accent); }
   .setup-row { flex-direction: column; align-items: stretch; }
 }
 
-/* ── menu editor (/dashboard/menu) ────────────────────────────────── */
+/* ── menu editor ──────────────────────────────────────────────────────
+   TWO CONSUMERS, AND THEY HAVE DIVERGED. Change nothing in this block
+   without opening both:
+
+     components/MenuEditor.tsx        the owner's screen, /dashboard/menu.
+                                      Writes optimistically through
+                                      MenuStore -> supabaseBrowser(), i.e.
+                                      the signed-in user's RLS session.
+     components/admin/MenuAdmin.tsx   the operator's screen,
+                                      /admin/[locationId]/edit#menu. Writes
+                                      through the gated server actions in
+                                      lib/admin/edit.ts, because the
+                                      operator is deliberately not a member
+                                      of the restaurant's organization and
+                                      every RLS-session write would be
+                                      rejected.
+
+   The fork was the transport. The furniture below is shared verbatim --
+   .menu-edit-cat, -cat-head, -cat-controls, -row-edit, -row-actions,
+   -desc, .price-compare, .add-item-form -- and the two have already
+   drifted where the transport did not require it:
+
+     * reordering. MenuEditor renders four .btn.btn-ghost.btn-icon up/down
+       controls; MenuAdmin has no .btn-icon at all and edits sort_order as
+       a number. So .btn-icon has one consumer here, not two.
+     * the frame. MenuAdmin's category card also wears .blueprint and the
+       registration marks, because it sits in /edit's .setup-stack among
+       eight other blueprint sections; MenuEditor's is the only card on
+       its page and does not.
+
+   If this block is ever reworked, the cheaper fix is the one the design
+   called for and this did not take: an injectable write transport on
+   MenuProvider, so /admin renders MenuEditor itself. */
 
 .menu-edit { display: flex; flex-direction: column; gap: var(--space-6); }
 .menu-edit .page-head .actions { margin-left: auto; }
@@ -1324,3 +1356,128 @@ iframe.review-image { height: 62vh; }
   .golive-go { min-width: 0; }
   .handover-number .num { font-size: 22px; }
 }
+
+/* ── the record editor (/admin/[locationId]/edit) ──────────────────── */
+
+/* How far a save reaches. Every section of the editor answers the same
+   question -- is this on the phone now, is it on the phone only after a
+   rebuild, or is the phone still saying the old thing -- and it answers
+   it in a box shaped like .golive-item and .review-item: a hairline with
+   3px of state on the left edge, so the console has one status
+   vocabulary across the go-live panel, the menu import and this screen
+   rather than three.
+
+   Normal flow, not a flex row, although it carries a button. .btn and
+   .tag are already inline-flex, so they ride the sentence and wrap with
+   it; and the drift copy quotes the value the phone is still using in a
+   <span class="num"> in the MIDDLE of a sentence. In a flex container
+   every one of those becomes its own flex item and one sentence is
+   served as three gapped fragments. In flow it stays a sentence with a
+   button on the end of it.
+
+   Colour is the quietest of the three marks here and never the only
+   one: the note opens with a .tag whose words are the state ("Rebuilds
+   the agent", "Phone not updated") and the sentence after it says the
+   same thing in full. That is the answer the house already gives for
+   the two dark blues on .golive-item -- words, not a glyph chip, since
+   they survive being read down a phone, printed, and colour-blindness
+   alike. */
+.edit-note {
+  /* No margin of its own: everywhere it is a direct child of a section it
+     is a child of .setup-card or .setup-form, and both are flex columns
+     that space their children with gap. It only pays for its own air in
+     the one place there is none -- see .field > .edit-note below. */
+  margin: 0;
+  padding: var(--space-3);
+  max-width: 70ch;
+  border: 1px solid var(--color-divider);
+  border-left-width: 3px;
+  font-size: 13px;
+  /* A step darker than .text-muted, for the same reason .golive-note is:
+     on a drifted field this is the instruction, not a caption. */
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+
+/* Saved here, live on the next call -- nothing to rebuild. The settled
+   state, tinted the way .golive-item.is-ok and .review-item.is-confirmed
+   are, because it is the same "this one is fine" in the same vocabulary. */
+.edit-note.is-live {
+  border-left-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+/* Saving this also rebuilds the assistant -- the same blue .golive-item
+   spends on "worth fixing", the step short of blocked. */
+.edit-note.is-sync { border-left-color: var(--color-accent-800); }
+/* The screen and the phone disagree right now, which is the one state on
+   this page that is actively wrong, so it takes the blue .golive-item
+   spends on blocked and .setup-error spends on a refusal. */
+.edit-note.is-drift { border-left-color: var(--color-accent-900); }
+
+/* Beside a field rather than under a lede: a .field is a plain block, so
+   the note lands hard against the .setup-note above it. Same step the
+   .setup-note itself takes off the input. */
+.field > .edit-note { margin-top: var(--space-2); }
+
+/* The tag leads the sentence; the space between them should not depend
+   on JSX having preserved a newline. */
+.edit-note > .tag { margin-right: var(--space-1); }
+/* "Update the phone" sits inside the sentence that says why it is there.
+   Given .input's 36px floor: .btn's own padding leaves it a few pixels
+   short of that, and this is a control an operator reaches for with an
+   owner on the line. */
+.edit-note .btn { margin-left: var(--space-2); min-height: 36px; }
+
+/* The word-mark itself, on a field label or a card heading: "Rebuilds
+   the agent", "Unsaved", "Phone not updated". Inside the <label> it is
+   read out with the field name, which is the whole point -- an operator
+   who arrived at one input from a deep link is told that saving it moves
+   the phone, without having read the note above.
+
+   Family and weight are re-stated because a heading sets both: worn
+   beside an <h2> a bare .tag inherits Barlow Condensed and renders as
+   small compressed heading text instead of matching the identical flag
+   on a label six lines below. Same fix, same reason, as .golive-state
+   .sub. Never wrapped: "Rebuilds the / agent" broken across two lines
+   reads as prose, and the mark works by being obviously a chip. */
+.edit-flag {
+  margin-left: var(--space-2);
+  vertical-align: middle;
+  white-space: nowrap;
+  font-family: var(--font-body);
+  font-weight: 400;
+}
+
+/* The save's own account -- "Saving…", then "Saved. Updating the
+   phone…", then what happened -- beside the button that started it.
+   It takes the rest of the row instead of sitting at the far end of
+   .setup-actions' space-between: read left to right it is that button's
+   own sentence, and pinned to the right edge a two-clause result sets
+   ragged against the page. A refusal is not muted and does not come
+   here; it stays on .setup-error under the row. */
+.edit-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+/* A one-off closure. Worn WITH .hours-row -- <div class="hours-row
+   holiday-row"> -- because it is that row with a date on the front and a
+   remove on the end; the alignment, the wrapping, the hairline and the
+   .hours-times/.hours-closed furniture inside it all come from there and
+   stay in step with the weekly grid above it.
+
+   The date is fixed rather than fluid: a date input sizes to its own
+   mm/dd/yyyy placeholder plus the browser's picker button, and under
+   about 150px it clips one or the other. */
+.holiday-row input[type="date"] { flex: none; width: 160px; }
+/* Remove leaves the row's edge -- and on a wrapped row, the edge of
+   whatever line it lands on. Given the same 36px as the inputs it sits
+   beside: a row of these is the densest thing on the page and the one
+   control in it that destroys something should not be the smallest
+   target. */
+.holiday-row > .btn:last-child { margin-left: auto; min-height: 36px; }
+/* The closed toggle is a 12px label wrapped round a checkbox. The box
+   grows to the row's target height; the text does not. */
+.holiday-row .hours-closed { min-height: 36px; }

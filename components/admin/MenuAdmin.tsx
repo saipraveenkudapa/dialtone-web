@@ -1,0 +1,1208 @@
+"use client";
+
+import { useEffect, useState, useTransition } from "react";
+import { Corners } from "@/components/Corners";
+import { money } from "@/lib/format";
+import { UNTIL_LABEL } from "@/lib/menu";
+import { parseDollarsToCents } from "@/lib/money";
+import type {
+  CategoryInput,
+  EditResult,
+  EditableCategory,
+  EditableItem,
+  MenuItemInput,
+  PhoneSync,
+} from "@/lib/admin/edit";
+
+/* The operator's menu: categories and items, in full, for a restaurant
+ * that is already answering the phone.
+ *
+ * WHY THIS IS NOT components/MenuEditor.tsx
+ * -----------------------------------------
+ * MenuEditor is the owner's screen and every write it makes goes through
+ * MenuStore's optimistic writers, which call supabaseBrowser() -- the
+ * signed-in user's own RLS session. The operator is deliberately NOT a
+ * member of the restaurant's organization (see the header of
+ * lib/provisioning/create-restaurant.ts), so every one of those writes
+ * would be rejected and the owner's editor would sit there saying
+ * "Could not rename that category. Try again." forever.
+ *
+ * So this screen writes through the gated server actions in
+ * lib/admin/edit.ts instead, and takes them as props. What it does NOT
+ * do is re-decide anything MenuEditor already decided: the price
+ * confirmation dialog, the cents preview under every price box, the
+ * category card, the item table and the dollar-in/cents-out rule are
+ * that file's shapes and its class vocabulary, reproduced against a
+ * different transport. See the report accompanying this file for the
+ * line-by-line account of what was reused and what could not be.
+ *
+ * THE FORK IS RECORDED WHERE ITS CSS LIVES. app/app.css's "menu editor"
+ * block header names both consumers and the two places they have already
+ * diverged -- MenuEditor's .btn-icon reorder controls, which have no
+ * counterpart here, and the blueprint frame this one wears because it
+ * sits in /edit's stack. Every .menu-edit-* rule now has two call sites
+ * to check, and that header is the only thing that can say so. The
+ * cheaper shape, if this is ever reworked: an injectable write transport
+ * on MenuProvider, so /admin renders MenuEditor itself.
+ *
+ * NO OPTIMISM HERE, ON PURPOSE. MenuStore paints the change first and
+ * rolls back on failure, because mid-service there is no save button.
+ * This screen is the opposite situation: an operator with a restaurant
+ * on the phone needs to be told what actually landed, and the server
+ * action revalidates the page and hands these props back. A row that
+ * says "Saved" here is a row Postgres has.
+ *
+ * THE PROMISE THIS SCREEN GETS TO MAKE. app/api/agent/menu/route.ts
+ * queries Postgres on every call and is never cached into the
+ * assistant's prompt, and public.place_order re-reads the price and the
+ * sold-out state in the same statement that builds the line. So a price
+ * saved here is what the agent quotes on the very next call, with
+ * nothing to re-push and nothing that can half-fail -- which is why
+ * lib/admin/edit.ts returns phone: "not-needed" from every action below.
+ * It is written on the card because the operator has to be able to say
+ * it down the phone while the owner is still on the line.
+ *
+ * NOTHING HERE IS A PERMISSION. Every action prop re-checks
+ * currentPlatformAdmin() first, proves each category and item id belongs
+ * to this location before it writes, and refuses a category from another
+ * restaurant -- app.sync_menu_item_location would otherwise re-derive
+ * location_id FROM THE CATEGORY and silently hand the dish to another
+ * tenant. A <select> that only lists this location's categories is
+ * ergonomics, not the defence.
+ */
+
+export type MenuAdminProps = {
+  locationId: string;
+  categories: EditableCategory[];
+  /** Every item for this location, flat. Grouped by category here so a
+   *  move between categories is one prop change rather than two. */
+  items: EditableItem[];
+  createCategoryAction: (locationId: string, input: CategoryInput) => Promise<EditResult>;
+  saveCategoryAction: (
+    locationId: string,
+    categoryId: string,
+    input: CategoryInput,
+  ) => Promise<EditResult>;
+  /** Takes its items with it -- menu_items.category_id is on delete cascade. */
+  deleteCategoryAction: (locationId: string, categoryId: string) => Promise<EditResult>;
+  createItemAction: (locationId: string, input: MenuItemInput) => Promise<EditResult>;
+  saveItemAction: (
+    locationId: string,
+    itemId: string,
+    input: MenuItemInput,
+  ) => Promise<EditResult>;
+  deleteItemAction: (locationId: string, itemId: string) => Promise<EditResult>;
+  /** "" puts it back on sale. */
+  setSoldOutAction: (locationId: string, itemId: string, until: string) => Promise<EditResult>;
+};
+
+const DROPPED: EditResult = {
+  ok: false,
+  error:
+    "That did not come back — the connection dropped, or the request ran too long. Nothing " +
+    "here knows whether it landed. Reload the page to see what the menu actually says.",
+};
+
+/** `ok: true` means the database was written and nothing more --
+ *  lib/admin/edit.ts is explicit that `phone` is the only authority on
+ *  whether the assistant agrees. Nothing on this screen edits a column
+ *  that is baked into the assistant, so every result here should arrive
+ *  "not-needed"; rendering the field anyway is what keeps that from
+ *  quietly stopping being true. */
+function phoneNote(phone: PhoneSync): string | null {
+  switch (phone.state) {
+    case "not-needed":
+      return null;
+    case "updated":
+      return "The assistant was rebuilt as well.";
+    case "no-assistant":
+      return "There is no assistant on this restaurant yet.";
+    case "failed":
+      return (
+        `The assistant could not be rebuilt: ${phone.reason} ` +
+        "The phone is still on the old value."
+      );
+    case "secret-lost":
+      return `${phone.reason} Repair the assistant on the go-live panel now.`;
+  }
+}
+
+function useWrite() {
+  const [pending, startTransition] = useTransition();
+  const [result, setResult] = useState<EditResult | null>(null);
+
+  function run(act: () => Promise<EditResult>, onSaved?: () => void) {
+    setResult(null);
+    startTransition(async () => {
+      try {
+        const answer = await act();
+        setResult(answer);
+        if (answer.ok) onSaved?.();
+      } catch {
+        setResult(DROPPED);
+      }
+    });
+  }
+
+  return { pending, result, setResult, run };
+}
+
+/** The account of one write, in the two voices this product already
+ *  uses: a refusal on .setup-error, everything else on .edit-status --
+ *  the same split components/admin/EditSections.tsx makes, so a save on
+ *  this screen and a save on the record editor read as one product.
+ *
+ *  The button that started the write never changes its label, which is
+ *  why "Saving…" lives here. A control that resizes under the cursor
+ *  mid-press is a control an operator stops trusting. */
+function WriteResult({
+  pending,
+  result,
+  dirty = false,
+}: {
+  pending: boolean;
+  result: EditResult | null;
+  /** Renders "Not saved yet." so a typed-in change is never mistaken for
+   *  a saved one. */
+  dirty?: boolean;
+}) {
+  if (!pending && result && !result.ok) return <p className="setup-error">{result.error}</p>;
+
+  const phone = !pending && result?.ok ? phoneNote(result.phone) : null;
+  const status = pending
+    ? "Saving…"
+    : result?.ok
+      ? `${result.message}${phone ? ` ${phone}` : ""}`
+      : dirty
+        ? "Not saved yet."
+        : "";
+
+  return (
+    <p className="edit-status" role="status" aria-live="polite">
+      {status}
+    </p>
+  );
+}
+
+function useEscape(active: boolean, close: () => void) {
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [active, close]);
+}
+
+/** The same flattening lib/agent/orders.ts's matchItem does before it
+ *  compares a spoken name to a menu row, and that lib/admin/edit.ts's
+ *  normaliseItemName repeats for the write path. Repeated a third time
+ *  rather than imported because that module is server-only and importing
+ *  a value from it would drag the service-role client into the browser
+ *  bundle. If either of the others changes, this must.
+ *
+ *  It only saves a round trip: the server refuses the duplicate either
+ *  way. But the refusal matters -- two rows whose names normalise the
+ *  same make every caller who says that dish an `ambiguous_item`, and
+ *  the agent reads back two identical names, which is a question nobody
+ *  can answer. */
+function sameName(a: string, b: string): boolean {
+  const flat = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+  return flat(a) === flat(b);
+}
+
+/** A sort_order nothing distinguishes. `.order("sort_order")` leaves ties
+ *  to Postgres, so the same menu can be read out in two different orders
+ *  on two calls. Not an error, and not silent either. */
+function tiedSortOrders(rows: { sort_order: number }[]): boolean {
+  const seen = new Set<number>();
+  for (const row of rows) {
+    if (seen.has(row.sort_order)) return true;
+    seen.add(row.sort_order);
+  }
+  return false;
+}
+
+export function MenuAdmin(props: MenuAdminProps) {
+  const { locationId, categories, items, createCategoryAction, setSoldOutAction } = props;
+
+  const { pending, result, run } = useWrite();
+  const [name, setName] = useState("");
+
+  const soldOut = items.filter((item) => item.sold_out_until !== null);
+  const nextSort = categories.reduce((max, c) => Math.max(max, c.sort_order + 1), 0);
+
+  return (
+    <>
+      <section id="menu" className="card blueprint setup-card">
+        <Corners />
+        <h2>Menu</h2>
+        <p className="text-muted sub">
+          {items.length} item{items.length === 1 ? "" : "s"} across {categories.length}{" "}
+          categor{categories.length === 1 ? "y" : "ies"}. Prices are typed in dollars and stored
+          as whole cents; what will actually be stored is shown beside every price box.
+        </p>
+
+        {/* No chip. .tag.tag-outline is this feature's REBUILD mark --
+            the flag on every baked field label, and the opener of all
+            three "this also rebuilds the assistant" notes -- so wearing
+            it here to assert the opposite is what makes an operator push
+            a rebuild they did not need or skip one they did. The live
+            notes in components/admin/EditSections.tsx carry none. */}
+        <p className="edit-note is-live">
+          The assistant reads the menu out of the database on every call — it is never baked into
+          the assistant, so there is nothing to re-push and nothing on the phone that can be left
+          on the old price. A price saved here is what the agent quotes on the very next call.
+        </p>
+
+        <form
+          className="setup-row menu-edit-add"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!name.trim() || pending) return;
+            run(
+              () => createCategoryAction(locationId, { name, sortOrder: String(nextSort) }),
+              () => setName(""),
+            );
+          }}
+        >
+          <div className="field">
+            <label htmlFor="ma-new-category">New category</label>
+            <input
+              id="ma-new-category"
+              className="input"
+              type="text"
+              placeholder="Contorni"
+              maxLength={80}
+              value={name}
+              disabled={pending}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <button
+            type="submit"
+            className="btn btn-secondary"
+            disabled={pending || !name.trim()}
+          >
+            Add category
+          </button>
+        </form>
+        <WriteResult pending={pending} result={result} />
+
+        {/* Inside the card, not loose in the stack. .setup-stack is a
+            column of framed blueprint sections separated by var(--space-6);
+            a bare <p> between two of them reads as a fragment of the page
+            rather than as this card's own note. */}
+        {categories.length === 0 ? (
+          <p className="text-muted empty-note">
+            No categories yet. Add one above to start on items.
+          </p>
+        ) : null}
+
+        {tiedSortOrders(categories) ? (
+          <p className="text-muted setup-note">
+            Two categories share a sort order. Ties are resolved by nothing, so the assistant can
+            read the menu&rsquo;s sections in a different order on different calls — give them
+            distinct numbers.
+          </p>
+        ) : null}
+      </section>
+
+      <SoldOutNow
+        locationId={locationId}
+        soldOut={soldOut}
+        setSoldOutAction={setSoldOutAction}
+      />
+
+      {categories.map((category) => (
+        <CategoryCard
+          key={category.id}
+          locationId={locationId}
+          category={category}
+          categoryItems={items.filter((item) => item.category_id === category.id)}
+          allItems={items}
+          categories={categories}
+          saveCategoryAction={props.saveCategoryAction}
+          deleteCategoryAction={props.deleteCategoryAction}
+          createItemAction={props.createItemAction}
+          saveItemAction={props.saveItemAction}
+          deleteItemAction={props.deleteItemAction}
+          setSoldOutAction={props.setSoldOutAction}
+        />
+      ))}
+    </>
+  );
+}
+
+/* ── what the kitchen has run out of ───────────────────────────────── */
+
+/** The fastest-moving fact on the record, and the one an operator is
+ *  most often phoned about mid-service. It also has to be visible from
+ *  the top of the page: neither value expires on its own -- there is no
+ *  job that clears "reopen" or "close" -- so an item flagged on Friday
+ *  is still flagged on Monday unless a person unsets it. */
+function SoldOutNow({
+  locationId,
+  soldOut,
+  setSoldOutAction,
+}: {
+  locationId: string;
+  soldOut: EditableItem[];
+  setSoldOutAction: MenuAdminProps["setSoldOutAction"];
+}) {
+  const { pending, result, run } = useWrite();
+
+  return (
+    <section id="sold-out" className="card blueprint setup-card">
+      <Corners />
+      <h2>Sold out right now</h2>
+      <p className="text-muted sub">
+        The assistant stops offering these on the next call, and refuses them if a caller asks
+        for one by name.
+      </p>
+
+      {soldOut.length === 0 ? (
+        <p className="text-muted empty-note">
+          Nothing is flagged. The agent is offering the whole menu.
+        </p>
+      ) : (
+        <div className="soldout-list">
+          {soldOut.map((item) => (
+            <div key={item.id} className="soldout-row">
+              <span>{item.name}</span>
+              <span className="until">{UNTIL_LABEL[item.sold_out_until!]}</span>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={pending}
+                onClick={() => run(() => setSoldOutAction(locationId, item.id, ""))}
+              >
+                Put back on sale
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-muted setup-note">
+        Nothing clears these by itself — there is no job that puts an item back on sale
+        overnight. Somebody has to unset it here or on the manager screen.
+      </p>
+      <WriteResult pending={pending} result={result} />
+    </section>
+  );
+}
+
+/* ── one category ──────────────────────────────────────────────────── */
+
+function CategoryCard({
+  locationId,
+  category,
+  categoryItems,
+  allItems,
+  categories,
+  saveCategoryAction,
+  deleteCategoryAction,
+  createItemAction,
+  saveItemAction,
+  deleteItemAction,
+  setSoldOutAction,
+}: {
+  locationId: string;
+  category: EditableCategory;
+  /** This category's items. */
+  categoryItems: EditableItem[];
+  /** Every item on the location, for the duplicate-name check -- a name
+   *  only has to collide once anywhere on the menu to make every caller
+   *  who says it an `ambiguous_item`. */
+  allItems: EditableItem[];
+  categories: EditableCategory[];
+  saveCategoryAction: MenuAdminProps["saveCategoryAction"];
+  deleteCategoryAction: MenuAdminProps["deleteCategoryAction"];
+  createItemAction: MenuAdminProps["createItemAction"];
+  saveItemAction: MenuAdminProps["saveItemAction"];
+  deleteItemAction: MenuAdminProps["deleteItemAction"];
+  setSoldOutAction: MenuAdminProps["setSoldOutAction"];
+}) {
+  const { pending, result, setResult, run } = useWrite();
+
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(category.name);
+  const [sortOrder, setSortOrder] = useState(String(category.sort_order));
+  const [confirming, setConfirming] = useState(false);
+
+  // By VALUE, not by identity. Every action on this route revalidates
+  // the page, so a save anywhere on it -- a holiday, a dish flipped to
+  // sold out -- hands this card a freshly deserialised object with the
+  // same contents and a new identity. On `seen !== category` that
+  // re-seeded a rename the operator had typed and not yet saved, with
+  // nothing on screen saying it had gone.
+  const seedCat = `${category.name}|${category.sort_order}`;
+  const [seen, setSeen] = useState(seedCat);
+  if (seen !== seedCat) {
+    setSeen(seedCat);
+    setName(category.name);
+    setSortOrder(String(category.sort_order));
+    // The message from the write that CAUSED this re-seed is deliberately
+    // left standing: revalidatePath lands these props in the same commit
+    // as the result, so clearing here would wipe "Saved." the instant it
+    // was earned.
+  }
+
+  useEscape(confirming, () => setConfirming(false));
+
+  // Deterministic on screen even when the numbers are not: sort_order,
+  // then name, so an operator looking for the tie can see it.
+  const ordered = [...categoryItems].sort(
+    (a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name),
+  );
+  const nextSort = categoryItems.reduce((max, item) => Math.max(max, item.sort_order + 1), 0);
+  const count = categoryItems.length;
+  const dirty =
+    editing && (name !== category.name || sortOrder !== String(category.sort_order));
+
+  return (
+    /* .blueprint and the four registration marks, like every other card
+       on this page. These sit as direct children of /edit's .setup-stack,
+       between eight framed blueprint sections and the "What the system
+       manages" one; without them the marks drop out across the tallest,
+       densest region of the screen and it stops reading as the console
+       the mockup draws. On /dashboard/menu the same class is the only
+       card on the page, which is why it never showed there. */
+    <div className="card blueprint menu-edit-cat">
+      <Corners />
+      <div className="menu-edit-cat-head">
+        {editing ? (
+          <form
+            className="menu-edit-row-edit"
+            onSubmit={(e) => {
+              e.preventDefault();
+              run(() => saveCategoryAction(locationId, category.id, { name, sortOrder }), () =>
+                setEditing(false),
+              );
+            }}
+          >
+            <div className="field">
+              <label htmlFor={`ma-cat-name-${category.id}`}>Category name</label>
+              <input
+                id={`ma-cat-name-${category.id}`}
+                className="input"
+                type="text"
+                maxLength={80}
+                value={name}
+                disabled={pending}
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={`ma-cat-sort-${category.id}`}>Sort order</label>
+              <input
+                id={`ma-cat-sort-${category.id}`}
+                className="input"
+                type="number"
+                min={0}
+                max={9999}
+                value={sortOrder}
+                disabled={pending}
+                onChange={(e) => setSortOrder(e.target.value)}
+              />
+            </div>
+            <button
+              type="submit"
+              className="btn btn-secondary"
+              disabled={pending || !dirty || !name.trim()}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={pending}
+              onClick={() => {
+                setName(category.name);
+                setSortOrder(String(category.sort_order));
+                setEditing(false);
+                setResult(null);
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <>
+            <h3>{category.name}</h3>
+            <div className="menu-edit-cat-controls">
+              <span className="text-muted setup-note">sort {category.sort_order}</span>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={pending}
+                onClick={() => setEditing(true)}
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={pending}
+                onClick={() => setConfirming(true)}
+              >
+                Remove category
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <WriteResult pending={pending} result={result} dirty={dirty} />
+
+      {ordered.length === 0 ? (
+        <p className="text-muted empty-note">No items yet.</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Price</th>
+                <th>Sort</th>
+                <th>On the phone</th>
+                <th aria-label="Actions" />
+              </tr>
+            </thead>
+            <tbody>
+              {ordered.map((item) => (
+                <ItemRow
+                  key={item.id}
+                  locationId={locationId}
+                  item={item}
+                  categories={categories}
+                  allItems={allItems}
+                  saveItemAction={saveItemAction}
+                  deleteItemAction={deleteItemAction}
+                  setSoldOutAction={setSoldOutAction}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tiedSortOrders(ordered) ? (
+        <p className="text-muted setup-note">
+          Two items here share a sort order, so the assistant can read them out in a different
+          order on different calls.
+        </p>
+      ) : null}
+
+      <AddItemForm
+        locationId={locationId}
+        categoryId={category.id}
+        nextSort={nextSort}
+        allItems={allItems}
+        createItemAction={createItemAction}
+      />
+
+      {confirming ? (
+        <div
+          className="dialog-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={`ma-cat-confirm-${category.id}`}
+        >
+          <div className="dialog blueprint">
+            <Corners />
+            <div id={`ma-cat-confirm-${category.id}`} className="dialog-title">
+              Remove {category.name}?
+            </div>
+            <div className="dialog-body">
+              <p>
+                {count === 0
+                  ? "This category has no items in it."
+                  : `The ${count} item${count === 1 ? "" : "s"} in it go with it. ` +
+                    "Removing a category deletes its items -- there is no undo, and the " +
+                    "assistant stops offering them on the next call."}
+              </p>
+            </div>
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setConfirming(false)}
+                autoFocus
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={pending}
+                onClick={() =>
+                  run(() => deleteCategoryAction(locationId, category.id), () =>
+                    setConfirming(false),
+                  )
+                }
+              >
+                {count === 0
+                  ? "Remove category"
+                  : `Remove it and ${count} item${count === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ── one item ──────────────────────────────────────────────────────── */
+
+function ItemRow({
+  locationId,
+  item,
+  categories,
+  allItems,
+  saveItemAction,
+  deleteItemAction,
+  setSoldOutAction,
+}: {
+  locationId: string;
+  item: EditableItem;
+  categories: EditableCategory[];
+  allItems: EditableItem[];
+  saveItemAction: MenuAdminProps["saveItemAction"];
+  deleteItemAction: MenuAdminProps["deleteItemAction"];
+  setSoldOutAction: MenuAdminProps["setSoldOutAction"];
+}) {
+  const { pending, result, setResult, run } = useWrite();
+
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(item.name);
+  const [price, setPrice] = useState((item.price_cents / 100).toFixed(2));
+  const [description, setDescription] = useState(item.description ?? "");
+  const [allergenNote, setAllergenNote] = useState(item.allergen_note ?? "");
+  const [categoryId, setCategoryId] = useState(item.category_id);
+  const [sortOrder, setSortOrder] = useState(String(item.sort_order));
+  const [confirmPriceCents, setConfirmPriceCents] = useState<number | null>(null);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+
+  /* By VALUE, not by identity, and this row was the worst of the four
+     places that got it wrong: `editing` is not reset, so an open edit row
+     kept its Save button and simply swapped the operator's typing for
+     what was on file. Every action on this route revalidates the page, so
+     any save anywhere on it -- a holiday, another dish flipped to sold
+     out -- handed this row a freshly deserialised object with identical
+     contents and a new identity. */
+  const seedItem = [
+    item.name,
+    item.price_cents,
+    item.description ?? "",
+    item.allergen_note ?? "",
+    item.category_id,
+    item.sort_order,
+  ].join("|");
+  const [seen, setSeen] = useState(seedItem);
+  if (seen !== seedItem) {
+    setSeen(seedItem);
+    setName(item.name);
+    setPrice((item.price_cents / 100).toFixed(2));
+    setDescription(item.description ?? "");
+    setAllergenNote(item.allergen_note ?? "");
+    setCategoryId(item.category_id);
+    setSortOrder(String(item.sort_order));
+    // The message from the write that CAUSED this re-seed is deliberately
+    // left standing: revalidatePath lands these props in the same commit
+    // as the result, so clearing here would wipe "Saved." the instant it
+    // was earned.
+  }
+
+  useEscape(confirmPriceCents !== null, () => setConfirmPriceCents(null));
+  useEscape(confirmingRemove, () => setConfirmingRemove(false));
+
+  const previewCents = parseDollarsToCents(price);
+  /* Only when the name has actually MOVED -- the same rule
+     lib/admin/edit.ts's saveMenuItem applies before it asks the database.
+     Twins are routine: app.publish_menu_import appends items with no name
+     check, and neither does the owner's own menu screen, so importing the
+     same PDF twice or a menu that prints "Side Salad" under two sections
+     leaves two rows that normalise the same. Flagging an UNTOUCHED name
+     would disable Save on exactly the rows most in need of a fix, and put
+     a red sentence under a field the operator never typed in. */
+  const duplicate =
+    !sameName(name, item.name) &&
+    allItems.some((other) => other.id !== item.id && sameName(other.name, name));
+  const out = item.sold_out_until !== null;
+  const dirty =
+    name !== item.name ||
+    price !== (item.price_cents / 100).toFixed(2) ||
+    description !== (item.description ?? "") ||
+    allergenNote !== (item.allergen_note ?? "") ||
+    categoryId !== item.category_id ||
+    sortOrder !== String(item.sort_order);
+
+  function patch(): MenuItemInput {
+    return {
+      categoryId,
+      name,
+      description,
+      priceDollars: price,
+      allergenNote,
+      sortOrder,
+      /* Deliberately EMPTY, and lib/admin/edit.ts's saveMenuItem
+         deliberately ignores it: an update writes the six columns this
+         row actually shows and never touches sold_out_until.
+         
+         Sending `item.sold_out_until` here -- which is what this did --
+         echoed a prop that may be minutes old. The owner marks the
+         branzino sold out from their own screen at seven; the operator
+         fixes its description in a tab opened at ten to, and the save
+         puts the fish back on sale, live on the very next call, with the
+         success sentence talking about the description. Sold-out is its
+         own one-click control because the kitchen runs out mid-service,
+         and it stays the only writer of that column. */
+      soldOutUntil: "",
+    };
+  }
+
+  function beginSave() {
+    if (!dirty || !name.trim() || previewCents === null || duplicate) return;
+    // The dangerous edit. Every other field commits on the Save click --
+    // only a changed price stops for its own confirmation, with the old
+    // and the new value on screen at once, because the agent quotes it
+    // to a caller within seconds and a wrong one is money out of the
+    // owner's pocket. Same rule, same dialog, as components/MenuEditor.tsx.
+    if (previewCents !== item.price_cents) {
+      setConfirmPriceCents(previewCents);
+      return;
+    }
+    commit();
+  }
+
+  function commit() {
+    run(() => saveItemAction(locationId, item.id, patch()), () => {
+      setEditing(false);
+      setConfirmPriceCents(null);
+    });
+  }
+
+  if (!editing) {
+    return (
+      <>
+        <tr>
+          <td>
+            <div className="name">
+              {item.name}
+              {/* The select in the next-but-one column is the control;
+                  this is so a scan down the list shows what the agent is
+                  refusing without reading every dropdown. */}
+              {out ? <span className="tag tag-out edit-flag">Not offered</span> : null}
+            </div>
+            {item.description ? (
+              <div className="text-muted menu-edit-desc">{item.description}</div>
+            ) : null}
+            {item.allergen_note ? (
+              <div className="text-muted menu-edit-desc">Staff note: {item.allergen_note}</div>
+            ) : null}
+          </td>
+          <td className="num">{money(item.price_cents)}</td>
+          <td className="num">{item.sort_order}</td>
+          <td>
+            {/* One control, one write. The kitchen runs out of branzino
+                at seven and the agent has to stop selling it on the next
+                call -- opening an edit row and re-saving six other
+                fields is the wrong shape for that. */}
+            <select
+              className="input"
+              aria-label={`${item.name} on the phone`}
+              value={item.sold_out_until ?? ""}
+              disabled={pending}
+              onChange={(e) => run(() => setSoldOutAction(locationId, item.id, e.target.value))}
+            >
+              <option value="">Available</option>
+              <option value="reopen">{UNTIL_LABEL.reopen}</option>
+              <option value="close">{UNTIL_LABEL.close}</option>
+            </select>
+          </td>
+          <td>
+            <div className="menu-edit-row-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={pending}
+                onClick={() => setEditing(true)}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={pending}
+                onClick={() => setConfirmingRemove(true)}
+              >
+                Remove
+              </button>
+            </div>
+
+            {/* Asked, not fired. .menu-edit-row-actions is a 4px flex gap,
+                so Remove is the neighbour of the Edit button an operator
+                is aiming at while a restaurant owner talks -- and one
+                stray click destroyed the row's name, description, price,
+                allergen note and sold-out state with no undo and no
+                trash, and stopped the agent offering the dish on the next
+                call. Deleting a category asks; changing a price asks;
+                this is the same dialog, for a loss of the same kind. */}
+            {confirmingRemove ? (
+              <div
+                className="dialog-backdrop"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={`ma-item-confirm-${item.id}`}
+              >
+                <div className="dialog blueprint">
+                  <Corners />
+                  <div id={`ma-item-confirm-${item.id}`} className="dialog-title">
+                    Remove {item.name}?
+                  </div>
+                  <div className="dialog-body">
+                    <p>
+                      The assistant stops offering it on the next call. Its price, description
+                      and staff note go with it — there is no undo and nothing to restore it
+                      from. To stop selling it for tonight only, set it to{" "}
+                      {UNTIL_LABEL.close} instead.
+                    </p>
+                  </div>
+                  <div className="dialog-actions">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => setConfirmingRemove(false)}
+                      autoFocus
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      disabled={pending}
+                      onClick={() =>
+                        run(() => deleteItemAction(locationId, item.id), () =>
+                          setConfirmingRemove(false),
+                        )
+                      }
+                    >
+                      Remove {item.name}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </td>
+        </tr>
+        {pending || result ? (
+          <tr>
+            <td colSpan={5}>
+              <WriteResult pending={pending} result={result} />
+            </td>
+          </tr>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <tr>
+      <td colSpan={5}>
+        <div className="menu-edit-row-edit">
+          <div className="field">
+            <label htmlFor={`ma-item-name-${item.id}`}>Item</label>
+            <input
+              id={`ma-item-name-${item.id}`}
+              className="input"
+              type="text"
+              maxLength={120}
+              value={name}
+              disabled={pending}
+              onChange={(e) => setName(e.target.value)}
+              aria-invalid={duplicate ? "true" : undefined}
+              autoFocus
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`ma-item-price-${item.id}`}>Price ($)</label>
+            <input
+              id={`ma-item-price-${item.id}`}
+              className="input"
+              type="text"
+              inputMode="decimal"
+              value={price}
+              disabled={pending}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`ma-item-desc-${item.id}`}>Description</label>
+            <input
+              id={`ma-item-desc-${item.id}`}
+              className="input"
+              type="text"
+              maxLength={500}
+              value={description}
+              disabled={pending}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`ma-item-allergen-${item.id}`}>Staff note (allergens)</label>
+            <input
+              id={`ma-item-allergen-${item.id}`}
+              className="input"
+              type="text"
+              maxLength={300}
+              value={allergenNote}
+              disabled={pending}
+              onChange={(e) => setAllergenNote(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`ma-item-cat-${item.id}`}>Category</label>
+            <select
+              id={`ma-item-cat-${item.id}`}
+              className="input"
+              value={categoryId}
+              disabled={pending}
+              onChange={(e) => setCategoryId(e.target.value)}
+            >
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor={`ma-item-sort-${item.id}`}>Sort order</label>
+            <input
+              id={`ma-item-sort-${item.id}`}
+              className="input"
+              type="number"
+              min={0}
+              max={9999}
+              value={sortOrder}
+              disabled={pending}
+              onChange={(e) => setSortOrder(e.target.value)}
+            />
+          </div>
+          <span className="price-preview text-muted">
+            {previewCents === null ? "Not a valid price." : `Stores ${money(previewCents)}.`}
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={pending || !dirty || !name.trim() || previewCents === null || duplicate}
+            onClick={beginSave}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={pending}
+            onClick={() => {
+              setName(item.name);
+              setPrice((item.price_cents / 100).toFixed(2));
+              setDescription(item.description ?? "");
+              setAllergenNote(item.allergen_note ?? "");
+              setCategoryId(item.category_id);
+              setSortOrder(String(item.sort_order));
+              setEditing(false);
+              setConfirmPriceCents(null);
+              setResult(null);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+
+        <p className="text-muted setup-note">
+          The description is read aloud to callers as what the dish comes with. The staff note is
+          not: lib/agent/menu.ts leaves it out of the assistant&rsquo;s payload on purpose,
+          because an allergy question is transferred to a person rather than answered from a
+          column.
+        </p>
+
+        {duplicate ? (
+          <p className="setup-error">
+            This restaurant already has an item by that name. Two items with the same name make
+            the assistant ask which one the caller meant and then read back two identical names,
+            which is a question nobody can answer.
+          </p>
+        ) : null}
+
+        <WriteResult pending={pending} result={result} dirty={dirty} />
+
+        {confirmPriceCents !== null ? (
+          <div
+            className="dialog-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`ma-price-confirm-${item.id}`}
+          >
+            <div className="dialog blueprint">
+              <Corners />
+              <div id={`ma-price-confirm-${item.id}`} className="dialog-title">
+                Change the price of {item.name}?
+              </div>
+              <div className="dialog-body">
+                <p className="price-compare num">
+                  <span className="was">{money(item.price_cents)}</span>
+                  <span className="arrow">→</span>
+                  <span className="now">{money(confirmPriceCents)}</span>
+                </p>
+                <p>
+                  The phone agent quotes this on the next call, within seconds of you confirming.
+                </p>
+              </div>
+              <div className="dialog-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setConfirmPriceCents(null)}
+                  autoFocus
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={pending}
+                  onClick={commit}
+                >
+                  Confirm new price
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </td>
+    </tr>
+  );
+}
+
+/* ── a new item ────────────────────────────────────────────────────── */
+
+function AddItemForm({
+  locationId,
+  categoryId,
+  nextSort,
+  allItems,
+  createItemAction,
+}: {
+  locationId: string;
+  categoryId: string;
+  /** One past the highest in this category, so a new dish lands at the
+   *  bottom of its section instead of tying with something. */
+  nextSort: number;
+  allItems: EditableItem[];
+  createItemAction: MenuAdminProps["createItemAction"];
+}) {
+  const { pending, result, run } = useWrite();
+
+  const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
+  const [description, setDescription] = useState("");
+
+  const previewCents = parseDollarsToCents(price);
+  const duplicate = name.trim() !== "" && allItems.some((other) => sameName(other.name, name));
+
+  return (
+    <form
+      className="add-item-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!name.trim() || previewCents === null || duplicate) return;
+        run(
+          () =>
+            createItemAction(locationId, {
+              categoryId,
+              name,
+              description,
+              priceDollars: price,
+              allergenNote: "",
+              sortOrder: String(nextSort),
+              soldOutUntil: "",
+            }),
+          () => {
+            setName("");
+            setPrice("");
+            setDescription("");
+          },
+        );
+      }}
+    >
+      <div className="field">
+        <label htmlFor={`ma-new-item-name-${categoryId}`}>Item</label>
+        <input
+          id={`ma-new-item-name-${categoryId}`}
+          className="input"
+          type="text"
+          placeholder="Cacio e Pepe"
+          maxLength={120}
+          value={name}
+          disabled={pending}
+          onChange={(e) => setName(e.target.value)}
+          aria-invalid={duplicate ? "true" : undefined}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={`ma-new-item-price-${categoryId}`}>Price ($)</label>
+        <input
+          id={`ma-new-item-price-${categoryId}`}
+          className="input"
+          type="text"
+          inputMode="decimal"
+          placeholder="22.00"
+          value={price}
+          disabled={pending}
+          onChange={(e) => setPrice(e.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={`ma-new-item-desc-${categoryId}`}>Description (optional)</label>
+        <input
+          id={`ma-new-item-desc-${categoryId}`}
+          className="input"
+          type="text"
+          placeholder="Black pepper, pecorino"
+          maxLength={500}
+          value={description}
+          disabled={pending}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </div>
+      <span className="price-preview text-muted">
+        {price.trim() === ""
+          ? ""
+          : previewCents === null
+            ? "Not a valid price."
+            : `Will store ${previewCents}¢ (${money(previewCents)}).`}
+      </span>
+      <button
+        type="submit"
+        className="btn btn-secondary"
+        disabled={pending || !name.trim() || previewCents === null || duplicate}
+      >
+        Add item
+      </button>
+      {duplicate ? (
+        <p className="setup-error">
+          This restaurant already has an item by that name. Two items with the same name make the
+          assistant ask which one the caller meant and then read back two identical names, which
+          is a question nobody can answer.
+        </p>
+      ) : null}
+      <WriteResult pending={pending} result={result} />
+    </form>
+  );
+}

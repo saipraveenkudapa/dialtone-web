@@ -1140,12 +1140,21 @@ export async function setFallbackNumber({
   // destination was baked into the Vapi payload when the assistant was
   // built (see nativeTransferTool in lib/vapi/provision.ts), so an
   // assistant that already exists still carries the old number there.
+  //
+  // This used to end at "until the assistant is rebuilt", which named a
+  // problem and no way out of it -- there was nothing in the console
+  // that would rebuild an assistant it considered healthy. Edit details
+  // is now that road: saving the fallback number there pushes the
+  // rebuild with it, and says whether the push landed. This panel's own
+  // field stays, because its job is clearing a blocker on a restaurant
+  // that has no assistant yet, where there is nothing to rebuild.
   if (result.ok && location.vapi_assistant_id) {
     return {
       ok: true,
       message:
         `${result.message} The assistant's own one-tap transfer still carries the number it was ` +
-        "built with until the assistant is rebuilt.",
+        "built with. Save the same number under Edit details → Answering the phone to rebuild " +
+        "the assistant and move that too.",
     };
   }
   return result;
