@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -12,6 +13,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { Corners } from "@/components/Corners";
 
 /* The editor's eight subjects, one on screen at a time.
  *
@@ -202,9 +204,11 @@ function useSectionMark(section: EditSectionId, mark: SectionMark, on: boolean):
  *  being told to do the thing that threw the other tab's work away.
  *  Every caller already computes exactly the boolean the guard needs.
  *
- *  What it still cannot see is a client-side route change -- pressing
- *  "Overview & go-live" in the page head. That is what the chip and the
- *  sentence under the strip are for.
+ *  What beforeunload cannot see is a client-side route change --
+ *  pressing "Overview & go-live" in the page head. That half is
+ *  <EditTabs>'s own, in useLeaveGuard below: it has the whole dirty set
+ *  and can therefore name the sections, which a beforeunload dialog is
+ *  not allowed to do.
  *
  *  One line per dirty-capable component; several reporters may sit in
  *  one section (Hours has the week, every holiday row and the add form)
@@ -267,6 +271,156 @@ function sameMembers(a: ReadonlySet<EditSectionId>, b: ReadonlySet<EditSectionId
 function sentenceList(parts: string[]): string {
   if (parts.length <= 1) return parts.join("");
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/* ── leaving the page with typing still in it ──────────────────────── */
+
+/** A press this guard stopped, and what it stopped it over. */
+type PendingExit = {
+  /** Where the press was going, as a path this app can route to. */
+  href: string;
+  /** The unsaved sections' labels, FROZEN at the moment of the press.
+   *  Read live, a revalidation landing while the dialog is open could
+   *  empty the set and leave the dialog asking about nothing. */
+  labels: string[];
+};
+
+/** The other half of the unsaved-edits guard: an in-app route change.
+ *
+ *  WHAT beforeunload DOES NOT COVER. useSectionDirty above registers
+ *  beforeunload, which is the browser's own hook and fires for a reload,
+ *  a tab close and a real document navigation. A client-side route
+ *  change is none of those: "Overview & go-live", the back link beside
+ *  it and the three items in the operator bar are <Link>s, so Next
+ *  swaps the tree in place, this component unmounts, and eight panels of
+ *  useState go with it without a single event the browser would call an
+ *  unload.
+ *
+ *  HOW THIS CATCHES IT, AND WHY NOT onNavigate. next/link takes an
+ *  `onNavigate(e)` prop whose e.preventDefault() cancels the navigation,
+ *  and for a link this module rendered that would be the tidier hook.
+ *  It is per-link, and not one of the links that loses the work is in
+ *  this file: three are in app/admin/[locationId]/edit/page.tsx, two
+ *  more in components/admin/EditSections.tsx, and the last two are in
+ *  components/admin/AdminNav.tsx and app/admin/layout.tsx -- the shell,
+ *  which knows nothing about an editor and would have to be handed the
+ *  editor's dirty state to use the prop at all. Eight anchors in four
+ *  files, nine when the operator also owns a restaurant. A route with
+ *  eight ways out needs one guard, not eight that a ninth link is added
+ *  without.
+ *
+ *  So: one capture-phase click listener, which sees the press before the
+ *  router does. React attaches its delegated listeners to the ROOT
+ *  CONTAINER, and in the App Router that container is `document` itself
+ *  (next/dist/client/app-index.js: `const appElement = document`), so
+ *  <Link>'s onClick is a bubble-phase listener on document. A capture
+ *  listener on document runs on the way down, before any of that.
+ *
+ *  preventDefault() alone is the whole stop, and both halves of it are
+ *  checked rather than hoped for: it is what suppresses the anchor's own
+ *  navigation, and next/dist/client/app-dir/link.js opens its click
+ *  handler with `if (e.defaultPrevented) return` -- React copies
+ *  defaultPrevented off the native event when it builds the synthetic
+ *  one, so the router stands down on the same call. Nothing here calls
+ *  stopPropagation: that would silence every other handler on the way
+ *  up for a stop that does not need it.
+ *
+ *  WHAT IT DELIBERATELY LETS THROUGH.
+ *    * Cmd/Ctrl/Shift/Alt-click, middle-click, target=_blank, download.
+ *      All of them open somewhere else and LEAVE THIS PAGE STANDING, so
+ *      there is nothing to lose and nothing to ask about.
+ *    * A cross-origin href. That is a real document navigation, so
+ *      beforeunload already fires -- guarding it here as well would ask
+ *      twice for one press.
+ *    * A link to this same pathname (?section=, #menu). The panels stay
+ *      mounted through it; that is the whole design.
+ *    * The browser's own Back button, and every other history move. No
+ *      popstate guard, on purpose: popstate arrives AFTER the entry has
+ *      already changed, so "cancelling" it means pushing a state back on
+ *      to fight the operator's own button. beforeunload is what covers
+ *      Back off this page to another origin; a Back that is a soft
+ *      route change is not caught, and losing that is worth not
+ *      breaking the button.
+ *    * Sign out. It is a <form> posting a server action, not a link.
+ *      Intercepting submits would put this listener in front of every
+ *      save on the page, which is a far worse thing to get wrong. */
+function useLeaveGuard(dirtySections: ReadonlySet<EditSectionId>) {
+  const router = useRouter();
+  const [exit, setExit] = useState<PendingExit | null>(null);
+  const stayRef = useRef<HTMLButtonElement>(null);
+
+  /* Registered only while something is unsaved, so a clean editor
+     behaves exactly as it did before this existed. `dirtySections` is a
+     new Set only when its MEMBERS change (see report()), so this is not
+     re-registered on every keystroke. */
+  useEffect(() => {
+    if (dirtySections.size === 0) return;
+
+    const labels = EDIT_SECTIONS.filter((section) => dirtySections.has(section.id)).map(
+      (section) => section.label,
+    );
+
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented) return;
+      // Left button only, unmodified: everything else either opens a new
+      // tab or is not a navigation at all.
+      if (event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      // instanceof rather than the selector's word: an <a> inside an SVG
+      // is an SVGAElement, whose .href is not a string at all.
+      const anchor = target.closest("a");
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      if (!anchor.hasAttribute("href")) return;
+      if (anchor.hasAttribute("download")) return;
+      if (anchor.target !== "" && anchor.target !== "_self") return;
+
+      // .href is already absolute; the base is belt and braces.
+      const url = new URL(anchor.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      if (url.pathname === window.location.pathname) return;
+
+      event.preventDefault();
+      setExit({ href: `${url.pathname}${url.search}${url.hash}`, labels });
+    };
+
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, [dirtySections]);
+
+  /* The safe choice takes focus, and Escape is the safe choice too, so a
+     stray Enter or Escape keeps the typing rather than throwing it away.
+     Same shape as components/admin/GoLive.tsx's dialogs. */
+  useEffect(() => {
+    if (!exit) return;
+    stayRef.current?.focus();
+    /* globalThis. because this module imports React's own KeyboardEvent
+       type for the strip's handler, and the bare name would resolve to
+       that synthetic one rather than to the DOM's. */
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setExit(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [exit]);
+
+  const stay = useCallback(() => setExit(null), []);
+
+  /* Leaving stays possible, and it goes by the router rather than by
+     re-firing the click: router.push is not a click, so this guard
+     cannot catch its own answer, and it is a soft navigation, so the
+     beforeunload guard the sections are still holding does not fire
+     either. One press, one question, one answer. */
+  const leave = () => {
+    if (!exit) return;
+    const { href } = exit;
+    setExit(null);
+    router.push(href);
+  };
+
+  return { exit, stay, leave, stayRef };
 }
 
 /* ── the strip ─────────────────────────────────────────────────────── */
@@ -424,6 +578,13 @@ export function EditTabs({
     (section) => section.label,
   );
 
+  /* The in-app half of the unsaved-edits guard. It is here rather than
+     in useSectionDirty because only this component has the whole dirty
+     set, and naming the sections is the point: beforeunload is not
+     allowed to say anything at all, so "Hours and Menu have unsaved
+     changes" is a sentence only this side of the guard can write. */
+  const { exit, stay, leave, stayRef } = useLeaveGuard(dirtySections);
+
   return (
     <>
       <div className="edit-tabs-head">
@@ -496,27 +657,71 @@ export function EditTabs({
           })}
         </div>
 
-        {/* The chips say WHICH; this says WHAT HAPPENS NEXT, and it is
-            here because the one loss beforeunload cannot see is a
-            client-side route change. "Overview & go-live" is the
-            largest button in the page head, the back link is beside it,
-            and the shell's own nav is three more -- none of them fire
-            an unload, so none of them can be caught by a guard. Seven
-            of the eight surfaces holding typing are display:none while
-            that button is pressed, which is exactly what the stacked
-            cards did not have to say out loud.
+        {/* The chips say WHICH; this says WHAT HAPPENS NEXT. Seven of
+            the eight surfaces holding typing are display:none at any
+            moment, which is exactly what the stacked cards did not have
+            to say out loud.
+
+            It still says it now that useLeaveGuard asks before a route
+            change, and the wording changed to match: a warning that
+            arrives only in a dialog arrives after the operator has
+            already committed to the press, and the point of this line
+            is that they can decide to save FIRST. It also stays honest
+            about the case the guard does not cover -- the back button.
 
             Absent when nothing is unsaved: a standing warning is
             furniture, and furniture is not read. */}
         {unsavedLabels.length > 0 ? (
           <p className="setup-note edit-tabs-note">
-            Unsaved edits on {sentenceList(unsavedLabels)}. Moving between tabs keeps them;
-            leaving this page loses them.
+            Unsaved edits on {sentenceList(unsavedLabels)}. Moving between tabs keeps them. A
+            link out of this page asks first; the browser&rsquo;s own Back button does not, and
+            loses them.
           </p>
         ) : null}
       </div>
 
       <EditTabsContext.Provider value={value}>{children}</EditTabsContext.Provider>
+
+      {/* The house dialog, not window.confirm: confirm() cannot be
+          styled, cannot be read by the section names it is about
+          without shouting them in a system font, and blocks the whole
+          thread while it is up.
+
+          Stay is FIRST and takes focus, so Enter and Escape both keep
+          the typing; Leave is .btn-danger and has to be aimed at, the
+          same shape MenuAdmin's remove-a-category confirm uses for a
+          loss of the same kind. */}
+      {exit ? (
+        <div
+          className="dialog-backdrop edit-leave-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-leave-title"
+        >
+          <div className="dialog blueprint">
+            <Corners />
+            <div id="edit-leave-title" className="dialog-title">
+              {sentenceList(exit.labels)} {exit.labels.length === 1 ? "has" : "have"} unsaved
+              changes
+            </div>
+            <div className="dialog-body">
+              <p>
+                Leaving this page throws that typing away. None of it has been written to the
+                record and there is no undo — staying leaves it exactly where it is, on the tab it
+                was typed on.
+              </p>
+            </div>
+            <div className="dialog-actions">
+              <button type="button" className="btn btn-ghost" ref={stayRef} onClick={stay}>
+                Stay on this page
+              </button>
+              <button type="button" className="btn btn-danger" onClick={leave}>
+                Leave and lose them
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

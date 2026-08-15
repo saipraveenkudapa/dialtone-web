@@ -46,7 +46,7 @@
  */
 
 import { redactCardNumbers } from "@/lib/agent/redact";
-import type { CallStatus } from "@/lib/supabase/types";
+import type { CallOutcome, CallStatus } from "@/lib/supabase/types";
 import type { TranscriptLine } from "@/lib/data";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -150,22 +150,195 @@ export function callStatusFromEndedReason(
   return endedAt ? "completed" : "in_progress";
 }
 
-/** USD floats to integer cents, clamped at zero.
+/** USD floats to integer cents, rounded once and deliberately.
  *
- *  Money is integer cents everywhere in this product; Vapi reports
- *  `costBreakdown` as USD floats. Two things are lost here and both are
- *  deliberate. Sub-cent precision: a 44-second call costs $0.1332 and
- *  becomes 13 cents across the two columns, so thousands of calls drift.
- *  And granularity: there are five cost buckets and two integer-cent
- *  columns, so speech-to-text and text-to-speech are folded in with the
- *  model as "the model pipeline" and transport with platform as
- *  "telephony". A `cost_total_micros` column would be the honest fix and
- *  it is not this change's to add. */
-function toCents(...usd: unknown[]): number {
-  const total = usd.reduce<number>((sum, value) => sum + numberOrZero(value), 0);
-  const cents = Math.round(total * 100);
-  // The column is `not null default 0 check (>= 0)`.
-  return Number.isFinite(cents) && cents > 0 ? cents : 0;
+ *  Money is integer cents everywhere in this product and Vapi reports
+ *  every cost as a USD float. Two things were measured on the real
+ *  delivery for call 01a00261 before this was written, and both of them
+ *  shape what follows.
+ *
+ *  WHERE THE COSTS ACTUALLY ARE. `message.costBreakdown`, at the TOP
+ *  LEVEL of the message -- and NOT `message.call.costBreakdown`, which
+ *  the delivered body does not have at all. `message.call` is the call
+ *  as it stood when it was CREATED: in the report that closes the call
+ *  it still reads `status: "ringing"` and `cost: 0`, and carries no
+ *  breakdown key. Pricing off that object is the whole reason every
+ *  Vapi call in this database shows $0.00 against a bill Vapi really
+ *  sent.
+ *
+ *  The nested call is still read, second. `GET /call/<id>` returns the
+ *  same figures on the call object itself, so a body assembled from the
+ *  REST call rather than from a live delivery -- a replay, a backfill --
+ *  prices correctly instead of silently landing as free. It costs
+ *  nothing: when the message carries its own breakdown that one wins,
+ *  and when neither does the answer is zero either way.
+ *
+ *  HOW IT IS ROUNDED. Adding USD floats and multiplying by 100 is how a
+ *  cent goes missing: `0.0116 + 0.1031 + 0.0306` is 0.14529999999999998,
+ *  and `1.005 * 100` is 100.49999999999999, which rounds DOWN to a
+ *  dollar. So each bucket is converted to an integer number of
+ *  dollar-millionths first -- one float operation per bucket, at a
+ *  magnitude where four decimal places are exact -- and every sum and
+ *  difference after that is integer arithmetic. Each column is then
+ *  rounded to the nearest cent exactly once, half up.
+ *
+ *  Sub-cent precision is still lost, and that is the remaining honest
+ *  cost of two integer-cent columns: this call cost $0.2023 and is
+ *  stored as 21 cents across the pair. A `cost_micros` column would be
+ *  the real fix and it is not this change's to add.
+ */
+
+/** A dollar in millionths, and a cent in the same unit. */
+const MICROS_PER_DOLLAR = 1_000_000;
+const MICROS_PER_CENT = 10_000;
+
+function microsOf(usd: unknown): number {
+  return typeof usd === "number" && Number.isFinite(usd)
+    ? Math.round(usd * MICROS_PER_DOLLAR)
+    : 0;
+}
+
+/** Integer dollar-millionths to integer cents, half up, clamped at
+ *  zero -- both columns are `not null default 0 check (>= 0)` and a
+ *  negative would lose the whole write, transcript and recording with
+ *  it. */
+function centsFromMicros(micros: number): number {
+  if (!Number.isFinite(micros) || micros <= 0) return 0;
+  return Math.floor((micros + MICROS_PER_CENT / 2) / MICROS_PER_CENT);
+}
+
+/** The two cost columns, from the breakdown the message carried.
+ *
+ *  Vapi DOES split telephony from the model, so neither column has to
+ *  be invented. `transport` is the carriage and `vapi` is the platform
+ *  minute fee; together they are what this product calls telephony.
+ *  Everything else Vapi billed is the model pipeline -- `stt`, `llm`,
+ *  `tts`, and the smaller buckets the same breakdown carries (`chat`,
+ *  `knowledgeBaseCost`, `voicemailDetectionCost`,
+ *  `analysisCostBreakdown`, every one of them zero on this number
+ *  today).
+ *
+ *  Which is why the model column is `total - telephony` computed in
+ *  micros, rather than `llm + stt + tts`: every dollar Vapi billed then
+ *  lands in exactly one of the two columns, including the small buckets
+ *  and any bucket Vapi adds next year, so nothing silently drops out of
+ *  the spend figure `getTodayStats` adds up. `total` is also the better
+ *  number -- the four-decimal buckets on this call sum to $0.2024 while
+ *  `total` says $0.2023, because Vapi computes it from the unrounded
+ *  per-provider costs.
+ *
+ *  The partition is exact; the rounding is not. Each column is rounded
+ *  to the nearest cent once, so the pair can sit a cent either side of
+ *  `total` -- this call is 6c + 15c against a $0.2023 bill. That is the
+ *  lesser evil on purpose: deriving the second column by subtracting a
+ *  rounded first from a rounded total would make the pair add up
+ *  exactly and leave one of the two columns a cent wrong on every
+ *  single call, and both columns are read on their own.
+ *
+ *  With no `total`, the pipeline buckets are summed instead. With no
+ *  breakdown at all both columns are 0, which is the schema default: a
+ *  report carrying no cost must still store its transcript and its
+ *  recording. */
+function costsFrom(breakdown: Record<string, unknown>): {
+  telephonyCostCents: number;
+  llmCostCents: number;
+} {
+  /* CLAMPED HERE, NOT ONLY ON THE WAY OUT. centsFromMicros clamps each
+     COLUMN at zero, which is what the CHECK constraints need, but the
+     model column is computed as `billed - telephony` and a negative
+     telephony is therefore ADDED to it. One bucket below zero was enough:
+     {transport: -5, vapi: 0.05, llm: 0.10, total: 0.15} priced as
+     telephony 0c and agent 510c -- $5.10 of model cost on a fifteen-cent
+     call, in a column getTodayStats sums into the operator's spend
+     figure. Clamping each SIDE of the partition first is what makes the
+     subtraction safe, because there is then nothing negative left to
+     subtract. */
+  const telephonyMicros = Math.max(
+    0,
+    microsOf(breakdown.transport) + microsOf(breakdown.vapi),
+  );
+  const pipelineMicros = Math.max(
+    0,
+    microsOf(breakdown.llm) + microsOf(breakdown.stt) + microsOf(breakdown.tts),
+  );
+  const totalMicros = microsOf(breakdown.total);
+
+  // `total` is trusted only when it is a positive number that is at
+  // least as big as the part we can name. A body whose total is missing,
+  // zero or smaller than its own buckets is not describing a bill.
+  const billedMicros =
+    totalMicros > telephonyMicros + pipelineMicros
+      ? totalMicros
+      : telephonyMicros + pipelineMicros;
+
+  return {
+    telephonyCostCents: centsFromMicros(telephonyMicros),
+    // Both sides are already clamped, so this difference cannot go
+    // negative -- the Math.max is the guard for anyone who later changes
+    // how billedMicros is chosen, not for the arithmetic above it.
+    llmCostCents: centsFromMicros(Math.max(0, billedMicros - telephonyMicros)),
+  };
+}
+
+/** What this call produced, for `calls.outcome`.
+ *
+ *  The column is a `call_outcome` enum -- 'order', 'booking',
+ *  'question', 'transferred', 'spam', 'abandoned' (20260807000100) --
+ *  and a value outside it fails the UPDATE, taking the transcript, the
+ *  costs and the recording path with it. So this returns one of those
+ *  six or null.
+ *
+ *  Null is a real answer, not a gap. Every dashboard renders a call
+ *  with no outcome as a neutral "completed" chip, which is true;
+ *  lib/data.ts filters the calls list on `outcome = 'order'` and
+ *  `outcome = 'booking'`, so a label invented here is not decoration,
+ *  it is a row appearing in a filter it does not belong in.
+ *
+ *  NOTHING HERE IS READ OUT OF THE TRANSCRIPT. Every input is a row
+ *  this product itself wrote while the call was still up: `place_order`,
+ *  `book_table` and `take_message` each insert carrying the call's id,
+ *  which is why the status-update handler has to create the calls row
+ *  before any of them fire. "This call produced an order" is therefore a
+ *  fact in our own database. A caller who says "I'd like to order" and
+ *  then hangs up leaves no order row and gets no order label.
+ *
+ *  The ranking only decides the rare call that did two things:
+ *
+ *   - an order beats a booking beats everything else. Those two are the
+ *     outcomes this product exists to produce and each has money or a
+ *     table attached.
+ *   - a transfer ranks BELOW them, which is a change from writing
+ *     'transferred' whenever the call was handed over. Nothing is lost
+ *     by it: `transferred_to_human` is a column of its own and the
+ *     Today page counts transfers from that column, never from this
+ *     one. A caller who ordered and then asked an allergen question
+ *     really did order, and filing that call under the handoff would
+ *     take a real order out of the orders filter.
+ *   - a message ranks last and maps to 'question'. There is no
+ *     'message' in the enum, and of the six values only 'question'
+ *     names an enquiry -- `take_message` exists for the caller the
+ *     agent could not finish with, and the row it wrote carries who
+ *     rang, what about and what number to ring back, so this label only
+ *     has to get the category right.
+ *
+ *  'spam' and 'abandoned' are never produced here. `is_spam` is its own
+ *  column and nothing on this path sets it, and 'abandoned' could only
+ *  be guessed from "short call, nothing to show for it" -- which is
+ *  also exactly what a caller asking the closing time looks like. Both
+ *  stay available for a human to set. */
+export type CallArtifacts = {
+  transferred: boolean;
+  hasOrder: boolean;
+  hasBooking: boolean;
+  hasMessage: boolean;
+};
+
+export function outcomeFromArtifacts(artifacts: CallArtifacts): CallOutcome | null {
+  if (artifacts.hasOrder) return "order";
+  if (artifacts.hasBooking) return "booking";
+  if (artifacts.transferred) return "transferred";
+  if (artifacts.hasMessage) return "question";
+  return null;
 }
 
 /** The conversation, as the owner's call page reads it.
@@ -255,9 +428,18 @@ function durationSecondsFrom(startedAt: string | null, endedAt: string | null): 
   const end = Date.parse(endedAt);
   if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
   const seconds = Math.round((end - start) / 1000);
-  // There is no `durationSeconds` field in the report; it has to be
-  // computed. The column is `check (duration_seconds >= 0)`, and a
-  // clock that went backwards must not take the whole write with it.
+  /* Computed from the two timestamps rather than read off
+     `message.durationSeconds`, which the delivered body DOES carry -- an
+     earlier comment here said it did not, and that was wrong. It is
+     preferred anyway: startedAt and endedAt are the same two instants
+     this row stores as answered_at and ended_at, so the length always
+     agrees with the timeline drawn from them, and a body that arrives
+     without the convenience field still prices and still times.
+     (Measured on 01a00261: durationSeconds 68.514, this 69, the column
+     69.)
+
+     The column is `check (duration_seconds >= 0)`, and a clock that went
+     backwards must not take the whole write with it. */
   return seconds > 0 ? seconds : 0;
 }
 
@@ -292,17 +474,22 @@ export function parseServerMessage(body: unknown): ParsedServerMessage {
   if (type === "end-of-call-report") {
     const identity = identityFrom(message);
     const artifact = isPlainObject(message.artifact) ? message.artifact : null;
+    // TOP LEVEL of the message first -- that is where a live delivery
+    // puts it, and the nested call snapshot has no breakdown at all.
+    // See costsFrom.
     const call = isPlainObject(message.call) ? message.call : null;
-    const breakdown =
-      call && isPlainObject(call.costBreakdown) ? call.costBreakdown : {};
+    const breakdown = isPlainObject(message.costBreakdown)
+      ? message.costBreakdown
+      : call && isPlainObject(call.costBreakdown)
+        ? call.costBreakdown
+        : {};
 
     const endedReason = stringOrNull(message.endedReason);
     const answeredAt = stringOrNull(message.startedAt);
     const endedAt = stringOrNull(message.endedAt);
     const transferred = transferredFrom(message, endedReason);
 
-    const telephonyCostCents = toCents(breakdown.transport, breakdown.vapi);
-    const llmCostCents = toCents(breakdown.llm, breakdown.stt, breakdown.tts);
+    const { telephonyCostCents, llmCostCents } = costsFrom(breakdown);
 
     return {
       type: "end-of-call-report",

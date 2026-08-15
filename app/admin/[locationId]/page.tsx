@@ -234,6 +234,7 @@ export default async function AdminLocationPage({
                       <th>Outcome</th>
                       <th>Length</th>
                       <th>Cost</th>
+                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -262,6 +263,40 @@ export default async function AdminLocationPage({
                         </td>
                         <td className="num">
                           {money(c.telephony_cost_cents + c.llm_cost_cents)}
+                        </td>
+                        {/* The way in to the call. Until now these rows
+                            were plain <tr>s and an operator could not
+                            open a call at all -- the recording and the
+                            transcript existed in the database and on no
+                            screen they could reach.
+
+                            A .btn, not a bare anchor. The affordance has
+                            to be a RESTING one: this console has already
+                            been reported from an iPad, where :hover never
+                            fires, and .row-link resting is 13px of accent
+                            text with no rule and no box -- colour alone,
+                            which is exactly the "untappable" report.
+                            .btn-secondary carries a border at rest, so
+                            the row shows where to press before anything
+                            is touched, and the system supplies its hover,
+                            active and focus states.
+
+                            Its own cell, so the table keeps its
+                            semantics: five columns of call, one of
+                            action. The label repeats down the column, so
+                            each one names its own row for a screen
+                            reader rather than being the twentieth
+                            identical "Open". */}
+                        <td>
+                          <Link
+                            href={`/admin/${locationId}/calls/${c.id}`}
+                            className="btn btn-secondary"
+                            aria-label={`Open the ${timeIn(tz, c.started_at)} call from ${
+                              c.from_number ?? "an unknown caller"
+                            }`}
+                          >
+                            Open
+                          </Link>
                         </td>
                       </tr>
                     ))}

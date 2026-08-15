@@ -1,8 +1,10 @@
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
+  outcomeFromArtifacts,
   parseServerMessage,
   type AuditEvent,
+  type CallArtifacts,
   type CallIdentity,
   type EndOfCallReport,
 } from "@/lib/vapi/server-message";
@@ -258,6 +260,78 @@ async function recordStatusUpdate(
   await appendEvent(location, callId, audit);
 }
 
+/** What this call actually produced, read back out of our own tables.
+ *
+ *  `place_order`, `book_table` and `take_message` all run DURING the
+ *  call and insert carrying its id -- lib/agent/context.ts resolves that
+ *  id from provider_call_id, which is why the status-update handler has
+ *  to create the calls row before any of them fire. So by the time the
+ *  end-of-call-report lands, "this call produced an order" is already a
+ *  fact sitting in `orders`, and nothing has to be guessed from the
+ *  transcript. calls.outcome is derived from these three answers in
+ *  outcomeFromArtifacts.
+ *
+ *  Every select is scoped by location_id as well as call_id, exactly
+ *  like every other statement on this route: supabaseAdmin() bypasses
+ *  RLS, so the tenant predicate in the statement is the only boundary
+ *  there is. Neither value is caller-supplied -- `callId` is our own
+ *  primary key and `location.id` came from the authenticated secret --
+ *  so no id out of the request body reaches these filters.
+ *
+ *  A failed lookup answers "no". That loses a label and can never
+ *  invent one, which is the same direction of failure as the rest of
+ *  this file, and the same reason the error line carries the location
+ *  and the SQLSTATE and nothing else. */
+async function callArtifacts(
+  location: LocationRow,
+  callId: string,
+): Promise<Omit<CallArtifacts, "transferred">> {
+  const supabase = supabaseAdmin();
+
+  const exists = async (table: "orders" | "bookings" | "messages") => {
+    try {
+      const { data, error } = await supabase
+        .from(table)
+        .select("id")
+        .eq("location_id", location.id)
+        .eq("call_id", callId)
+        .limit(1);
+
+      if (error) {
+        console.error("[vapi] could not read what the call produced", {
+          location_id: location.id,
+          // A literal from this file, never anything out of the body.
+          table,
+          code: error.code,
+        });
+        return false;
+      }
+
+      return (data?.length ?? 0) > 0;
+    } catch (err) {
+      // Same posture as storeRecording: the label is the least valuable
+      // thing in this write and must never be what costs us the
+      // transcript. The error's name only -- a thrown transport error
+      // can carry the request, and the request carries the service-role
+      // key.
+      console.error("[vapi] could not read what the call produced", {
+        location_id: location.id,
+        table,
+        reason: err instanceof Error ? err.name : "unknown",
+      });
+      return false;
+    }
+  };
+
+  const [hasOrder, hasBooking, hasMessage] = await Promise.all([
+    exists("orders"),
+    exists("bookings"),
+    exists("messages"),
+  ]);
+
+  return { hasOrder, hasBooking, hasMessage };
+}
+
 /** The call is over: close the row, and store what it produced. */
 async function recordEndOfCall(
   location: LocationRow,
@@ -266,6 +340,11 @@ async function recordEndOfCall(
 ) {
   const callId = await callRowId(location, report.identity);
   if (!callId) return;
+
+  const outcome = outcomeFromArtifacts({
+    transferred: report.transferred,
+    ...(await callArtifacts(location, callId)),
+  });
 
   const patch: Record<string, unknown> = {
     status: report.status,
@@ -279,11 +358,12 @@ async function recordEndOfCall(
     llm_cost_cents: report.llmCostCents,
   };
 
-  // Only claimed when it happened. Everything else this call produced --
-  // an order, a booking, a message -- carries its own meaning through
-  // its own row, and overwriting that with a guess would be worse than
-  // leaving the column alone.
-  if (report.transferred) patch.outcome = "transferred";
+  // Set, never cleared. A null derivation means nothing in our own
+  // tables distinguishes this call, and every dashboard already renders
+  // that as a neutral "completed" chip -- which is true, where a guess
+  // would not be. Writing the null would also wipe an outcome a manager
+  // had set by hand, and staff may update `calls` (20260807000200_rls).
+  if (outcome) patch.outcome = outcome;
 
   const { error } = await supabaseAdmin()
     .from("calls")

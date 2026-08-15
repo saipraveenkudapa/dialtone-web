@@ -47,24 +47,40 @@ const LOCATION_B: Row = {
   recording_enabled: true,
 };
 
-/** An in-memory stand-in for the two tables and the one bucket this
- *  route touches, with the constraints that actually matter reproduced:
- *  the GLOBAL unique index on `calls.provider_call_id`, which is what
+/** An in-memory stand-in for the tables and the one bucket this route
+ *  touches, with the constraints that actually matter reproduced: the
+ *  GLOBAL unique index on `calls.provider_call_id`, which is what
  *  refuses a cross-tenant insert, and errors surfaced as PostgrestError
- *  shapes carrying a SQLSTATE. */
+ *  shapes carrying a SQLSTATE.
+ *
+ *  `orders` / `bookings` / `messages` are here because the route reads
+ *  them to decide `calls.outcome`. They were missing, and their absence
+ *  did not fail loudly: `store[table]` came back undefined, `.filter`
+ *  threw, and the route's own try/catch turned that into "this call
+ *  produced nothing" -- so every end-of-call test in this file was
+ *  quietly exercising the degraded branch and NO test ever saw an
+ *  outcome derived from a real row. */
 const store: {
   locations: Row[];
   calls: Row[];
   call_events: Row[];
+  orders: Row[];
+  bookings: Row[];
+  messages: Row[];
   uploads: { path: string; contentType: string; bytes: number }[];
   fail: { uploadError: unknown; callUpdateError: unknown };
 } = {
   locations: [],
   calls: [],
   call_events: [],
+  orders: [],
+  bookings: [],
+  messages: [],
   uploads: [],
   fail: { uploadError: null, callUpdateError: null },
 };
+
+type TableName = "locations" | "calls" | "call_events" | "orders" | "bookings" | "messages";
 
 let nextId = 1;
 
@@ -72,8 +88,9 @@ class Query {
   private op: "select" | "insert" | "update" = "select";
   private payload: Row | null = null;
   private filters: ((row: Row) => boolean)[] = [];
+  private cap: number | null = null;
 
-  constructor(private readonly table: "locations" | "calls" | "call_events") {}
+  constructor(private readonly table: TableName) {}
 
   select() {
     return this;
@@ -100,12 +117,22 @@ class Query {
     this.filters.push((row) => row[column] !== null && row[column] !== undefined);
     return this;
   }
+  /** The artifact lookup asks for one row and only cares whether it got
+   *  one, so an honest `.limit()` has to actually cut the list -- a
+   *  `return this` stub would let a query that reads every row of a
+   *  table pass for one that reads one. */
+  limit(n: number) {
+    this.cap = n;
+    return this;
+  }
 
   private run(): { data: Row[]; error: { code: string } | null } {
     const rows = store[this.table] as Row[];
     const matched = rows.filter((row) => this.filters.every((f) => f(row)));
 
-    if (this.op === "select") return { data: matched, error: null };
+    if (this.op === "select") {
+      return { data: this.cap === null ? matched : matched.slice(0, this.cap), error: null };
+    }
 
     if (this.op === "insert") {
       const payload = this.payload as Row;
@@ -146,7 +173,7 @@ class Query {
 
 vi.mock("@/lib/supabase/admin", () => ({
   supabaseAdmin: () => ({
-    from: (table: "locations" | "calls" | "call_events") => new Query(table),
+    from: (table: TableName) => new Query(table),
     storage: {
       from: (bucket: string) => ({
         upload: async (
@@ -226,6 +253,9 @@ beforeEach(() => {
   store.locations = [{ ...LOCATION_A }, { ...LOCATION_B }];
   store.calls = [];
   store.call_events = [];
+  store.orders = [];
+  store.bookings = [];
+  store.messages = [];
   store.uploads = [];
   store.fail = { uploadError: null, callUpdateError: null };
   nextId = 1;
@@ -442,6 +472,171 @@ describe("end-of-call-report", () => {
     expect(plain?.transferred_to_human).toBe(false);
     // The order / booking / message rows carry the meaning instead.
     expect(plain?.outcome).toBeUndefined();
+  });
+});
+
+// ── what the call produced, read off our own rows ──────────────────
+
+/** The decision itself is exhaustively covered in server-message.test.ts.
+ *  What is covered HERE is the wiring: that the route really goes and
+ *  looks in `orders` / `bookings` / `messages`, scoped to this call and
+ *  this restaurant, and puts the answer on the row.
+ *
+ *  This is the gap that made the fake worth extending. With those three
+ *  tables absent the lookup threw, the route caught it and answered "no
+ *  artifacts", and every assertion above still passed -- a green suite
+ *  over a code path that had never once run. */
+describe("the outcome written on a finished call", () => {
+  /** Opens the call so it has an id an artifact row can point at, the
+   *  way a real order does: the agent inserts it DURING the call,
+   *  carrying the call's primary key. */
+  async function openCall(providerCallId = "call-1") {
+    await post(statusUpdate("in-progress", providerCallId));
+    const call = store.calls.find((c) => c.provider_call_id === providerCallId);
+    expect(call, "the status-update should have opened the call").toBeDefined();
+    return call!.id as string;
+  }
+
+  it("says 'order' when an order row carries this call's id", async () => {
+    const callId = await openCall();
+    store.orders.push({ id: "order-1", location_id: "loc-a", call_id: callId });
+
+    await post(endOfCall());
+
+    expect(store.calls[0].outcome).toBe("order");
+  });
+
+  it("says 'booking' for a booking, and 'question' for a taken message", async () => {
+    const first = await openCall("call-b");
+    store.bookings.push({ id: "booking-1", location_id: "loc-a", call_id: first });
+    await post(endOfCall("call-b"));
+    expect(store.calls.find((c) => c.provider_call_id === "call-b")?.outcome).toBe("booking");
+
+    const second = await openCall("call-m");
+    store.messages.push({ id: "message-1", location_id: "loc-a", call_id: second });
+    await post(endOfCall("call-m"));
+    // There is no 'message' in the call_outcome enum; of the six,
+    // 'question' is the one that names an enquiry.
+    expect(store.calls.find((c) => c.provider_call_id === "call-m")?.outcome).toBe("question");
+  });
+
+  it("ranks a real order above the transfer that followed it", async () => {
+    // A call that took an order and was THEN handed to a human is an
+    // order: transferred_to_human is its own column and the Today page
+    // counts handoffs from there, so ranking the transfer first would
+    // take a real order out of the `outcome = 'order'` filter that
+    // lib/data.ts runs.
+    const callId = await openCall();
+    store.orders.push({ id: "order-1", location_id: "loc-a", call_id: callId });
+
+    await post(endOfCall("call-1", { destination: { type: "number", number: "+1510" } }));
+
+    expect(store.calls[0]).toMatchObject({ outcome: "order", transferred_to_human: true });
+  });
+
+  it("does not read another restaurant's rows, or another call's", async () => {
+    const callId = await openCall();
+    // Same call id, wrong restaurant: only reachable because
+    // supabaseAdmin() bypasses RLS, which is exactly why the statement
+    // carries the location predicate itself.
+    store.orders.push({ id: "order-x", location_id: "loc-b", call_id: callId });
+    // Right restaurant, a different call.
+    store.bookings.push({ id: "booking-x", location_id: "loc-a", call_id: "some-other-call" });
+
+    await post(endOfCall());
+
+    expect(store.calls[0].outcome).toBeUndefined();
+  });
+
+  it("leaves an outcome alone rather than clearing it when it finds nothing", async () => {
+    // Staff may set an outcome by hand on their own screen. NULL is a
+    // thing this route declines to write, never a thing it writes.
+    const callId = await openCall();
+    const call = store.calls.find((c) => c.id === callId)!;
+    call.outcome = "spam";
+
+    await post(endOfCall());
+
+    expect(store.calls[0].outcome).toBe("spam");
+  });
+
+  it("still closes the call when the artifact lookup fails", async () => {
+    // The label is the least valuable thing in this write and must never
+    // be what costs us the transcript.
+    const callId = await openCall();
+    store.orders.push({ id: "order-1", location_id: "loc-a", call_id: callId });
+    const orders = store.orders;
+    // A table that throws on read, the way the missing tables used to.
+    Object.defineProperty(store, "orders", {
+      configurable: true,
+      get() {
+        throw new Error("relation \"orders\" does not exist");
+      },
+    });
+
+    try {
+      const res = await post(endOfCall());
+      expect(res.status).toBe(200);
+      expect(store.calls[0]).toMatchObject({
+        status: "completed",
+        transcript_status: "ready",
+      });
+      expect(store.calls[0].outcome).toBeUndefined();
+    } finally {
+      Object.defineProperty(store, "orders", {
+        configurable: true,
+        writable: true,
+        value: orders,
+      });
+    }
+
+    // And the failure was logged without the error's text, which on a
+    // transport error can carry the request and so the service-role key.
+    const logged = JSON.stringify(errorSpy.mock.calls);
+    expect(logged).toContain("loc-a");
+    expect(logged).not.toContain("does not exist");
+  });
+});
+
+// ── the cost, off the body Vapi actually posts ─────────────────────
+
+describe("what a finished call cost", () => {
+  /** The delivered end-of-call body carries `costBreakdown` at the TOP
+   *  LEVEL of `message`. `message.call` is a creation-time snapshot --
+   *  it still reads `status: "ringing"`, `cost: 0`, and has no breakdown
+   *  key at all -- and reading the cost from there is why every
+   *  Vapi-logged call showed $0.00. The fixture above uses the nested
+   *  shape on purpose, because GET /call/<id> and a replayed body put it
+   *  there and both must still price; this is the other one. */
+  it("prices the shape the webhook actually delivers, not just the nested one", async () => {
+    await post({
+      ...endOfCall("call-live"),
+      message: {
+        ...endOfCall("call-live").message,
+        // Real figures from provider_call_id 01a00261.
+        costBreakdown: {
+          transport: 0,
+          stt: 0.0116,
+          llm: 0.1031,
+          tts: 0.0306,
+          vapi: 0.0571,
+          chat: 0,
+          total: 0.2023,
+        },
+        // What the snapshot really looks like when it arrives.
+        call: { id: "call-live", createdAt: "2026-08-14T14:37:05.033Z", cost: 0 },
+      },
+    });
+
+    const call = store.calls.find((c) => c.provider_call_id === "call-live");
+    // transport + vapi is the carriage and the platform minute fee;
+    // everything else Vapi billed is the model side, taken as
+    // total - telephony so buckets we do not name are still counted.
+    expect(call?.telephony_cost_cents).toBe(6);
+    expect(call?.llm_cost_cents).toBe(15);
+    // Integer cents, not floats -- this money is added up elsewhere.
+    expect(Number.isInteger(call?.telephony_cost_cents)).toBe(true);
+    expect(Number.isInteger(call?.llm_cost_cents)).toBe(true);
   });
 });
 

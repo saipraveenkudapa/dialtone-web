@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { callStatusFromEndedReason, parseServerMessage } from "./server-message";
+import {
+  callStatusFromEndedReason,
+  outcomeFromArtifacts,
+  parseServerMessage,
+} from "./server-message";
 
 /** The shape Vapi really delivers to a phone number's `server.url`,
- *  narrowed to the keys this module reads. Built from the live call
- *  object 01a000b4-8289-788f-9acc-b83483497bc1 on +15106268819, so the
- *  field names, the nesting and the units are the ones production sends
- *  -- `costBreakdown` in USD floats, no `durationSeconds` anywhere, and
- *  `artifact.messages[0]` holding the whole system prompt. */
+ *  narrowed to the keys this module reads. Not the shape of the call
+ *  object the REST API returns, which is a different thing: this is
+ *  copied from the webhook body Vapi actually POSTed to
+ *  /api/vapi/webhook (readable back through Vapi's own read-only
+ *  `GET /logs?type=Webhook`), so the field names, the nesting and the
+ *  units are the ones production sends.
+ *
+ *  Three of those details are load-bearing and each has a test below:
+ *  `costBreakdown` sits at the TOP LEVEL of the message and NOT on
+ *  `message.call`; the costs are USD floats; and `artifact.messages[0]`
+ *  is the system entry holding the whole prompt. */
 function report(overrides: Record<string, unknown> = {}) {
   return {
     message: {
@@ -16,22 +26,36 @@ function report(overrides: Record<string, unknown> = {}) {
       endedAt: "2026-08-14T14:37:49.063Z",
       phoneNumber: { id: "62aa9658", number: "+15106268819", name: "Nonna Rosa" },
       customer: { number: "+13477518097" },
+      cost: 0.2023,
+      // Top level of the message. This is the only place the delivered
+      // body carries the money.
+      costBreakdown: {
+        transport: 0,
+        stt: 0.0116,
+        llm: 0.1031,
+        tts: 0.0306,
+        vapi: 0.0571,
+        chat: 0,
+        total: 0.2023,
+        llmPromptTokens: 34200,
+        ttsCharacters: 611,
+        knowledgeBaseCost: 0,
+        voicemailDetectionCost: 0,
+        analysisCostBreakdown: { summary: 0, structuredData: 0, successEvaluation: 0 },
+      },
       call: {
         id: "01a000b4-8289-788f-9acc-b83483497bc1",
         type: "inboundPhoneCall",
-        status: "ended",
+        // `message.call` is the call as it was CREATED, not as it
+        // ended. The report that closes the call really does carry
+        // `status: "ringing"` and `cost: 0` here, and no costBreakdown
+        // key at all -- which is why reading the money from this object
+        // put $0.00 against every Vapi call in the database.
+        status: "ringing",
+        cost: 0,
         createdAt: "2026-08-14T14:37:05.033Z",
         phoneCallProvider: "vapi",
         transport: { provider: "vapi.sip" },
-        costBreakdown: {
-          transport: 0,
-          stt: 0.0076,
-          llm: 0.0719,
-          tts: 0.0173,
-          vapi: 0.0365,
-          chat: 0,
-          total: 0.1332,
-        },
       },
       artifact: {
         transcript: "AI: Hi. Thanks for calling Nonna Rosa.\nUser: My card is 4111 1111 1111 1111.",
@@ -83,32 +107,191 @@ describe("end-of-call-report", () => {
   });
 
   // Money is integer cents everywhere in this product; Vapi reports USD
-  // floats. Five buckets, two columns.
-  it("folds five USD float cost buckets into two integer-cent columns", () => {
+  // floats. This is the defect: the mapping read
+  // `message.call.costBreakdown`, the delivered body has no such key,
+  // and so every Vapi call in the database reads $0.00 while Vapi bills
+  // for it.
+  it("reads the cost from the top level of the message, where it really is", () => {
     const parsed = parseServerMessage(report());
     if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
 
-    // transport 0 + vapi 0.0365 -> 4c
-    expect(parsed.report.telephonyCostCents).toBe(4);
-    // llm 0.0719 + stt 0.0076 + tts 0.0173 = 0.0968 -> 10c
-    expect(parsed.report.llmCostCents).toBe(10);
+    // transport 0 + vapi 0.0571 = $0.0571 -> 6c
+    expect(parsed.report.telephonyCostCents).toBe(6);
+    // total 0.2023 - telephony 0.0571 = $0.1452 -> 15c
+    expect(parsed.report.llmCostCents).toBe(15);
     expect(Number.isInteger(parsed.report.telephonyCostCents)).toBe(true);
     expect(Number.isInteger(parsed.report.llmCostCents)).toBe(true);
   });
 
-  it("never produces a negative cost, whatever the body says", () => {
+  it("prefers the message's own breakdown over the nested call's", () => {
+    // A live delivery only ever carries the message-level one. This says
+    // which wins if a body ever carried both, and the answer is the one
+    // the live delivery uses.
     const parsed = parseServerMessage(
       report({
         call: {
           id: "c1",
           createdAt: "2026-08-14T14:37:05.033Z",
-          costBreakdown: { transport: -5, vapi: -1, llm: "free", stt: null, tts: NaN },
+          costBreakdown: { transport: 9.99, vapi: 9.99, llm: 9.99, stt: 9.99, tts: 9.99 },
         },
       }),
     );
     if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
-    // Both columns are `not null default 0 check (>= 0)`.
+    expect(parsed.report.telephonyCostCents).toBe(6);
+    expect(parsed.report.llmCostCents).toBe(15);
+  });
+
+  // `GET /call/<id>` puts the same figures on the call object itself, so
+  // a body assembled from the REST call rather than from a live delivery
+  // -- a replay, a backfill -- prices instead of landing as free.
+  it("falls back to the call object's breakdown when the message has none", () => {
+    const parsed = parseServerMessage(
+      report({
+        costBreakdown: undefined,
+        call: {
+          id: "c1",
+          createdAt: "2026-08-14T14:37:05.033Z",
+          costBreakdown: { transport: 0, vapi: 0.0571, stt: 0.0116, llm: 0.1031, tts: 0.0306 },
+        },
+      }),
+    );
+    if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
+    expect(parsed.report.telephonyCostCents).toBe(6);
+    expect(parsed.report.llmCostCents).toBe(15);
+  });
+
+  // A report with no cost in it still has to land. The transcript and
+  // the recording are the parts nobody can re-derive later; the cost can
+  // be read back off Vapi's own API.
+  it("stores no cost rather than failing when the report carries none", () => {
+    for (const costBreakdown of [undefined, {}, { total: 0 }, "0.20", []]) {
+      const parsed = parseServerMessage(
+        report({
+          costBreakdown,
+          call: { id: "c1", createdAt: "2026-08-14T14:37:05.033Z", cost: 0 },
+        }),
+      );
+      if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
+
+      expect(parsed.report.telephonyCostCents).toBe(0);
+      expect(parsed.report.llmCostCents).toBe(0);
+      // and everything else the report carried survived it
+      expect(parsed.report.transcript.lines).toHaveLength(2);
+      expect(parsed.report.recordingUrl).toContain("X-Amz-Signature");
+      expect(parsed.report.durationSeconds).toBe(44);
+    }
+  });
+
+  // Multiplying a USD float by 100 is how a cent goes missing. Each
+  // bucket becomes an integer number of dollar-millionths first, and
+  // every sum and difference after that is integer arithmetic.
+  it("rounds half up, and not through a float multiplication", () => {
+    // What the naive route does to $1.005, in IEEE 754: 100.49999999999999.
+    expect(Math.round(1.005 * 100)).toBe(100);
+
+    const parsed = parseServerMessage(
+      report({ costBreakdown: { transport: 1.005, vapi: 0, total: 1.005 } }),
+    );
+    if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
+    expect(parsed.report.telephonyCostCents).toBe(101);
+    expect(parsed.report.llmCostCents).toBe(0);
+  });
+
+  // `knowledgeBaseCost`, `voicemailDetectionCost` and the analysis
+  // buckets are real charges that `llm + stt + tts` does not include.
+  // Deriving the model column from `total` is what keeps them in the
+  // spend figure getTodayStats adds up instead of dropping them.
+  it("keeps the buckets it cannot name, by deriving the model column from total", () => {
+    const parsed = parseServerMessage(
+      report({
+        costBreakdown: {
+          transport: 0,
+          vapi: 0.05,
+          stt: 0.01,
+          llm: 0.1,
+          tts: 0.03,
+          knowledgeBaseCost: 0.02,
+          total: 0.21,
+        },
+      }),
+    );
+    if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
+    expect(parsed.report.telephonyCostCents).toBe(5);
+    // $0.21 - $0.05 = $0.16, not the 14c that llm + stt + tts alone give.
+    expect(parsed.report.llmCostCents).toBe(16);
+  });
+
+  it("falls back to the named buckets when the report carries no total", () => {
+    const parsed = parseServerMessage(
+      report({
+        costBreakdown: { transport: 0, vapi: 0.0571, stt: 0.0116, llm: 0.1031, tts: 0.0306 },
+      }),
+    );
+    if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
+    expect(parsed.report.telephonyCostCents).toBe(6);
+    // 0.0116 + 0.1031 + 0.0306 summed as integers is $0.1453 -> 15c. As
+    // floats it is 0.14529999999999998, which is the whole problem.
+    expect(parsed.report.llmCostCents).toBe(15);
+  });
+
+  it("never produces a negative cost, whatever the body says", () => {
+    const parsed = parseServerMessage(
+      report({
+        costBreakdown: {
+          transport: -5,
+          vapi: -1,
+          llm: "free",
+          stt: null,
+          tts: NaN,
+          total: -7,
+        },
+      }),
+    );
+    if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
+    // Both columns are `not null default 0 check (>= 0)`, and a failed
+    // CHECK loses the whole UPDATE -- transcript and recording with it.
     expect(parsed.report.telephonyCostCents).toBe(0);
+    expect(parsed.report.llmCostCents).toBe(0);
+  });
+
+  /* The shape the test above cannot see. Every bucket negative at once
+     happens to cancel: the total is negative too, so the difference that
+     feeds the model column stays small and both columns clamp to zero
+     for the wrong reason. ONE negative bucket among positives is the
+     case that bites -- a negative telephony was subtracted from a
+     positive total and landed in the model column as a credit turned
+     into a charge. Real bodies do carry a negative bucket: a credit, a
+     provider refund, a correction Vapi applies after the fact. */
+  it("does not turn one negative bucket into a charge on the other column", () => {
+    const parsed = parseServerMessage(
+      report({
+        costBreakdown: { transport: -5, vapi: 0.05, llm: 0.1, total: 0.15 },
+      }),
+    );
+    if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
+
+    // Before the clamp moved ahead of the subtraction this read 0 and
+    // 510: $5.10 of model cost on a fifteen-cent call, which
+    // getTodayStats then added to the operator's spend figure.
+    expect(parsed.report.telephonyCostCents).toBe(0);
+    expect(parsed.report.llmCostCents).toBe(15);
+    // And the pair still cannot exceed what Vapi actually billed.
+    expect(
+      parsed.report.telephonyCostCents + parsed.report.llmCostCents,
+    ).toBeLessThanOrEqual(16);
+  });
+
+  // The mirror image: the negative sits in the pipeline instead, so the
+  // telephony column is the one that must not absorb it.
+  it("does not let a negative pipeline bucket inflate the telephony column", () => {
+    const parsed = parseServerMessage(
+      report({
+        costBreakdown: { transport: 0.05, vapi: 0, llm: -5, total: 0.05 },
+      }),
+    );
+    if (parsed.type !== "end-of-call-report") throw new Error("wrong type");
+
+    expect(parsed.report.telephonyCostCents).toBe(5);
     expect(parsed.report.llmCostCents).toBe(0);
   });
 
@@ -253,6 +436,97 @@ describe("endedReason to call_status", () => {
 
   it("does not call a call completed when nothing says it ended", () => {
     expect(callStatusFromEndedReason(null, null)).toBe("in_progress");
+  });
+});
+
+describe("what the call produced", () => {
+  const nothing = {
+    transferred: false,
+    hasOrder: false,
+    hasBooking: false,
+    hasMessage: false,
+  };
+
+  // `calls.outcome` is a `call_outcome` enum with exactly six values
+  // (20260807000100_schema.sql). A seventh fails the UPDATE, and that
+  // UPDATE is the one carrying the transcript, the costs and the
+  // recording path -- so a bad label does not mislabel a call, it loses
+  // one. Exhaustive because there are only sixteen inputs.
+  it("only ever returns a value the enum allows, or null", () => {
+    const allowed = ["order", "booking", "question", "transferred"];
+
+    for (const transferred of [false, true]) {
+      for (const hasOrder of [false, true]) {
+        for (const hasBooking of [false, true]) {
+          for (const hasMessage of [false, true]) {
+            const outcome = outcomeFromArtifacts({
+              transferred,
+              hasOrder,
+              hasBooking,
+              hasMessage,
+            });
+            if (outcome === null) continue;
+            // 'spam' has its own boolean column and nothing on this path
+            // sets it; 'abandoned' could only be guessed from "short
+            // call, nothing to show for it", which is also what asking
+            // the closing time looks like. Neither is ever produced.
+            expect(allowed).toContain(outcome);
+          }
+        }
+      }
+    }
+  });
+
+  // Every one of these is a row this product wrote during the call --
+  // place_order, book_table, take_message -- not a reading of anything
+  // the caller said.
+  it("names each thing the call left behind in our own tables", () => {
+    expect(outcomeFromArtifacts({ ...nothing, hasOrder: true })).toBe("order");
+    expect(outcomeFromArtifacts({ ...nothing, hasBooking: true })).toBe("booking");
+    expect(outcomeFromArtifacts({ ...nothing, transferred: true })).toBe("transferred");
+    // No 'message' in the enum. Of the six, only 'question' names an
+    // enquiry, and the message row itself carries who rang, what about
+    // and what number to ring back.
+    expect(outcomeFromArtifacts({ ...nothing, hasMessage: true })).toBe("question");
+  });
+
+  // The point of deriving this from rows rather than from words: a
+  // caller who said "I'd like to order" and hung up produced nothing,
+  // and gets no label. Null renders as the neutral "completed" chip,
+  // which is true; 'order' would put the call in the orders filter.
+  it("leaves a call with nothing to show for it unlabelled", () => {
+    expect(outcomeFromArtifacts(nothing)).toBeNull();
+  });
+
+  // A caller who ordered and then asked an allergen question really did
+  // order. transferred_to_human is a column of its own and the Today
+  // page counts handoffs from there, so nothing is lost by ranking the
+  // order first -- while ranking the transfer first would take a real
+  // order out of the orders filter.
+  it("keeps the order when the same call was also handed to a person", () => {
+    expect(outcomeFromArtifacts({ ...nothing, hasOrder: true, transferred: true })).toBe(
+      "order",
+    );
+    expect(outcomeFromArtifacts({ ...nothing, hasBooking: true, transferred: true })).toBe(
+      "booking",
+    );
+  });
+
+  it("prefers the order when one call did more than one thing", () => {
+    expect(
+      outcomeFromArtifacts({
+        transferred: true,
+        hasOrder: true,
+        hasBooking: true,
+        hasMessage: true,
+      }),
+    ).toBe("order");
+    expect(outcomeFromArtifacts({ ...nothing, hasBooking: true, hasMessage: true })).toBe(
+      "booking",
+    );
+    expect(outcomeFromArtifacts({ ...nothing, transferred: true, hasMessage: true })).toBe(
+      "transferred",
+    );
   });
 });
 

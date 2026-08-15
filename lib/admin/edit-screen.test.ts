@@ -33,6 +33,39 @@ vi.mock("@/app/admin/[locationId]/edit/actions", () => ({
   saveServiceAction: vi.fn(),
 }));
 
+/* EditTabs' leave guard holds the router, because answering "leave" has
+   to complete the navigation it just cancelled. useRouter() reads a
+   React context that only the App Router mounts, and throws "invariant
+   expected app router to be mounted" anywhere else -- including here,
+   where renderToStaticMarkup is deliberately rendering one client
+   component on its own with no app around it.
+
+   So this mock is the router the same way the mock above is the actions
+   module: the environment the component is entitled to assume in the
+   place it actually runs, supplied so the assertions below can be about
+   markup.
+
+   It is not a stand-in for testing the guard, and nothing here may
+   assert on `push`, because nothing here can make it fire: this suite is
+   the "node" project, which has no DOM, so no effect runs and no click
+   is dispatched. WHAT THE GUARD ACTUALLY DOES IS TESTED IN
+   components/admin/EditTabs.guard.test.tsx -- the "jsdom" project added
+   to vitest.config.ts for exactly this -- where real anchors are pressed
+   with real MouseEvents and the assertions are on defaultPrevented, on
+   which presses are let through, and on where router.push is called
+   with. What remains below is a claim about the SENTENCE an operator
+   reads, which is a different thing and belongs here. */
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
+
 const { AnsweringSection, BusinessSection, ServiceSection } = await import(
   "@/components/admin/EditSections"
 );
@@ -728,7 +761,26 @@ describe("the sentence under the strip", () => {
     const tabs = source("../../components/admin/EditTabs.tsx");
     expect(tabs).toContain("unsavedLabels.length > 0");
     expect(tabs).toContain("Unsaved edits on {sentenceList(unsavedLabels)}");
-    expect(tabs).toMatch(/leaving this page loses them/);
+
+    /* This sentence used to end "leaving this page loses them", which was
+       the truth while beforeunload was the only guard. It is now a lie:
+       a link out of the page is intercepted and asks first. A warning
+       that overstates the danger gets disbelieved, and then the one case
+       that IS still lossy gets disbelieved with it -- so the sentence has
+       to draw the line where the code draws it.
+
+       Both halves are asserted, and deliberately so. The first is the
+       promise the guard makes -- and it is a promise the guard is now
+       held to by an actual dispatched click, in
+       components/admin/EditTabs.guard.test.tsx; this assertion is only
+       that the page SAYS it. The second is the hole it does not cover,
+       because popstate arrives after the history entry has already
+       changed and "cancelling" it means fighting the operator's own Back
+       button. If someone ever guards Back too, this test is what tells
+       them the sentence has to stop saying it doesn't. */
+    expect(tabs).toMatch(/link out of this page asks first/i);
+    expect(tabs).toMatch(/Back button does not, and\s+loses them/i);
+
     // Not on screen when there is nothing to say.
     expect(strip()).not.toContain("edit-tabs-note");
   });

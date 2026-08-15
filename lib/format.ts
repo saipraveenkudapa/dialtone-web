@@ -55,3 +55,52 @@ export function relative(iso: string, now = Date.now()) {
   if (hours < 24) return `${hours} hr ago`;
   return `${Math.round(hours / 24)} d ago`;
 }
+
+/* ── what a call's transcript column means, in words ────────────────── */
+
+/** The four states `calls.transcript_status` can hold, said the way an
+ *  operator or an owner would say them.
+ *
+ *  Here rather than on a page because both call screens read the same
+ *  column and must not describe it differently -- an operator on the
+ *  phone to a restaurant is looking at the same call the restaurant is.
+ *  `null` is a row written before the column existed. */
+const TRANSCRIPT_STATE: Record<string, string> = {
+  ready: "ready",
+  pending: "still being written",
+  failed: "could not be taken",
+  skipped: "not taken for this call",
+};
+
+export function transcriptState(status: string | null): string {
+  if (!status) return "not recorded";
+  return TRANSCRIPT_STATE[status] ?? status;
+}
+
+/** The extra sentence a call screen owes the reader, or null when the
+ *  player's own line already says the true thing.
+ *
+ *  <CallPlayer> ends an empty transcript with "It appears once the call
+ *  is processed", which is exactly right while the end-of-call report is
+ *  still in flight and wrong once it has arrived without one. So this
+ *  fires for `failed` and `skipped` and NOTHING ELSE.
+ *
+ *  NOT for 'pending', which is the schema default (20260807000100) and
+ *  therefore the state of every call whose report has not landed --
+ *  including one an operator is looking at while it is still up. Saying
+ *  "nothing more will arrive" about a report that is on its way is a
+ *  false statement on the one screen somebody opens to find out why a
+ *  call looks wrong, and it contradicted the player's own sentence
+ *  directly above it. Two sentences, both on screen, and they could not
+ *  both be true.
+ *
+ *  Not for 'ready' or null either, and not for an enum value added
+ *  later: a state this function does not recognise is not one it gets to
+ *  make a promise about. */
+export function transcriptNote(status: string | null): string | null {
+  if (status !== "failed" && status !== "skipped") return null;
+  return (
+    `Transcript ${transcriptState(status)}. Nothing more will arrive for ` +
+    `this call unless the end-of-call report is replayed.`
+  );
+}

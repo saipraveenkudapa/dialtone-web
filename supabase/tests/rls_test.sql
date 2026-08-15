@@ -65,6 +65,18 @@ insert into storage.objects (bucket_id, name, metadata) values
   ('menu-uploads', 'b10c0000-0000-0000-0000-00000000000b/e0000000-0000-4000-8000-00000000000e.pdf',
    jsonb_build_object('size', 4096, 'mimetype', 'application/pdf'));
 
+-- One recording each, in the PRIVATE call-recordings bucket. This is the
+-- most sensitive object this product stores -- a caller's actual voice --
+-- and its bucket and policy lived only in the Supabase dashboard until
+-- 20260814020000_call_recordings_bucket.sql wrote them down. Same tenant
+-- shape as above: the first path segment is the whole boundary, and both
+-- writers spell it `<location_id>/<call_id>.<ext>`.
+insert into storage.objects (bucket_id, name, metadata) values
+  ('call-recordings', 'a10c0000-0000-0000-0000-00000000000a/cc100000-0000-0000-0000-0000000000cc.wav',
+   jsonb_build_object('size', 720896, 'mimetype', 'audio/wav')),
+  ('call-recordings', 'b10c0000-0000-0000-0000-00000000000b/cd100000-0000-0000-0000-0000000000cd.wav',
+   jsonb_build_object('size', 350208, 'mimetype', 'audio/wav'));
+
 insert into results
 select 'trigger forces menu item to its category location',
        (select location_id::text from menu_items where name = 'Cacio e Pepe'),
@@ -187,6 +199,37 @@ insert into results values (
    from storage.buckets where id = 'menu-uploads'),
   'false 10485760 4');
 
+-- ── owner A's call recordings ────────────────────────────────────────
+--
+-- The same three questions asked of the bucket holding callers' voices.
+-- Until 20260814020000 there was no migration to ask them of: the bucket
+-- and its policy were dashboard state, so a flag flipped by hand would
+-- have made every recording in the product world-readable with nothing
+-- in the repo, the test suite or CI to notice.
+insert into results values (
+  'owner A: own recording visible',
+  (select count(*)::text from storage.objects where bucket_id = 'call-recordings'),
+  '1');
+
+insert into results values (
+  'owner A: rival recording hidden',
+  (select count(*)::text from storage.objects
+   where bucket_id = 'call-recordings' and name like 'b10c%'),
+  '0');
+
+insert into results values (
+  'call-recordings has a read policy',
+  (select count(*)::text from pg_policies
+   where schemaname = 'storage' and tablename = 'objects'
+     and cmd = 'SELECT' and qual like '%call-recordings%'),
+  '1');
+
+-- The single most consequential boolean in this product's storage.
+insert into results values (
+  'call-recordings is private',
+  (select public::text from storage.buckets where id = 'call-recordings'),
+  'false');
+
 -- ── owner B ──────────────────────────────────────────────────────────
 
 set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}';
@@ -196,6 +239,8 @@ insert into results values ('owner B: own location visible', (select count(*)::t
 insert into results values ('owner B: A menu hidden', (select count(*)::text from public.menu_items where name = 'Cacio e Pepe'), '0');
 insert into results values ('owner B: A menu imports hidden', (select count(*)::text from public.menu_imports where original_filename = 'front.jpg'), '0');
 insert into results values ('owner B: A menu files hidden', (select count(*)::text from storage.objects where name like 'a10c%'), '0');
+insert into results values ('owner B: A recordings hidden', (select count(*)::text from storage.objects where bucket_id = 'call-recordings' and name like 'a10c%'), '0');
+insert into results values ('owner B: own recording visible', (select count(*)::text from storage.objects where bucket_id = 'call-recordings'), '1');
 
 -- ── anonymous ────────────────────────────────────────────────────────
 
@@ -207,6 +252,9 @@ insert into results values ('anon: menu', (select count(*)::text from public.men
 insert into results values ('anon: calls', (select count(*)::text from public.calls), '0');
 insert into results values ('anon: menu imports', (select count(*)::text from public.menu_imports), '0');
 insert into results values ('anon: menu files', (select count(*)::text from storage.objects where bucket_id = 'menu-uploads'), '0');
+-- The one an unversioned `public = true` would have broken silently:
+-- a public bucket is readable without a policy and without a session.
+insert into results values ('anon: call recordings', (select count(*)::text from storage.objects where bucket_id = 'call-recordings'), '0');
 
 -- ── the voice agent, minted for location A ───────────────────────────
 

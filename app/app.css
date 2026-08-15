@@ -640,6 +640,15 @@ a:hover { color: var(--color-accent); }
 .transcript .line button:hover {
   background: color-mix(in srgb, var(--color-text) 5%, transparent);
 }
+/* A transcript with no recording behind it: the words are still worth
+   reading, but there is nothing to jump to, so the line stops offering.
+   Same ink and same layout -- only the invitation is withdrawn. */
+.transcript .line button:disabled {
+  cursor: default;
+}
+.transcript .line button:disabled:hover {
+  background: transparent;
+}
 /* The line being spoken right now, so the eye can follow the audio. */
 .transcript .line.is-current button {
   border-left-color: var(--color-accent);
@@ -1848,11 +1857,23 @@ iframe.review-image { height: 62vh; }
 .edit-tabs .tag { white-space: nowrap; }
 
 /* The chips say which sections are unsaved; this says what happens to
-   them, because the one loss no guard on this page can catch is a
-   client-side route change and the button that does it is the largest
-   one in the page head. Not muted: it is the only warning an operator
-   gets, and it is only on screen when there is something to warn about. */
+   them. Not muted, and still here now that EditTabs.tsx's useLeaveGuard
+   stops a client-side route change and asks: a warning that only arrives
+   in a dialog arrives after the operator has already pressed the largest
+   button in the page head, and this line is what lets them decide to
+   save first. On screen only when there is something to warn about. */
 .edit-tabs-note { margin: 0; }
+
+/* The leave-guard's dialog is a SIBLING of the eight panels, not a child
+   of one, so `.setup-stack .dialog-backdrop` below does not reach it and
+   it needs the rule in its own name. Same reason and the same value as
+   that rule, .review .dialog-backdrop and .golive .dialog-backdrop: a
+   fixed backdrop at z-index auto paints under any positioned box that
+   outranks it, and every panel on this page holds a .card.blueprint,
+   which is position: relative. Stated rather than left to the fact that
+   it is currently the last element in the fragment -- tree order is not
+   something the next reader can see from a stylesheet. */
+.edit-leave-backdrop { z-index: 5; }
 
 /* The one place industry.css's ring cannot work, and it is the tab the
    keyboard always lands on. `.seg-opt:has(input:focus-visible)` draws

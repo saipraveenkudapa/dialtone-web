@@ -2,9 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Corners } from "@/components/Corners";
 import { CallPlayer } from "@/components/CallPlayer";
+import { CallCostCard, CallTimelineCard } from "@/components/CallFacts";
 import { CallNotes } from "@/components/CallNotes";
 import { getCall, getCurrentLocation, getRecordingUrl } from "@/lib/data";
-import { OUTCOME_TAG, money, mmss, relative, timeIn } from "@/lib/format";
+import { OUTCOME_TAG, money, relative, timeIn } from "@/lib/format";
 
 export default async function CallDetailPage({
   params,
@@ -20,39 +21,6 @@ export default async function CallDetailPage({
   const { call, order, booking, messages } = data;
   const tz = location.timezone;
   const recordingUrl = await getRecordingUrl(call.recording_path);
-
-  const started = new Date(call.started_at).getTime();
-  const answered = call.answered_at ? new Date(call.answered_at).getTime() : null;
-  const ended = call.ended_at ? new Date(call.ended_at).getTime() : null;
-
-  const timeline = [
-    { what: "Rang", at: call.started_at, delta: null as string | null },
-    call.answered_at
-      ? {
-          what: "Answered",
-          at: call.answered_at,
-          delta: `${Math.round((answered! - started) / 1000)}s ringing`,
-        }
-      : null,
-    call.ended_at
-      ? {
-          what: "Ended",
-          at: call.ended_at,
-          delta: answered
-            ? `${mmss((ended! - answered) / 1000)} talking`
-            : "never answered",
-        }
-      : null,
-  ].filter(Boolean) as { what: string; at: string; delta: string | null }[];
-
-  const costs = [
-    { label: "Telephony", value: money(call.telephony_cost_cents) },
-    { label: "Agent", value: money(call.llm_cost_cents) },
-    {
-      label: "Total",
-      value: money(call.telephony_cost_cents + call.llm_cost_cents),
-    },
-  ];
 
   return (
     <>
@@ -88,29 +56,17 @@ export default async function CallDetailPage({
         </div>
 
         <div className="panel">
-          <div className="card blueprint admin-facts">
-            <Corners />
-            <div className="card-kicker">Timeline · {tz}</div>
-            <dl>
-              {timeline.map((t) => (
-                <div key={t.what} className="fact-row">
-                  <dt className="text-muted">{t.what}</dt>
-                  <dd>
-                    <span className="num">{timeIn(tz, t.at)}</span>
-                    {t.delta ? (
-                      <span className="text-muted timeline-delta"> {t.delta}</span>
-                    ) : null}
-                  </dd>
-                </div>
-              ))}
-              {call.transferred_to_human ? (
-                <div className="fact-row">
-                  <dt className="text-muted">Handed off</dt>
-                  <dd>{call.transfer_reason ?? "to a person"}</dd>
-                </div>
-              ) : null}
-            </dl>
-          </div>
+          {/* Shared with the operator's copy of this screen; the
+              handed-off row is this screen's own and rides inside the
+              same <dl>. See components/CallFacts.tsx. */}
+          <CallTimelineCard call={call} timezone={tz}>
+            {call.transferred_to_human ? (
+              <div className="fact-row">
+                <dt className="text-muted">Handed off</dt>
+                <dd>{call.transfer_reason ?? "to a person"}</dd>
+              </div>
+            ) : null}
+          </CallTimelineCard>
 
           {/* Above the order and the booking, deliberately: an order and a
               booking are already done, while a message is the one thing on
@@ -192,18 +148,7 @@ export default async function CallDetailPage({
             </section>
           ) : null}
 
-          <div className="card blueprint admin-facts">
-            <Corners />
-            <div className="card-kicker">Cost</div>
-            <dl>
-              {costs.map((c) => (
-                <div key={c.label} className="fact-row">
-                  <dt className="text-muted">{c.label}</dt>
-                  <dd className="num">{c.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
+          <CallCostCard call={call} />
         </div>
       </div>
     </>
