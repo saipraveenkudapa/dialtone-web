@@ -7,7 +7,14 @@
   --color-bg: #f2f2f3;
   --color-surface: #e9e9ea;
   --color-text: #1d1f20;
-  --color-accent: #5980a6;
+  /* Corrected: was #5980a6, which measured 3.71:1 as text on --color-bg
+     and so failed WCAG AA (4.5:1 for normal text) everywhere the accent is
+     ink -- .btn-ghost, .card-kicker, .tag-outline, .row-link, the checked
+     .seg-opt label. Same hue and saturation (hsl 210 30%); lightness alone
+     drops 50% -> 40.8%. Now 5.19:1 on --color-bg, 4.79:1 on
+     --color-surface, and >=4.56:1 on every accent tint the system lays
+     under accent ink. */
+  --color-accent: #496887;
   --color-accent-2: #728fab;
   --color-divider: color-mix(in srgb, #1d1f20 16%, transparent);
 
@@ -152,8 +159,25 @@ figcaption {
 .btn svg { display: block; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-primary { background: var(--color-accent); color: var(--color-bg); }
-.btn-primary:hover { background: var(--color-accent-600); }
-.btn-primary:active { background: var(--color-accent-700); }
+/* One ramp step per state, taken from wherever --color-accent rests. The
+   old pair was -600 and -700: -600 sat at the same lightness as the old
+   accent (49.4% vs 50.0%), so hover changed nothing you could see. The
+   corrected accent rests at 40.8%, BETWEEN -600 and -700, so leaving
+   hover on -600 would have made the button lighter under the finger and
+   then -700 would have landed a step above where hover left off. Same
+   intent, moved down one notch with the token, still monotonically
+   darker. The label is --color-bg throughout -- 5.78:1 on -700, 8.87:1
+   on -800.
+
+   These two lines change the VALUE of a declaration the mockup already
+   has, which is the only kind of edit this file takes. The border has to
+   follow the fill down or the darker button wears a lighter 1px rim --
+   .btn-primary carries `border-color: var(--color-accent)` in the
+   blueprint block below -- but that is a declaration the mockup does NOT
+   have, so it is a rule in app/app.css, under "industry-system
+   corrections", and not a third value on these two lines. */
+.btn-primary:hover { background: var(--color-accent-700); }
+.btn-primary:active { background: var(--color-accent-800); }
 .btn-secondary { border-color: var(--color-divider); }
 .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
@@ -209,7 +233,13 @@ textarea.input { min-height: 90px; resize: vertical; }
   display: flex; flex-direction: column; gap: var(--space-2);
   padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface);
 }
-.card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent); }
+/* 12px is the floor for a label a person is expected to read; this was
+   10px. Tracking goes 0.1em -> 0.08em, the figure h6 and .table th
+   already use for an uppercase label, which leaves the absolute space
+   between glyphs where it was (10px x 0.1 = 1.0px, 12px x 0.08 = 0.96px):
+   the letters grow, the kicker keeps its rhythm and still reads as a
+   kicker rather than as body copy. */
+.card-kicker { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-accent); }
 .card-title {
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
   font-size: 17px; line-height: 1.2;

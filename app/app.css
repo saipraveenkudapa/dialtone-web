@@ -13,7 +13,37 @@ body {
   margin: 0;
   font-family: var(--font-body);
 }
-a { color: var(--color-accent-700); }
+/* design/Dialtone.html's own page-level <style> block carries this pair
+   verbatim -- `a { color: var(--color-accent-700) }` and
+   `a:hover { color: var(--color-accent) }` -- so it is approved design and
+   is measurable against the mockup. A link rests one ramp step below the
+   accent and BRIGHTENS to the accent under the pointer. That reading is
+   kept; only its anchor moves.
+
+   Why it had to move: --color-accent was corrected from #5980a6 to
+   #496887 because it failed AA as ink. #5980a6 sat level with
+   --color-accent-600; #496887 sits BETWEEN -700 and -600. So a rest
+   pinned to -700 and a hover on the accent became ramp neighbours and the
+   step collapsed. Mockup: #416180 -> #5980a6, relative luminance x1.81,
+   OKLCH L 48.1 -> 58.6. With the corrected accent and rest still on -700:
+   #416180 -> #496887, x1.16, L 48.1 -> 50.6 -- effectively imperceptible,
+   and .row-link sets `text-decoration: none`, so on several controls
+   colour is the only hover cue there is.
+
+   Rest therefore moves down one notch with the token, the same repair
+   .btn-primary's hover and press took for the same reason: #2c455d ->
+   #496887 is x2.34 and L 38.1 -> 50.6, the mockup's step restored, and
+   both ends clear AA on --color-bg -- 8.87:1 at rest, 5.19:1 on hover.
+   Hover may NOT climb back up the ramp instead: -600 is #597ea3 at
+   3.80:1, the exact failure this pass exists to remove.
+
+   The cost, stated because it is real: resting link ink is darker than
+   the mockup's and so stands a little less apart from --color-text
+   (OKLCH distance 0.25 -> 0.15). The alternative -- rest left on -700 and
+   hover sent DOWN to -800 -- keeps the resting ink and inverts the
+   mockup's direction, which is a design decision and not this pass's to
+   make. */
+a { color: var(--color-accent-800); }
 a:hover { color: var(--color-accent); }
 
 @keyframes pulse {
@@ -41,6 +71,19 @@ a:hover { color: var(--color-accent); }
   position: sticky;
   top: 0;
   height: 100vh;
+  /* The column is a fixed 100vh and its content is not. Under
+     `@media (pointer: coarse)` the seven .side-nav-items go 39.7px -> 44
+     and .operator-back 34 -> 44, which takes the content from 584.5px to
+     655.1px; this rule only renders as a column above 900px, so the
+     exposure is a touch device WIDER than 900 and SHORTER than ~656 of
+     usable viewport -- an iPad mini in landscape inside Safari is
+     1133x744 less toolbars, about 654. At 1024x620 the Sign out button's
+     bottom edge lands 15.1px past the fold and, sticky with visible
+     overflow, there was nothing to scroll: the page took the sidebar with
+     it. The control that leaves the screen first is the kill switch.
+     Inert whenever the content fits, which is every case that works
+     today, and no visual change at rest. */
+  overflow-y: auto;
 }
 
 .sidebar-head { padding: 0 18px; }
@@ -1875,22 +1918,6 @@ iframe.review-image { height: 62vh; }
    something the next reader can see from a stylesheet. */
 .edit-leave-backdrop { z-index: 5; }
 
-/* The one place industry.css's ring cannot work, and it is the tab the
-   keyboard always lands on. `.seg-opt:has(input:focus-visible)` draws
-   `outline: 2px solid var(--color-accent)` inset, and
-   `.seg-opt:has(input:checked)` fills the chosen tab with that same
-   accent -- so the ring is drawn in the fill's own colour and cannot be
-   seen. On a strip of five filter links that is a blemish; here the
-   radio group's roving tabindex means Tab lands on the CHECKED tab
-   every time, so it is the whole of the keyboard's position indicator
-   going missing. The ground colour is what is legible against the fill,
-   and it is the token the checked label already uses for its text.
-   Scoped to .edit-tabs: .auth-seg and .filter-seg have the same
-   blemish, and fixing those is not this screen's change to make. */
-.edit-tabs .seg-opt:has(input:checked):has(input:focus-visible) {
-  outline-color: var(--color-bg);
-}
-
 /* One panel is on screen. The other seven are still rendered, still
    hydrated and still holding every half-typed price in them -- they are
    only hidden, which is the whole reason switching tabs is safe.
@@ -1926,3 +1953,426 @@ iframe.review-image { height: 62vh; }
    transitions or animates, so there is no motion left here for
    prefers-reduced-motion to be asked about. */
 .setup-stack > section[id] { scroll-margin-top: var(--space-3); }
+
+/* ── industry-system corrections ───────────────────────────────────────
+   AGENTS.md: design/Dialtone.html is the approved mockup, app/industry.css
+   is "its design system, extracted verbatim", and the way to extend it is
+   "adding a class to app/app.css". Read together that draws a line:
+   industry.css may carry a corrected VALUE for a declaration the mockup
+   already has -- --color-accent's #496887 and .card-kicker's 12px are
+   both exactly that, and both are sanctioned -- and may not carry a
+   declaration or a rule the mockup does not have, because then the file
+   stops being re-derivable from design/Dialtone.html and the word
+   "verbatim" stops being checkable.
+
+   Everything below was first written into industry.css and belongs here.
+   Each keeps the declaration it had, character for character, and each
+   outranks the industry.css rule it corrects on SPECIFICITY rather than
+   on file order, so the rendered cascade is identical either way and
+   nothing here depends on globals.css importing app.css second. Nothing
+   in industry.css references anything declared here, so the dependency
+   only ever points app.css -> industry.css. ── */
+
+/* industry.css's blueprint block gives .btn-primary
+   `border-color: var(--color-accent)`, and its :hover and :active fills
+   now rest one and two ramp steps below the accent. Without these the
+   darker button would wear a lighter 1px rim. (0,2,0) each, against the
+   blueprint rule's (0,1,0). */
+.btn-primary:hover { border-color: var(--color-accent-700); }
+.btn-primary:active { border-color: var(--color-accent-800); }
+
+/* industry.css draws the seg's focus ring INSET and in --color-accent, so
+   on the CHECKED option it was --color-accent on a --color-accent fill:
+   1.00:1, an invisible focus ring on the one option in the group that is
+   selected. --color-bg on that fill is 5.19:1, and it is already the
+   token the checked label wears for its text. It matters most on
+   .edit-tabs, where the radio group's roving tabindex lands Tab on the
+   CHECKED tab every time, so the whole of the keyboard's position
+   indicator was going missing; .auth-seg, .filter-seg and .review-modes
+   had the same blemish. One rule on the system class answers every .seg
+   in the product. (0,3,2) against the ring rule's (0,2,1). */
+.seg-opt:has(input:checked):has(input:focus-visible) { outline-color: var(--color-bg); }
+
+/* ── state transitions ─────────────────────────────────────────────────
+   Colour, opacity and border only, so a hover or a press costs the
+   compositor and never a reflow. Never width, height, top or left. One
+   duration and one curve for the whole product, both tokens. Every rule
+   reached from here is a state change; none of them is an entrance. The
+   single prefers-reduced-motion guard at the foot of this file turns all
+   of it off.
+
+   Two rules, because they have two different jobs. The first reaches the
+   SYSTEM classes and is the block that used to sit in industry.css; the
+   mockup has no transition of any kind, so it is an addition and lives
+   here. The second is everything THIS file gives a hover, press or
+   current-page state to that the first does not already cover. ── */
+
+:root {
+  /* The tokens the two rules below share. Declared here, next to their
+     only consumers, for the same reason the rules are here: the mockup
+     has no motion, so it has no motion tokens. */
+  --motion-state: 180ms;
+  --motion-ease-out: cubic-bezier(0, 0, 0.2, 1);
+}
+
+.btn,
+.input,
+.radio .dot,
+.seg-opt,
+.nav a,
+.table tbody tr,
+a {
+  transition-property: color, background-color, border-color, opacity;
+  transition-duration: var(--motion-state);
+  transition-timing-function: var(--motion-ease-out);
+}
+
+/* Listed here is everything THIS file gives a hover, press or
+   current-page state to that the rule above does not already cover.
+
+   Same four properties for the same reason: colour, opacity and border
+   are composited, so a state change costs no layout work. Never width,
+   height, top or left -- and none of them changes on any state in this
+   product in any case. .lv-toggle:active keeps its 1px transform
+   untransitioned on purpose: a press should land on the frame the finger
+   lands on, and only the colour behind it should catch up.
+
+   Two of the classes the audit named are absent here because they need no
+   entry of their own. .edit-tabs is a .seg of .seg-opt labels, and the
+   menu card controls in .menu-edit-cat-controls and
+   .menu-edit-row-actions are .btn elements; the rule above has both. */
+.side-nav-item,
+.admin-nav-item,
+.edit-index-link,
+.operator-back,
+.row-title-link,
+.row-link,
+.golive-link,
+.golive-link .golive-title,
+.lv-row,
+.lv-toggle,
+.lv-until-opt,
+.transcript .line button {
+  transition-property: color, background-color, border-color, opacity;
+  transition-duration: var(--motion-state);
+  transition-timing-function: var(--motion-ease-out);
+}
+
+/* ── touch targets — coarse pointers only ──────────────────────────────
+   Every rule below lives inside `@media (pointer: coarse)`, so on a mouse
+   or trackpad — the pointer design/Dialtone.html was drawn for — NOTHING
+   here applies and the product renders exactly as the mockup does. Only
+   the two custom properties at :root are declared outside the query, and
+   a custom property that nothing references paints nothing.
+
+   Why it has to exist: the approved mockup is a dense desktop design and
+   its 26–39px controls are correct at arm's length with a mouse. The
+   operator works on an iPad, where a 26px restaurant-name link is a miss.
+   Measured at 375px against the running server: 64 of 64 interactive
+   elements on /admin/<id>/edit were under 44px tall (28, 32, 33, 34, 36,
+   39px), and 7 of 7 on /admin, the smallest at 26px. Apple HIG asks 44pt,
+   Material 48dp, WCAG 2.5.5 44 CSS px.
+
+   Two shapes are used, and which one a control gets is a design decision,
+   not a convenience:
+
+     GROW THE BOX  — where the control is already its own object on its own
+                     line (a button, a field, a tab, a nav row). A taller
+                     button on a tablet is what the tablet expects.
+
+     GROW THE HIT  — where the design depends on the smaller box. An
+                     inline link in the middle of a sentence gets hit area,
+                     never height: 44px of line-height in a paragraph is a
+                     broken paragraph. Two mechanisms, both invisible to
+                     layout — a ::after overlay sized `height:
+                     var(--touch-target)` with `min-height: 100%`, so it
+                     can only enlarge a target and never clip one that is
+                     already big enough; and, on a run of inline text,
+                     vertical padding, which enlarges the press of EVERY
+                     wrapped line without moving one of them.
+
+   Ordering: this section is the foot of app.css, which globals.css
+   imports after industry.css — so it comes after every other rule in the
+   system and equal-specificity rules here win on order. Where a rule
+   earlier in THIS file sets a floor from a more specific selector
+   (.menu-item-row .btn, .edit-tabs .seg-opt, .admin-facts .fact-row
+   .row-link …) that exact selector is restated below, because specificity
+   beats order. Controls that already clear 44px on their own — .lv-toggle
+   at 56, .lv-until-opt at 48, .phone-search .input at 48, textarea.input
+   at 90 — are deliberately absent: a 44px floor written over them would
+   be a ceiling. ── */
+
+:root {
+  /* Not a design value and not a spacing step: the platform minimum, the
+     same number in Apple's HIG (44pt) and WCAG 2.5.5. Named so the
+     threshold is stated once and every rule below reads as the same
+     rule. */
+  --touch-target: 44px;
+
+  /* The floor on the space between two adjacent targets, so a target that
+     just grew does not start collecting its neighbour's taps. 8px is the
+     ask; --space-2 is 6.8 and misses it, --space-3 is 10.2 and is the
+     next step on the system's own scale. No new number. */
+  --touch-gap: var(--space-3);
+}
+
+@media (pointer: coarse) {
+  /* ── buttons ──────────────────────────────────────────────────────
+     .btn and every variant. Height for all of them; width only for the
+     two that can be narrower than they are tall — .btn-ghost carries
+     --space-1 of inline padding, so a "Edit"/"Up" label lands near 31px,
+     and .btn-icon is a fixed 36px square. .btn-primary/.btn-secondary
+     carry --space-3 * 1.2 each side and clear 44 on any real label, so
+     they are left alone rather than given a min-width that would fight
+     .golive-go's deliberate 22ch floor. */
+  .btn { min-height: var(--touch-target); }
+  .btn-ghost { min-width: var(--touch-target); }
+  .btn-icon {
+    width: var(--touch-target);
+    height: var(--touch-target);
+    min-width: var(--touch-target);
+  }
+
+  /* The three places this file pins a button to 36px from a more specific
+     selector — the menu row's Edit/Remove, the drift note's "Update the
+     phone", and a holiday's Remove. Each was raised from 14px FOR touch
+     in the first place; this is the same intent measured properly. */
+  .menu-item-row .btn,
+  .edit-note .btn,
+  .holiday-row > .btn:last-child { min-height: var(--touch-target); }
+
+  /* ── fields ───────────────────────────────────────────────────────
+     .input covers every text, number, tel, time, date and file field and
+     every <select> that wears the class; the bare `select` is there for
+     one that does not. textarea.input keeps its own 90px floor (more
+     specific), .phone-search .input its 48. */
+  .input,
+  select { min-height: var(--touch-target); }
+
+  /* A range input's thumb is the target, and it is as tall as the box.
+     The scrub bar is the only one in the product. */
+  .player-scrub { min-height: var(--touch-target); }
+
+  /* A checkbox is 13px of chrome the browser draws and CSS may not
+     resize without distorting it — so the LABEL wrapped round it is the
+     target, which is what a label is for. Same for the radio's dot. */
+  .radio,
+  .hours-closed,
+  .holiday-row .hours-closed { min-height: var(--touch-target); }
+
+  /* ── segmented controls ───────────────────────────────────────────
+     .seg-opt everywhere it is worn: .auth-seg, .filter-seg, .review-files,
+     .review-modes, and the editor's eight tabs, which pin 34px from a
+     more specific selector and so are restated. Segments share an edge by
+     design — that is what a segmented control IS, in the mockup and on
+     every platform — so the 8px separation below is not applied between
+     them; the 44px box is what stops the mis-tap.
+
+     min-width with it: the recording section's segments read "On" and
+     "Off", measured 39.1px and 42.3px wide against their 44px height, so
+     width was the failing dimension once height was fixed. It binds on
+     those two and on nothing else — "Trial", "Text", "Email", "Both" and
+     the eight tab labels are all already wider. */
+  .seg-opt {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+  .edit-tabs .seg-opt { min-height: var(--touch-target); }
+
+  /* ── navigation ───────────────────────────────────────────────────
+     Every one of these is a bare word in the mockup that this file
+     already gave a box to (34px, 28px) for exactly this reason, on a
+     guess. The guess is now the measurement. Nav rows in a list butt
+     together on purpose, like .seg-opt: a 44px row against the next 44px
+     row is the platform's own list, not two targets 0px apart. */
+  .side-nav-item,
+  .admin-nav-item,
+  .edit-index-link,
+  .operator-back { min-height: var(--touch-target); }
+
+  /* Both are inline text at rest, so they need the box before the box can
+     have a height. min-width with it, because a restaurant can be called
+     "Marty's": measured at 42.2px wide on /admin, which would leave the
+     width as the failing dimension after the height was fixed. */
+  .admin-brand,
+  .row-title-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  /* The way out of a detail page, and the account card's editable values.
+     Both are .row-link on their own line, so they take height; the
+     in-sentence .row-link further down takes hit area instead. */
+  .page-head .row-link,
+  .table td .row-link,
+  .admin-facts .fact-row .row-link { min-height: var(--touch-target); }
+
+  /* The row that holds one of those values has to grow with it, or the
+     link overflows a 48.6px row. The rule above computes this height from
+     the 34px it gave the link; same sum, new floor. */
+  .admin-facts:has(.row-link) .fact-row {
+    min-height: calc(var(--touch-target) + var(--space-2) * 2 + 1px);
+  }
+
+  /* A checklist row that leads into the editor, and a transcript line
+     that seeks the audio. Both are already blocks; both are given the
+     floor so a one-line one cannot fall under it. */
+  .golive-link,
+  .transcript .line button { min-height: var(--touch-target); }
+
+  /* An uploaded file's expiring link. Its own line in a flex column, not
+     a fragment of a sentence, so it takes the box — centred, because it
+     wraps to two lines on a phone. */
+  .upload-link {
+    display: flex;
+    align-items: center;
+    min-height: var(--touch-target);
+  }
+
+  /* ── hit area, not height ─────────────────────────────────────────
+     .row-link is worn two ways: on its own line (handled above) and in
+     the MIDDLE OF A SENTENCE — "…nothing here can be checked against the
+     phone. Repair it on the go-live panel →" in EditSections.tsx, twice —
+     and the empty state on /admin has a bare anchor in the same shape.
+     Those may not become 44px blocks: it would open the line box, break
+     the paragraph's rhythm and make one sentence look like two.
+
+     So the ink stays exactly where the mockup puts it and only the press
+     gets bigger. The overlay is centred on the link and sized
+     max(44px, the link itself) in both axes: `height` + `min-height: 100%`
+     and `width: 100%` + `min-width`, all resolved against the link's own
+     box. It is a child of the anchor, so a press anywhere in it is a press
+     on the anchor; it paints nothing; and it cannot widen the page,
+     because a link narrower than 44px only ever grows by the few pixels
+     that make up the difference. */
+  .row-link,
+  .empty-note a { position: relative; }
+  .row-link::after,
+  .empty-note a::after {
+    /* NOTE: on the block and flex .row-links this resolves to the link's
+       own width by 44px — measured 183.6x44 on an /admin/<id> account row
+       whose value is a single em dash, and 313.8x44 on "Edit these →",
+       whose ink box stays 20.1px. On a link that is a run of inline text
+       the percentages have no block box to resolve against and it settles
+       at 44x44 in the middle of the run, which is why the rule below
+       exists as well. */
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    min-width: var(--touch-target);
+    height: var(--touch-target);
+    min-height: 100%;
+  }
+
+  /* — and OFF again wherever the padding-block rule below is the
+     mechanism instead. The two are mutually exclusive by design; this
+     line is what makes that true rather than merely intended, and its
+     selector list is the padding rule's list exactly.
+
+     Without it the overlay does not enlarge those links, it MISPLACES a
+     tap target into the prose beside them. An inline box that wraps is
+     SPLIT into fragments, and an absolutely positioned child of a split
+     inline resolves its containing block against the UNION of the
+     fragments -- so `width: 100%` has no single box to take a percentage
+     of, degenerates to the 44px min-width, and the overlay parks itself
+     centred on that union: in the middle of the paragraph, ~10px clear of
+     the ink it was meant to cover. Measured at 375px on a real coarse
+     pointer, both in-sentence notes in EditSections.tsx reproduce it --
+     the .setup-note at x 204-244, y 29-92 (146 probe points where
+     elementFromPoint returns the anchor and no fragment of the anchor is
+     under the finger) and the .edit-note.is-drift at x 16-280, y 83-230
+     (249 points). Tapping the words "Vapi does not have" navigated to
+     /admin/<id>, and text selection over them was swallowed. The third
+     one, in app/admin/<id>/edit/page.tsx's .setup-note, is the same
+     shape.
+
+     The padding-block rule already delivers the target on all of them --
+     46.5px per fragment, hit-testing as the anchor across its full
+     height, paragraph unchanged at 58.9px -- so nothing is lost by
+     switching the overlay off here. It stays on for the block and flex
+     .row-links, which are single boxes and where it measures correctly:
+     183.6x44 and 313.8x44 on /admin/<id>. — */
+  p .row-link::after,
+  .empty-note a::after { content: none; }
+
+  /* And the run of inline text itself. Vertical padding on an INLINE box
+     is the one thing in CSS that enlarges a press without touching
+     layout: the line box is sized from line-height, not from the inline
+     box's padding, so the paragraph keeps the height, the leading and the
+     wrap points it has in the mockup — verified by measuring the same
+     sentence with and without this rule — while every line of the link
+     accepts a press well above and below its ink. Per FRAGMENT, too, so a
+     link that wraps across two lines gets it on both, which the single
+     overlay above cannot do — and, worse, would land in the prose beside
+     them if it tried, which is why the rule above switches it off for
+     exactly this selector list.
+
+     Scoped to a link inside a <p>, which is exactly where the sentence
+     case lives (EditSections.tsx's two "Repair it on the go-live panel →"
+     notes, /admin's "use Create a new restaurant to make the first one")
+     and nowhere the same class is a block: those sit in a <div>, a <dd>
+     or a <td>. .empty-note is always a <p>, so it is inline by the same
+     token. The amount is not a spacing step and must not be one: it is
+     half of whatever the threshold has left over after the text's own em
+     box, so a 13px line and a 12px line both land above 44 and neither is
+     given a pixel more than it needs. Measured: the fragment goes from
+     15.5px to 46.5px, and the paragraph around it from 58.9px to 58.9px. */
+  p .row-link,
+  .empty-note a { padding-block: calc((var(--touch-target) - 1em) / 2); }
+
+  /* ── separation ───────────────────────────────────────────────────
+     A bigger target that touches its neighbour is a bigger mis-tap. Every
+     row below is a container whose children are ADJACENT CONTROLS spaced
+     under 8px — 4px, or --space-2's 6.8 — raised to --touch-gap. Nothing
+     here is a new number, and nothing here is a container whose gap the
+     mockup uses as a visual rhythm between blocks: these are toolbars.
+
+     Destructive neighbours are the reason. In .menu-edit-row-actions,
+     Remove — which destroys a dish with no undo — sat 4px from the Edit
+     an operator aims at while a restaurant owner talks, on a device with
+     no hover to warn them first. */
+  .menu-edit-cat-controls,
+  .menu-edit-row-actions,
+  .upload-actions,
+  .dialog-actions,
+  .cred-actions,
+  .review-item-actions,
+  .golive-actions,
+  .player-controls,
+  .add-item-form,
+  .menu-category-head,
+  .hours-times,
+  .golive-list,
+  .edit-index { gap: var(--touch-gap); }
+}
+
+/* ── the motion guard ──────────────────────────────────────────────────
+   ONE block, deliberately global and deliberately last: app.css is
+   imported after industry.css in globals.css, so this outranks every
+   transition either file sets, and the universal selector means a class
+   added later cannot forget to opt in. It also stops the three `pulse`
+   loops above -- .status-dot.live, .kill-banner .blip and
+   .live-strip .blip -- and stops them on their last keyframe, which is
+   `opacity: 1`, so the dot a reduced-motion reader sees is the lit one
+   rather than a half-faded one.
+
+   The note further up this file that says "nothing in this block
+   transitions or animates, so there is no motion left here for
+   prefers-reduced-motion to be asked about" is about .setup-stack and is
+   still true of it. It was never a guard. Before this block the product
+   had none at all. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+}
