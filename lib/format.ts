@@ -1,4 +1,4 @@
-import type { CallOutcome } from "@/lib/supabase/types";
+import type { CallOutcome, OrderStatus } from "@/lib/supabase/types";
 
 export const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
@@ -12,6 +12,30 @@ export const OUTCOME_TAG: Record<CallOutcome, string> = {
   transferred: "tag tag-outline",
   spam: "tag tag-neutral",
   abandoned: "tag tag-neutral",
+};
+
+/** An order's state, in the same four system tags every other state in
+ *  this product is spent on.
+ *
+ *  Beside OUTCOME_TAG because it answers the same question one tab over.
+ *  The console's Calls tab puts a call's outcome through OUTCOME_TAG and
+ *  its status through `tag tag-neutral`; the Orders tab printed a bare
+ *  word, so "how is a state shown" had two answers one press apart --
+ *  inside the pass whose whole argument was that four states map onto
+ *  four tags with the word inside the chip.
+ *
+ *  Six values onto four tags, and the grouping is the one /admin already
+ *  uses for a restaurant's health: the settled good outcome takes accent,
+ *  the ones still in flight are quiet, and the one that went wrong takes
+ *  the negative chip. Closed union, so a status added to the schema fails
+ *  to compile here rather than rendering as nothing. */
+export const ORDER_TAG: Record<OrderStatus, string> = {
+  new: "tag tag-neutral",
+  confirmed: "tag tag-neutral",
+  preparing: "tag tag-neutral",
+  ready: "tag tag-accent",
+  completed: "tag tag-accent",
+  cancelled: "tag tag-out",
 };
 
 /** Clock time in the location's timezone. Timestamps are stored in UTC;

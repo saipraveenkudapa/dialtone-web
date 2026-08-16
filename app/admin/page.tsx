@@ -65,8 +65,24 @@ export default async function OperatorPage() {
         ))}
       </div>
 
-      <section className="panel">
-        <h4>Accounts</h4>
+      {/* ONE BLOCK SHAPE ACROSS THE CONSOLE.
+
+          This was <section class="panel"><h4>, which is what every
+          titled block on /admin/<id> was too -- consistent, and
+          consistently unlike the rest of the product. That page's nine
+          panels are .card.blueprint.setup-card with an <h2> now, so
+          leaving this one behind would have made the portfolio the odd
+          screen in a three-click walk: portfolio -> restaurant -> call,
+          two block vocabularies and two heading levels.
+
+          .panel stays in the stylesheet and stays correct: it is the
+          column wrapper inside a .split, which is what the owner's
+          screens and the call detail page use it for. What changes here
+          is a titled block, and a titled block in this console is a
+          card. */}
+      <section className="card blueprint setup-card">
+        <Corners />
+        <h2>Accounts</h2>
         {rows.length === 0 ? (
           <p className="text-muted empty-note">
             No restaurants yet. Nobody signs themselves up — use{" "}

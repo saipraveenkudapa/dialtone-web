@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useTransition, type ReactNode } from "react";
-import Link from "next/link";
 import { Corners } from "@/components/Corners";
 import {
   ReplacedNote,
+  SectionLink,
   useSectionDirty,
   useSectionReplaced,
-  type EditSectionId,
-} from "@/components/admin/EditTabs";
+  type ConsoleSectionId,
+} from "@/components/admin/ConsoleTabs";
 import { normalizePhoneToE164 } from "@/lib/phone";
 import { formatBasisPointsAsPercent, parsePercentToBasisPoints } from "@/lib/money";
 import {
@@ -161,13 +161,13 @@ function same(a: Values, b: Values): boolean {
  *  `section` is which tab this form sits behind, and it buys the strip's
  *  chips and the beforeunload guard. Under tabs the card's own flag can
  *  be on a panel that is display:none, and the one loss beforeunload
- *  cannot see is a client-side route change -- pressing "Overview &
- *  go-live" in the page head. The chip on the tab is then the only
+ *  cannot see is a client-side route change -- the back link in the
+ *  page head, or an item in the operator bar. The chip on the tab is then the only
  *  visible sign that something is unsaved, which is why it is threaded
  *  through here rather than left to the heading below. Outside an
- *  <EditTabs> the report goes nowhere and nothing renders differently. */
+ *  <ConsoleTabs> the report goes nowhere and nothing renders differently. */
 function useSeeded<T extends Values>(
-  section: EditSectionId,
+  section: ConsoleSectionId,
   server: T,
 ): [T, (patch: Partial<T>) => void, boolean, boolean] {
   const [form, setForm] = useState<T>(server);
@@ -199,7 +199,7 @@ function useSeeded<T extends Values>(
   // Reports the "Unsaved" chip to the strip AND registers the
   // beforeunload guard for as long as this form is dirty -- the guard
   // used to be written out here, and in five other components it was
-  // simply missing. components/admin/EditTabs.tsx has the account.
+  // simply missing. components/admin/ConsoleTabs.tsx has the account.
   useSectionDirty(section, dirty);
   useSectionReplaced(section, replaced);
 
@@ -326,16 +326,16 @@ function DriftNote({
 
 /** Why there is no drift answer for this card. Never silence: "we did
  *  not check" and "it agrees" are opposite facts. */
-function DriftUnknown({ drift, locationId }: { drift: AssistantDrift; locationId: string }) {
+function DriftUnknown({ drift }: { drift: AssistantDrift }) {
   if (drift.state === "read" || drift.state === "no-assistant") return null;
   if (drift.state === "missing") {
     return (
       <p className="text-muted setup-note">
         This record points at an assistant Vapi does not have, so nothing here can be checked
         against the phone.{" "}
-        <Link href={`/admin/${locationId}`} className="row-link">
+        <SectionLink section="line" className="row-link">
           Repair it on the go-live panel →
-        </Link>
+        </SectionLink>
       </p>
     );
   }
@@ -425,12 +425,10 @@ function Refusal({ id, result, pending }: { id: string; result: EditResult | nul
  *  half the truth. */
 function PhoneOutcome({
   result,
-  locationId,
   pending,
   onResync,
 }: {
   result: EditResult | null;
-  locationId: string;
   pending: boolean;
   onResync: () => void;
 }) {
@@ -456,9 +454,9 @@ function PhoneOutcome({
         The assistant will answer the phone and then be unable to read the menu, take an order or
         transfer a caller. This is worse than a stale value and it needs the repair, not another
         save.{" "}
-        <Link href={`/admin/${locationId}`} className="row-link">
+        <SectionLink section="line" className="row-link">
           Repair the assistant on the go-live panel →
-        </Link>
+        </SectionLink>
       </p>
     );
   }
@@ -757,7 +755,7 @@ export function BusinessSection({
           </div>
         </div>
 
-        <DriftUnknown drift={drift} locationId={locationId} />
+        <DriftUnknown drift={drift} />
       </div>
 
       <SaveRow
@@ -786,7 +784,7 @@ export function BusinessSection({
         }
       />
 
-      <PhoneOutcome result={result} locationId={locationId} pending={pending} onResync={resync} />
+      <PhoneOutcome result={result} pending={pending} onResync={resync} />
       <Refusal id="ed-business-error" result={result} pending={pending} />
     </SectionCard>
   );
@@ -904,7 +902,7 @@ export function AnsweringSection({
           </DriftNote>
         </div>
 
-        <DriftUnknown drift={drift} locationId={locationId} />
+        <DriftUnknown drift={drift} />
       </div>
 
       <SaveRow
@@ -930,7 +928,7 @@ export function AnsweringSection({
         }
       />
 
-      <PhoneOutcome result={result} locationId={locationId} pending={pending} onResync={resync} />
+      <PhoneOutcome result={result} pending={pending} onResync={resync} />
       <Refusal id="ed-answering-error" result={result} pending={pending} />
     </SectionCard>
   );
@@ -1168,7 +1166,7 @@ export function ServiceSection({
         }
       />
 
-      <PhoneOutcome result={result} locationId={locationId} pending={pending} onResync={resync} />
+      <PhoneOutcome result={result} pending={pending} onResync={resync} />
       <Refusal id="ed-service-error" result={result} pending={pending} />
     </SectionCard>
   );
@@ -1346,7 +1344,13 @@ export function RecordingSection({
     recordingEnabled,
     recordingRetentionDays: String(recordingRetentionDays),
   };
-  const [form, patch, dirty, replaced] = useSeeded("recording", server);
+  /* "calls", not "recording". The recording setting and the call log it
+     governs are one ticket -- "why can't I hear that call" -- and they
+     used to be on two different routes. They are one tab now, so the
+     chip for a half-typed retention lands on the tab the field is
+     actually behind. The <section id="recording"> and the #recording
+     anchor are untouched. */
+  const [form, patch, dirty, replaced] = useSeeded("calls", server);
   const { pending, result, run } = useSection();
 
   return (

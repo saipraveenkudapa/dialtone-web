@@ -6,7 +6,7 @@ import {
   ReplacedNote,
   useSectionDirty,
   useSectionReplaced,
-} from "@/components/admin/EditTabs";
+} from "@/components/admin/ConsoleTabs";
 import { WEEKDAYS } from "@/lib/provisioning/constants";
 import type { DraftHours } from "@/lib/provisioning/draft";
 import type {
@@ -406,8 +406,8 @@ function WeeklyHours({
      form together -- and one "Replaced" chip, since the panel holding
      the loss is display:none seven times out of eight. This also
      registers the beforeunload guard that used to be written out here
-     by hand; components/admin/EditTabs.tsx has the account. Outside an
-     <EditTabs> -- rendered standalone, or from a test -- the report
+     by hand; components/admin/ConsoleTabs.tsx has the account. Outside an
+     <ConsoleTabs> -- rendered standalone, or from a test -- the report
      goes nowhere and the guard still works. */
   useSectionDirty("hours", dirty);
   useSectionReplaced("hours", replaced);

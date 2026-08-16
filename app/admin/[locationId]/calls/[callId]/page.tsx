@@ -125,11 +125,20 @@ export default async function AdminCallPage({
     <>
       <div className="page-head">
         <div>
-          {/* Back to the restaurant this call belongs to, not to /admin:
-              the row that opened this page is on that screen. Same
+          {/* Back to the restaurant this call belongs to, not to /admin,
+              and to the TAB the row that opened this page is on. Same
               .row-link every detail page in the product puts above its
-              h1. */}
-          <Link href={`/admin/${locationId}`} className="row-link">
+              h1.
+
+              ?section=calls and not a bare /admin/<id>. It was bare when
+              that route WAS the call log; the console's default section
+              is Line now, so a bare link would land an operator working
+              down the log on the go-live panel and make them press Calls
+              again on every single call -- the console's most repeated
+              loop. The query is validated server-side against the
+              nine-item list, so the right panel is in the first byte of
+              HTML and there is no hash flash. */}
+          <Link href={`/admin/${locationId}?section=calls`} className="row-link">
             ← {location.name}
           </Link>
           <h1>{call.from_number ?? "Unknown caller"}</h1>

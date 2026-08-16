@@ -33,7 +33,7 @@ vi.mock("@/app/admin/[locationId]/edit/actions", () => ({
   saveServiceAction: vi.fn(),
 }));
 
-/* EditTabs' leave guard holds the router, because answering "leave" has
+/* ConsoleTabs' leave guard holds the router, because answering "leave" has
    to complete the navigation it just cancelled. useRouter() reads a
    React context that only the App Router mounts, and throws "invariant
    expected app router to be mounted" anywhere else -- including here,
@@ -49,7 +49,7 @@ vi.mock("@/app/admin/[locationId]/edit/actions", () => ({
    assert on `push`, because nothing here can make it fire: this suite is
    the "node" project, which has no DOM, so no effect runs and no click
    is dispatched. WHAT THE GUARD ACTUALLY DOES IS TESTED IN
-   components/admin/EditTabs.guard.test.tsx -- the "jsdom" project added
+   components/admin/ConsoleTabs.guard.test.tsx -- the "jsdom" project added
    to vitest.config.ts for exactly this -- where real anchors are pressed
    with real MouseEvents and the assertions are on defaultPrevented, on
    which presses are let through, and on where router.push is called
@@ -418,23 +418,28 @@ describe("the two menu editors", () => {
    Each block below is a defect that shipped in the first tabs pass.
    ══════════════════════════════════════════════════════════════════════ */
 
-const { EditPanel, EditTabs, ReplacedNote, sectionOfAnchor, EDIT_SECTIONS } = await import(
-  "@/components/admin/EditTabs"
-);
+const { ConsolePanel, ConsoleTabs, ReplacedNote, sectionOfAnchor, CONSOLE_SECTIONS } =
+  await import("@/components/admin/ConsoleTabs");
 
-function strip(over: Partial<Parameters<typeof EditTabs>[0]> = {}): string {
-  const { children, ...props } = { initial: "menu" as const, behind: [], ...over };
+type StripProps = Parameters<typeof ConsoleTabs>[0];
+
+function strip(over: Partial<StripProps> = {}): string {
+  const { children, ...props } = {
+    initial: "menu" as const,
+    behind: [] as StripProps["behind"],
+    ...over,
+  };
   return renderToStaticMarkup(
     createElement(
-      EditTabs,
-      props as Parameters<typeof EditTabs>[0],
+      ConsoleTabs,
+      props as StripProps,
       children ??
         createElement(
-          EditPanel,
+          ConsolePanel,
           // Both components take their children as the third argument
           // here, so the props object is legitimately short of the
           // `children` its type declares.
-          { id: "menu" } as Parameters<typeof EditPanel>[0],
+          { id: "menu" } as Parameters<typeof ConsolePanel>[0],
           "the menu panel",
         ),
     ),
@@ -443,15 +448,28 @@ function strip(over: Partial<Parameters<typeof EditTabs>[0]> = {}): string {
 
 describe("an anchor the browser will hand over unchecked", () => {
   it("opens the tab its section lives on", () => {
-    // All ten ids stay on their sections; #holidays and #sold-out are
-    // sub-cards and open their parent's tab. GoLive.tsx's three checklist
-    // rows and every link on /admin/<id> ride on this map.
+    // Every id that ever shipped still resolves; #holidays and #sold-out
+    // are sub-cards and open their parent's tab.
     expect(sectionOfAnchor("menu")).toBe("menu");
     expect(sectionOfAnchor("sold-out")).toBe("menu");
     expect(sectionOfAnchor("holidays")).toBe("hours");
     expect(sectionOfAnchor("hours")).toBe("hours");
     expect(sectionOfAnchor("answering")).toBe("answering");
     expect(sectionOfAnchor("managed")).toBe("managed");
+  });
+
+  it("still resolves the anchors whose panel MOVED, rather than 404ing a bookmark", () => {
+    /* The console merge collapsed two tabs into others. Neither anchor
+       was renamed and neither <section id> was dropped -- they open a
+       different tab now, and the browser's own scroll still lands on the
+       card. #recording is pasted into tickets and is what
+       /edit?section=recording redirects through; #golive and #calls are
+       the overview's two subjects, which had no anchor at all before
+       because they were not sections of anything. */
+    expect(sectionOfAnchor("recording")).toBe("calls");
+    expect(sectionOfAnchor("golive")).toBe("line");
+    expect(sectionOfAnchor("line")).toBe("line");
+    expect(sectionOfAnchor("calls")).toBe("calls");
   });
 
   it("does not resolve an inherited property, which blanked the editor", () => {
@@ -479,8 +497,8 @@ describe("an anchor the browser will hand over unchecked", () => {
     expect(sectionOfAnchor("not-a-section")).toBeUndefined();
   });
 
-  it("answers with one of the eight tabs, and every tab is reachable by its own id", () => {
-    for (const { id } of EDIT_SECTIONS) expect(sectionOfAnchor(id)).toBe(id);
+  it("answers with one of the nine tabs, and every tab is reachable by its own id", () => {
+    for (const { id } of CONSOLE_SECTIONS) expect(sectionOfAnchor(id)).toBe(id);
   });
 });
 
@@ -488,7 +506,7 @@ describe("what the strip is made of", () => {
   it("is a radio group and not a tablist that owns no tabs", () => {
     // It wore role="tablist" with role="tab" on the radios. Both halves
     // were wrong: every radio sits inside a <label>, so the tablist
-    // owned eight generic elements and nothing could compute "7 of 8";
+    // owned nine generic elements and nothing could compute "7 of 9";
     // and role="tab" destroyed the input's own `radio` role while the
     // code went on depending on the radio group's shared `name` for the
     // roving tabindex, on a node industry.css renders 0x0 and
@@ -500,8 +518,8 @@ describe("what the strip is made of", () => {
     expect(html).not.toContain('role="tab"');
     expect(html).not.toContain("aria-selected");
     // The one ARIA that ties a choice to what it swaps in, kept.
-    expect(html).toContain('aria-controls="edit-panel-menu"');
-    expect(html).toContain('name="ed-section-tab"');
+    expect(html).toContain('aria-controls="console-panel-menu"');
+    expect(html).toContain('name="console-section-tab"');
   });
 
   it("names each panel rather than calling it a tabpanel with no tablist", () => {
@@ -513,11 +531,11 @@ describe("what the strip is made of", () => {
 
   it("still renders the chosen panel visible and says which section it is", () => {
     const html = strip();
-    expect(html).toContain('id="edit-panel-menu"');
+    expect(html).toContain('id="console-panel-menu"');
     // The chosen panel is the one WITHOUT hidden, and it keeps
     // .setup-stack, which is what app.css's [hidden] rule needs to bite.
-    expect(html).toMatch(/id="edit-panel-menu"[^>]*class="setup-stack"/);
-    expect(html).not.toMatch(/id="edit-panel-menu"[^>]*hidden/);
+    expect(html).toMatch(/id="console-panel-menu"[^>]*class="setup-stack"/);
+    expect(html).not.toMatch(/id="console-panel-menu"[^>]*hidden/);
   });
 });
 
@@ -583,7 +601,7 @@ describe("the beforeunload guard", () => {
      because the typing is now behind a tab rather than on screen. */
 
   it("lives in one place, beside the thing that already knows the answer", () => {
-    const tabs = source("../../components/admin/EditTabs.tsx");
+    const tabs = source("../../components/admin/ConsoleTabs.tsx");
     expect(tabs).toContain("export function useSectionDirty");
     expect(tabs).toContain('window.addEventListener("beforeunload", warn)');
   });
@@ -635,7 +653,7 @@ describe("putting the add-item form away", () => {
 
 describe("the tab strip's stylesheet", () => {
   const css = source("../../app/app.css");
-  const head = css.indexOf("/* ── the editor's tab strip");
+  const head = css.indexOf("/* ── the console's tab strip");
   /* Comments stripped: this block argues at length about the rules it no
      longer has, and a search over the prose would find `position:
      sticky` in the paragraph explaining why it was taken out. */
@@ -652,7 +670,7 @@ describe("the tab strip's stylesheet", () => {
     // WCAG 2.2 2.4.11 Focus Not Obscured (Minimum), at AA, on the
     // ordinary keyboard path through an eight-field card.
     expect(block).not.toMatch(/position:\s*sticky/);
-    expect(block).not.toMatch(/\.edit-tabs\s*\{[^}]*top:\s*0/);
+    expect(block).not.toMatch(/\.console-tabs\s*\{[^}]*top:\s*0/);
   });
 
   it("draws the divider per option rather than per sibling, because it wraps", () => {
@@ -664,10 +682,10 @@ describe("the tab strip's stylesheet", () => {
     // onto its neighbour by a one-pixel negative margin, is what makes
     // .seg's `overflow: hidden` clip exactly the hairlines that would
     // have doubled an edge.
-    expect(block).toMatch(/\.edit-tabs \.seg-opt\s*\{[\s\S]*border-left:\s*1px solid var\(--color-divider\)/);
-    expect(block).toMatch(/\.edit-tabs \.seg-opt\s*\{[\s\S]*border-top:\s*1px solid var\(--color-divider\)/);
-    expect(block).toMatch(/\.edit-tabs \.seg-opt\s*\{[\s\S]*margin-left:\s*-1px/);
-    expect(block).toMatch(/\.edit-tabs \.seg-opt\s*\{[\s\S]*margin-top:\s*-1px/);
+    expect(block).toMatch(/\.console-tabs \.seg-opt\s*\{[\s\S]*border-left:\s*1px solid var\(--color-divider\)/);
+    expect(block).toMatch(/\.console-tabs \.seg-opt\s*\{[\s\S]*border-top:\s*1px solid var\(--color-divider\)/);
+    expect(block).toMatch(/\.console-tabs \.seg-opt\s*\{[\s\S]*margin-left:\s*-1px/);
+    expect(block).toMatch(/\.console-tabs \.seg-opt\s*\{[\s\S]*margin-top:\s*-1px/);
   });
 
   it("keeps the one hidden panel rule the whole design rests on", () => {
@@ -752,13 +770,12 @@ describe("a dish the assistant is refusing", () => {
 describe("the sentence under the strip", () => {
   it("names the tabs holding unsaved work and what a navigation does to them", () => {
     // beforeunload cannot see a client-side route change, and this page
-    // offers six of them -- "Overview & go-live" (the largest button in
-    // the page head), the back link, three AdminNav items and
-    // SystemManaged's own link. Under tabs, seven of the eight surfaces
-    // holding typing are display:none while one of those is pressed, so
-    // a chip on a tab is not enough on its own. Rendered only when
-    // something is actually unsaved.
-    const tabs = source("../../components/admin/EditTabs.tsx");
+    // offers several -- the back link in the page head and three
+    // AdminNav items. Under tabs, eight of the nine surfaces holding
+    // typing are display:none while one of those is pressed, so a chip
+    // on a tab is not enough on its own. Rendered only when something is
+    // actually unsaved.
+    const tabs = source("../../components/admin/ConsoleTabs.tsx");
     expect(tabs).toContain("unsavedLabels.length > 0");
     expect(tabs).toContain("Unsaved edits on {sentenceList(unsavedLabels)}");
 
@@ -772,7 +789,7 @@ describe("the sentence under the strip", () => {
        Both halves are asserted, and deliberately so. The first is the
        promise the guard makes -- and it is a promise the guard is now
        held to by an actual dispatched click, in
-       components/admin/EditTabs.guard.test.tsx; this assertion is only
+       components/admin/ConsoleTabs.guard.test.tsx; this assertion is only
        that the page SAYS it. The second is the hole it does not cover,
        because popstate arrives after the history entry has already
        changed and "cancelling" it means fighting the operator's own Back
@@ -782,7 +799,7 @@ describe("the sentence under the strip", () => {
     expect(tabs).toMatch(/Back button does not, and\s+loses them/i);
 
     // Not on screen when there is nothing to say.
-    expect(strip()).not.toContain("edit-tabs-note");
+    expect(strip()).not.toContain("setup-note");
   });
 });
 

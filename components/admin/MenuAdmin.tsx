@@ -6,7 +6,7 @@ import {
   ReplacedNote,
   useSectionDirty,
   useSectionReplaced,
-} from "@/components/admin/EditTabs";
+} from "@/components/admin/ConsoleTabs";
 import { money } from "@/lib/format";
 import { UNTIL_LABEL } from "@/lib/menu";
 import { parseDollarsToCents } from "@/lib/money";
@@ -254,7 +254,7 @@ export function MenuAdmin(props: MenuAdminProps) {
      on the page and the one whose typing is most likely to be a long way
      from the strip, so the chip is the only thing that can say a
      half-typed dish is still waiting. It also registers the beforeunload
-     guard this field never had. Outside an <EditTabs> -- on
+     guard this field never had. Outside a <ConsoleTabs> -- on
      /dashboard/menu, or from a test -- the chip goes nowhere and the
      guard still works. */
   useSectionDirty("menu", name.trim() !== "");

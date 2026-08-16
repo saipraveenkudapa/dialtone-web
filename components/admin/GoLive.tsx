@@ -1,8 +1,15 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useRef, useState, useTransition, type RefObject } from "react";
 import { Corners } from "@/components/Corners";
+import {
+  ReplacedNote,
+  SectionLink,
+  useSectionDirty,
+  useSectionReplaced,
+  type ConsoleSectionId,
+} from "@/components/admin/ConsoleTabs";
+import { relative } from "@/lib/format";
 import {
   attachNumberAction,
   clearForwardingVerifiedAction,
@@ -86,10 +93,10 @@ const OUTCOME_WORD: Record<MakeItLiveStepOutcome, string> = {
   "not-reached": "Not tried",
 };
 
-/** Which of .golive-item's four left borders a run step wears. There are
- *  five outcomes and four borders on purpose: the word above is what
- *  separates them, the colour only groups them into settled, in the way,
- *  and never got there. */
+/** Which of the four state tags a run step wears. There are five
+ *  outcomes and four tags on purpose: the word above is what separates
+ *  them, the tag only groups them into settled, in the way, and never
+ *  got there. */
 const OUTCOME_STATE: Record<MakeItLiveStepOutcome, GoLiveCheckStatus> = {
   "already-ok": "ok",
   changed: "ok",
@@ -98,7 +105,31 @@ const OUTCOME_STATE: Record<MakeItLiveStepOutcome, GoLiveCheckStatus> = {
   "not-reached": "na",
 };
 
-/** Where a checklist row goes when you press it.
+/** The four states, in the four tags the console already spends on
+ *  them.
+ *
+ *  THE GOVERNING MOVE OF THIS PASS, and it is not a new idea: app/admin
+ *  already maps a restaurant's health onto exactly these four --
+ *  `live` -> .tag-accent, `kill-switch` -> .tag-out, `not-live` ->
+ *  .tag-neutral, `no-forwarding` -> .tag-outline. These are the same
+ *  four states one level down, so they take the same four chips and the
+ *  portfolio and the panel stop having two vocabularies for one fact.
+ *
+ *  What this replaced was a 3px left border in one of four blues. The
+ *  argument for the border was never that it worked -- "blocked" and
+ *  "worth fixing" are two dark blues and cannot be told apart by hue --
+ *  it was that the WORD at the front of every note carried the state and
+ *  the colour only grouped it. That argument is stronger here, not
+ *  weaker: the word is now inside the chip, so the state is one object
+ *  that survives being read aloud, printed and colour-blind alike. */
+const CHECK_TAG: Record<GoLiveCheckStatus, string> = {
+  ok: "tag tag-accent",
+  blocked: "tag tag-out",
+  warn: "tag tag-outline",
+  na: "tag tag-neutral",
+};
+
+/** Which tab a checklist row opens when you press it.
  *
  *  The row already NAMES the thing it is about -- "Menu — Ready, 14
  *  items on the menu" -- and the operator's report was that naming it is
@@ -106,14 +137,31 @@ const OUTCOME_STATE: Record<MakeItLiveStepOutcome, GoLiveCheckStatus> = {
  *  iPad ... I should be able to see everything." A row that states a
  *  fact about the menu and cannot show you the menu is the defect.
  *
+ *  These used to be #menu / #hours / #answering on a second route, which
+ *  cost a full page navigation and a fresh Vapi read. The console is one
+ *  page now, so pressing one swaps the panel in place -- and it is still
+ *  a real ?section= anchor, so Cmd-click and open-in-new-tab still work.
+ *
  *  Only the three whose subject is a thing the operator TYPES are here.
  *  `assistant`, `number` and `forwarding` are this panel's own business
- *  and their controls are inches below the row; sending those to the
- *  editor would walk the operator away from the buttons that fix them. */
-const CHECK_ANCHOR: Partial<Record<GoLiveCheckKey, string>> = {
-  menu: "#menu",
-  hours: "#hours",
-  fallback: "#answering",
+ *  and their controls are inches below the row; sending those elsewhere
+ *  would walk the operator away from the buttons that fix them. */
+type FixSection = Extract<ConsoleSectionId, "menu" | "hours" | "answering">;
+
+const CHECK_SECTION: Partial<Record<GoLiveCheckKey, FixSection>> = {
+  menu: "menu",
+  hours: "hours",
+  fallback: "answering",
+};
+
+/** The tab strip's own words for those three, so the button an operator
+ *  presses and the tab it lands them on read the same. Extract<> above
+ *  is what makes a renamed or dropped tab fail to compile here rather
+ *  than sending a press to a panel that no longer exists. */
+const SECTION_LABEL: Record<FixSection, string> = {
+  menu: "Menu",
+  hours: "Hours",
+  answering: "Answering",
 };
 
 /** The titles the checklist above already uses for the same four things,
@@ -314,11 +362,34 @@ export function GoLive({ state }: { state: GoLiveState }) {
    *  of the number their customers will read off a door and dial. */
   const [areaCode, setAreaCode] = useState(defaultAreaCode ?? "");
 
+  /* AND WHETHER THAT RE-SEED LANDED ON TOP OF TYPING.
+   *
+   *  The half useSeeded has and this field did not. Under one document
+   *  the fallback number is editable in two visible places -- here and
+   *  on Answering -- and every action on this route calls
+   *  revalidatePath, so a save on Answering hands THIS panel a fresh
+   *  prop and the re-seed below throws away what was typed here. The
+   *  "Unsaved" chip on the Line tab disappears in the same commit, which
+   *  makes the loss indistinguishable from the operator's own save
+   *  landing. That is verbatim the defect <ReplacedNote /> exists for,
+   *  and every one of the editor's nineteen fields already gets both
+   *  halves of it.
+   *
+   *  The same two conditions useSeeded uses, and the second one is what
+   *  keeps this quiet on an ordinary save: there WAS typing (the field
+   *  does not match the value it was seeded from) and what arrived is
+   *  not it (the field does not match what has just landed either). An
+   *  operator's own Save fails the second and says nothing. */
+  const [fallbackReplaced, setFallbackReplaced] = useState(false);
+
   // Take a fresh server value during render rather than in an effect, so
   // the field never sits there showing an edit the database has already
   // replaced. Same pattern as components/AgentStatus.tsx.
   const [seenFallback, setSeenFallback] = useState(location.fallback_human_number);
   if (seenFallback !== location.fallback_human_number) {
+    setFallbackReplaced(
+      fallback !== (seenFallback ?? "") && fallback !== (location.fallback_human_number ?? ""),
+    );
     setSeenFallback(location.fallback_human_number);
     setFallback(location.fallback_human_number ?? "");
   }
@@ -529,6 +600,35 @@ export function GoLive({ state }: { state: GoLiveState }) {
   const busy = pending;
   const noFallback = !location.fallback_human_number;
 
+  /* Typing in the fallback field that has not been saved.
+   *
+   *  A CAPABILITY GAIN, and free. This panel is a tab now, so a
+   *  half-typed fallback number can be on a panel that is display:none
+   *  -- and before the merge it could be lost to a plain reload with no
+   *  prompt of any kind, because this was the one dirty-capable field on
+   *  the console that reported to nobody. Registering it puts an
+   *  "Unsaved" chip on the Line tab, arms beforeunload, and brings it
+   *  under the leave guard, exactly as the editor's nineteen other
+   *  fields already were.
+   *
+   *  The same test the Save button is enabled on, deliberately: an empty
+   *  field cannot be saved, so warning about it would be warning about
+   *  something with no action behind it. */
+  const fallbackDirty =
+    fallback.trim() !== "" && fallback !== (location.fallback_human_number ?? "");
+  useSectionDirty("line", fallbackDirty);
+
+  /* The account of a loss stands until there is something new to lose.
+     Adjusted during render, the same way the re-seed above is and for
+     the same reason useSeeded does it there rather than in an effect:
+     an effect would paint the stale sentence for a frame. */
+  if (fallbackReplaced && fallbackDirty) setFallbackReplaced(false);
+
+  /* A "Replaced" chip on the Line tab, so the loss is legible from
+     whichever tab the operator is actually looking at -- this panel is
+     display:none for eight of the nine. */
+  useSectionReplaced("line", fallbackReplaced);
+
   const headline = !location.is_live
     ? "Not live"
     : location.kill_switch_on
@@ -653,21 +753,51 @@ export function GoLive({ state }: { state: GoLiveState }) {
         : null;
 
   return (
-    <section className="card blueprint golive">
+    <section id="line" className="card blueprint setup-card">
       <Corners />
-      <h4>Going live</h4>
+      <h2>Going live</h2>
 
-      <p className="golive-state">
+      {/* The answer to the only question the operator opened this page
+          with, in the house's own 25px condensed heading rather than in
+          a class that hand-set the same three declarations. The dot, the
+          state word and the sentence naming the number are one line, and
+          it is the first line on the page after the restaurant's name. */}
+      <h3>
         <span
-          className={location.is_live && !location.kill_switch_on ? "status-dot live" : "status-dot off"}
+          className={
+            location.is_live && !location.kill_switch_on ? "status-dot live" : "status-dot off"
+          }
           aria-hidden="true"
         />
         {headline}
-        <span className="sub">{sub}</span>
+        <span className="sub text-muted">{sub}</span>
+      </h3>
+
+      {/* The three account facts that describe THE PHONE, and the only
+          three the go-live panel owns. The other nine are fields, and
+          each of them is on the tab that holds its field; all twelve are
+          still listed verbatim on System. .card-meta is the house's row
+          for a card's own counts, worn unchanged. */}
+      <p className="card-meta">
+        <span>
+          Our number <span className="num">{location.twilio_number ?? "not provisioned"}</span>
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>
+          Falls back to{" "}
+          <span className="num">{location.fallback_human_number ?? "not set"}</span>
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>
+          Forwarding{" "}
+          {location.forwarding_verified_at
+            ? `verified ${relative(location.forwarding_verified_at)}`
+            : "never verified"}
+        </span>
       </p>
 
       {vapiError ? (
-        <p className="golive-note">
+        <p className="card-body">
           <span className="tag tag-out">Vapi</span> {vapiError} Until that clears, the assistant
           and number checks cannot be confirmed, so this restaurant cannot be turned on and the
           controls for those two — and the one-click that drives them — are hidden rather than
@@ -677,7 +807,7 @@ export function GoLive({ state }: { state: GoLiveState }) {
       ) : null}
 
       {ownershipError ? (
-        <p className="golive-note">
+        <p className="card-body">
           <span className="tag tag-out">Numbers</span> {ownershipError} The list below still shows
           what is on the Vapi account, each row carrying that reason. Everything else on this panel
           — including taking the restaurant off and the kill switch — is unaffected.
@@ -685,7 +815,7 @@ export function GoLive({ state }: { state: GoLiveState }) {
       ) : null}
 
       {message ? (
-        <p className="golive-note" role="status" aria-live="polite">
+        <p className="card-body" role="status" aria-live="polite">
           {message.ok ? null : (
             <>
               <span className="tag tag-out">Failed</span>{" "}
@@ -695,33 +825,67 @@ export function GoLive({ state }: { state: GoLiveState }) {
         </p>
       ) : null}
 
-      <div className="golive-list">
-        {checks.map((check) => {
-          const anchor = CHECK_ANCHOR[check.key];
-          const body = (
-            <>
-              <div className="golive-title">{check.title}</div>
-              <p className="golive-note">
-                {STATE_WORD[check.status]} — {check.note}
-              </p>
-            </>
-          );
+      {/* THE CHECKLIST, AS A TABLE.
+          It was six <div>s wearing a 3px left border in one of four
+          blues, with the state word inlined at the front of the note.
+          Two dark blues cannot separate "blocked" from "worth fixing",
+          which is why the word was there at all -- and the house already
+          maps these exact four states onto four system tags on /admin,
+          where a restaurant's health is `live` / `kill-switch` /
+          `not-live` / `no-forwarding`. So the border went and the tag
+          came, the word moved INTO the chip, and the console has one
+          status vocabulary across the portfolio and the panel instead of
+          two. Not one state word changed. */}
+      <div className="table-scroll">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Check</th>
+              <th>State</th>
+              <th>What to do</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {checks.map((check) => {
+              const section = CHECK_SECTION[check.key];
+              return (
+                <tr key={check.key}>
+                  <td>{check.title}</td>
+                  <td>
+                    <span className={CHECK_TAG[check.status]}>{STATE_WORD[check.status]}</span>
+                  </td>
+                  <td>{check.note}</td>
+                  {/* Its own cell, and a .btn rather than the
+                      colour-only link this used to be. The affordance
+                      has to be a RESTING one: this console was reported
+                      from an iPad, where :hover never fires, and the row
+                      that said "Menu — 14 items" and could not show the
+                      menu is the defect that started all of this.
+                      .btn-secondary carries a border at rest, which is
+                      the same answer the call log's Open button already
+                      gives for the same reason.
 
-          return (
-            <div key={check.key} className={`golive-item is-${check.status}`}>
-              {anchor ? (
-                <Link
-                  className="golive-body golive-link"
-                  href={`/admin/${location.id}/edit${anchor}`}
-                >
-                  {body}
-                </Link>
-              ) : (
-                <div className="golive-body">{body}</div>
-              )}
-            </div>
-          );
-        })}
+                      Only the three whose subject is a thing the
+                      operator TYPES carry one. `assistant`, `number` and
+                      `forwarding` are this panel's own business and
+                      their controls are inches below the row. */}
+                  <td>
+                    {section ? (
+                      <SectionLink
+                        section={section}
+                        className="btn btn-secondary"
+                        label={`Fix ${check.title} on the ${SECTION_LABEL[section]} tab`}
+                      >
+                        Fix in {SECTION_LABEL[section]}
+                      </SectionLink>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
 
       {/* The paved road, first, so it is read before the row of
@@ -729,34 +893,43 @@ export function GoLive({ state }: { state: GoLiveState }) {
           clearing the blockers is the job, and a button disabled by the
           very thing it exists to fix is a dead end. */}
       {!vapiDown ? (
-        <div className="golive-actions" role="group" aria-label="Turn this restaurant on">
-          <button
-            type="button"
-            className="btn btn-primary golive-go"
-            disabled={busy}
-            aria-describedby="golive-paved"
-            onClick={() => {
-              /* The one press that can reach the one-way door stops here
-                 first. The area code is the half of a new number a
-                 customer reads off a door and dials, and this panel is
-                 the last place a person sees it before Vapi issues it --
-                 so it is asked for in the same confirm, in the same
-                 words, as the standalone button's. Re-seeded from the
-                 server's suggestion on every open: a code typed and then
-                 cancelled is the one value here that would otherwise be
-                 spent without being read. */
-              if (mayMint) {
-                setAreaCode(defaultAreaCode ?? "");
-                setDialog({ kind: "provision", then: "live" });
-              } else {
-                runMakeItLive();
-              }
-            }}
-          >
-            {progress ? progress.stages[progress.at].label : "Make it live"}
-          </button>
+        <>
+          <hr className="hr" />
+          <div className="setup-row" role="group" aria-label="Turn this restaurant on">
+            <button
+              type="button"
+              className="btn btn-primary golive-go"
+              disabled={busy}
+              aria-describedby="golive-paved"
+              onClick={() => {
+                /* The one press that can reach the one-way door stops
+                   here first. The area code is the half of a new number
+                   a customer reads off a door and dials, and this panel
+                   is the last place a person sees it before Vapi issues
+                   it -- so it is asked for in the same confirm, in the
+                   same words, as the standalone button's. Re-seeded from
+                   the server's suggestion on every open: a code typed
+                   and then cancelled is the one value here that would
+                   otherwise be spent without being read. */
+                if (mayMint) {
+                  setAreaCode(defaultAreaCode ?? "");
+                  setDialog({ kind: "provision", then: "live" });
+                } else {
+                  runMakeItLive();
+                }
+              }}
+            >
+              {progress ? progress.stages[progress.at].label : "Make it live"}
+            </button>
+          </div>
 
-          <p className="golive-note" id="golive-paved">
+          {/* Outside the row rather than inside it. In a wrapping flex
+              row a paragraph is a flex item and has to be given
+              `flex: 1 1 100%` to take its own line; as a sibling of the
+              row it takes one for free, and the card's own column gap
+              gives it its air. That is one fewer rule for every note on
+              this panel. */}
+          <p className="text-muted setup-note" id="golive-paved">
             {noFallback ? (
               <>
                 One press does every step a machine may do by itself — but not this one. There is
@@ -794,46 +967,79 @@ export function GoLive({ state }: { state: GoLiveState }) {
               </>
             )}
           </p>
-        </div>
+        </>
       ) : null}
 
       {progress ? (
-        <div className="golive-run">
+        <div className="card">
           <div className="card-kicker">Working</div>
-          <p className="golive-note" role="status" aria-live="polite">
+          <p className="text-muted setup-note" role="status" aria-live="polite">
             Step {progress.at + 1} of {progress.stages.length} — {progress.stages[progress.at].detail}
           </p>
-          <p className="golive-note text-muted">
+          <p className="text-muted setup-note">
             That is the order the run works in, walked on a clock — not a report. What it actually
             did appears here when it answers.
           </p>
         </div>
       ) : report ? (
-        <div className="golive-run">
+        <div className="card">
           <div className="card-kicker">What that run did</div>
-          <div className="golive-list">
-            {report.map((step) => (
-              <div key={step.key} className={`golive-item is-${OUTCOME_STATE[step.outcome]}`}>
-                <div className="golive-body">
-                  <div className="golive-title">{STEP_TITLE[step.key]}</div>
-                  <p className="golive-note">
-                    {OUTCOME_WORD[step.outcome]}
-                    {step.note ? ` — ${step.note}` : null}
-                  </p>
-                </div>
-              </div>
-            ))}
+          {/* The same table as the checklist above it, wearing the same
+              four tags, because it is the same four subjects in the same
+              four words -- the account of a run and the checklist of a
+              state have to be legible as one vocabulary, or the operator
+              has to learn two. */}
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th>Outcome</th>
+                  <th>What happened</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.map((step) => (
+                  <tr key={step.key}>
+                    <td>{STEP_TITLE[step.key]}</td>
+                    <td>
+                      <span className={CHECK_TAG[OUTCOME_STATE[step.outcome]]}>
+                        {OUTCOME_WORD[step.outcome]}
+                      </span>
+                    </td>
+                    <td>{step.note ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       ) : null}
 
-      <div className="golive-actions" role="group" aria-label="Fix what is missing">
+      <hr className="hr" />
+
+      {/* What happened to the fallback number that was being typed here.
+          Above the row rather than under it: it is the account of why
+          the field below now reads something else, and it has to be
+          read before the field is retyped. Absent unless there was a
+          loss -- see fallbackReplaced. */}
+      <ReplacedNote when={fallbackReplaced} />
+
+      {/* The controls, fenced off from the checklist above them by the
+          system's own rule rather than by a border-top declared on a
+          class of this panel's own. .setup-row is already "a field and
+          the buttons that act on it, bottom-aligned" -- the identical
+          intent .golive-actions spelled out longhand. */}
+      <div className="setup-row" role="group" aria-label="Fix what is missing">
         <div className="field">
           <label htmlFor="golive-fallback">Fallback number</label>
+          {/* .num, the house's figure class, rather than a rule reaching
+              into this row to set tabular figures on whatever inputs it
+              happens to contain. */}
           <input
             id="golive-fallback"
             ref={fallbackRef}
-            className="input"
+            className="input num"
             type="tel"
             inputMode="tel"
             autoComplete="off"
@@ -846,7 +1052,7 @@ export function GoLive({ state }: { state: GoLiveState }) {
         <button
           type="button"
           className="btn btn-secondary"
-          disabled={busy || fallback.trim() === "" || fallback === (location.fallback_human_number ?? "")}
+          disabled={busy || !fallbackDirty}
           onClick={() => run(() => setFallbackNumberAction(location.id, fallback))}
         >
           Save fallback
@@ -876,7 +1082,7 @@ export function GoLive({ state }: { state: GoLiveState }) {
                   <label htmlFor="golive-number">Attach a number</label>
                   <select
                     id="golive-number"
-                    className="input"
+                    className="input num"
                     value={pick}
                     disabled={busy}
                     onChange={(event) => setPick(event.target.value)}
@@ -914,23 +1120,28 @@ export function GoLive({ state }: { state: GoLiveState }) {
             >
               Get a new number…
             </button>
-            <p className="golive-note">
-              {/* "Nothing is attachable" has two quite different causes
-                  and only one of them is a fact about the account, so
-                  they never share a sentence. */}
-              {ownershipError
-                ? "Nothing can be attached until that read comes back — every row is refused for the same reason, not because the account is full. Getting a brand-new number does not depend on it."
-                : numbers.length === 0
-                  ? "There are no numbers on the Vapi account yet. Getting one spends the account’s free-number allowance and cannot be undone, so it asks first."
-                  : attachable.length === 0
-                    ? "Every number on the account is already spoken for — each one carries its reason in the list. Free one up in the Vapi dashboard, or get a new one."
-                    : "Attaching a number you already have is free and takes one click to undo. Getting a new one does not."}
-            </p>
           </>
         ) : null}
       </div>
 
-      <div className="golive-actions" role="group" aria-label="The state of the line">
+      {needsNumber && !vapiDown ? (
+        <p className="text-muted setup-note">
+          {/* "Nothing is attachable" has two quite different causes
+              and only one of them is a fact about the account, so
+              they never share a sentence. */}
+          {ownershipError
+            ? "Nothing can be attached until that read comes back — every row is refused for the same reason, not because the account is full. Getting a brand-new number does not depend on it."
+            : numbers.length === 0
+              ? "There are no numbers on the Vapi account yet. Getting one spends the account’s free-number allowance and cannot be undone, so it asks first."
+              : attachable.length === 0
+                ? "Every number on the account is already spoken for — each one carries its reason in the list. Free one up in the Vapi dashboard, or get a new one."
+                : "Attaching a number you already have is free and takes one click to undo. Getting a new one does not."}
+        </p>
+      ) : null}
+
+      <hr className="hr" />
+
+      <div className="setup-row" role="group" aria-label="The state of the line">
         {location.is_live ? (
           // The one control with no guard of any kind: not disabled while
           // something else is in flight, not behind a confirmation, not
@@ -1035,18 +1246,18 @@ export function GoLive({ state }: { state: GoLiveState }) {
             What to tell the restaurant
           </button>
         ) : null}
-
-        {!location.is_live && blockers.length > 0 ? (
-          <p className="golive-note" id="golive-blockers">
-            {/* The titles are headings ("Phone number", "AI assistant"),
-                so they are listed after the colon rather than dropped
-                mid-sentence, where capitalised nouns read as a stutter. */}
-            Go live is off until {blockers.length === 1 ? "this is" : "these are"} sorted out:{" "}
-            {blockers.map((b) => b.title).join(", ")}. The warnings above never stop it.
-            {vapiDown ? null : " Make it live works through them for you."}
-          </p>
-        ) : null}
       </div>
+
+      {!location.is_live && blockers.length > 0 ? (
+        <p className="text-muted setup-note" id="golive-blockers">
+          {/* The titles are headings ("Phone number", "AI assistant"),
+              so they are listed after the colon rather than dropped
+              mid-sentence, where capitalised nouns read as a stutter. */}
+          Go live is off until {blockers.length === 1 ? "this is" : "these are"} sorted out:{" "}
+          {blockers.map((b) => b.title).join(", ")}. The warnings above never stop it.
+          {vapiDown ? null : " Make it live works through them for you."}
+        </p>
+      ) : null}
 
       {confirmCopy ? (
         <div

@@ -15,7 +15,7 @@ import {
 } from "react";
 import { Corners } from "@/components/Corners";
 
-/* The editor's eight subjects, one on screen at a time.
+/* The operator console's nine subjects, one on screen at a time.
  *
  * WHAT THIS REPLACED, AND WHY
  * ---------------------------
@@ -24,23 +24,34 @@ import { Corners } from "@/components/Corners";
  * a stack ... I just have to scroll all the way to the down. I don't
  * like it ... I just want to click on the section." Asked how a section
  * should open they chose tabs -- swap in place, one section on screen,
- * nothing below it. Not an overlay, not an accordion.
+ * nothing below it. Not an overlay, not an accordion. That was accepted.
+ *
+ * THEN THE SAME COMPLAINT ARRIVED ABOUT THE OTHER HALF: "the dashboard
+ * looks so clumsy and not properly done ... the dashboard is not at all
+ * consistant." /admin/<id> was four unrelated subjects stacked in one
+ * .split under five headings, with a strip of eight links across the top
+ * pointing at the very tabs this file already owns. Two navigation ideas
+ * for one console. So this module stopped being the EDITOR's strip and
+ * became the console's: the overview's subjects and the editor's tabs
+ * are one set of nine, and there is one act -- press a tab -- for all of
+ * them. The name had to stop saying "edit" for that to be readable.
  *
  * NOTHING UNMOUNTS
  * ----------------
  * Every panel is rendered on every render; the inactive ones carry
  * `hidden`. Conditional rendering was rejected outright: the sections'
  * form state (useSeeded's fields, WeeklyHours' days, every half-typed
- * price in MenuAdmin) lives in useState, and unmounting destroys it
- * silently. A half-typed week lost because somebody checked the menu is
- * exactly the failure tabs must not introduce. `display: none` also
- * takes the hidden panels out of the a11y tree, out of the focus order
- * and out of find-in-page, so only the visible tab is reachable by Tab,
- * by a screen reader or by Ctrl-F.
+ * price in MenuAdmin, and now the go-live panel's fallback field) lives
+ * in useState, and unmounting destroys it silently. A half-typed week
+ * lost because somebody checked the menu is exactly the failure tabs
+ * must not introduce. `display: none` also takes the hidden panels out
+ * of the a11y tree, out of the focus order and out of find-in-page, so
+ * only the visible tab is reachable by Tab, by a screen reader or by
+ * Ctrl-F.
  *
  * ...WHICH IS ALSO WHY THE STRIP CARRIES MARKS
  * --------------------------------------------
- * Seven of the eight dirty surfaces are display:none at any moment, so
+ * Eight of the nine dirty surfaces are display:none at any moment, so
  * a card's own "Unsaved" flag can be somewhere nobody can read it. The
  * strip is then the only visible sign, which is what useSectionDirty
  * and useSectionReplaced below are for, and why the strip states the
@@ -50,26 +61,39 @@ import { Corners } from "@/components/Corners";
  * -----------------
  * This module reads no id, calls no action and writes nothing. The tab
  * is client state and the only thing it decides is which panel is
- * visible. app/admin/[locationId]/edit/page.tsx validates `?section=`
- * against a fixed eight-item list before it ever reaches this file; it
+ * visible. app/admin/[locationId]/page.tsx validates `?section=`
+ * against a fixed nine-item list before it ever reaches this file; it
  * is never an id, never reaches Postgres or Vapi, and no "use server"
  * export gained a parameter for it. locationId remains the only
  * caller-supplied id on the route and is still uuid-validated.
  */
 
-export type EditSectionId =
-  | "business"
+export type ConsoleSectionId =
+  | "line"
+  | "calls"
+  | "orders"
+  | "menu"
   | "hours"
   | "answering"
   | "service"
-  | "orders"
-  | "recording"
-  | "menu"
+  | "business"
   | "managed";
 
-/** The tabs, in the order the page used to render the cards.
+/** The tabs, in the order state → evidence → record → audit.
  *
- *  Eight, not the ten <section id>s on the page: #holidays is a
+ *  1-3 are what is happening on the phone right now; 4-8 are what is on
+ *  file, by how often an operator is asked to change it; 9 is the audit
+ *  trail. The editor's old order was only "the order the cards used to
+ *  be stacked in" and carried no argument.
+ *
+ *  TWO COLLAPSES, BOTH EARNED. `recording` folded into Calls -- the
+ *  setting and the log it governs are one ticket ("why can't I hear that
+ *  call"), and they used to be on two different routes. The overview's
+ *  recent-orders list folded into Orders, where the routing setting is,
+ *  for the same reason and because "orders" meant two different things
+ *  on two screens.
+ *
+ *  Nine, not the eleven <section id>s across the console: #holidays is a
  *  sub-card of Hours and #sold-out a sub-card of Menu, and both stay
  *  inside their parent's panel. A holiday is an override of a weekly
  *  row -- "we close at 3 on Christmas Eve" is unjudgeable without
@@ -80,50 +104,61 @@ export type EditSectionId =
  *  measurement rather than taste: at 768px the column is 712px wide, and
  *  the full headings ("The business", "Answering the phone", "Where
  *  orders go") measure past it, so the strip would wrap at rest on the
- *  exact device the complaint came from. The short set leaves about
- *  130px of headroom -- one "Unsaved" chip -- before anything wraps.
- *  Each panel's own <h2> still carries the full heading, so an operator
- *  who pressed "Answering the phone" on /admin/<id> lands on a tab
- *  reading Answering over a card reading Answering the phone. */
-export const EDIT_SECTIONS: readonly { id: EditSectionId; label: string }[] = [
-  { id: "business", label: "Business" },
+ *  exact device the complaint came from. Dropping "Recording" and adding
+ *  "Line" and "Calls" leaves the set at about 654px of 13px Barlow --
+ *  still one row on an iPad, and flex-wrap still catches the phone.
+ *  Each panel's own <h2> carries the full heading. */
+export const CONSOLE_SECTIONS: readonly { id: ConsoleSectionId; label: string }[] = [
+  { id: "line", label: "Line" },
+  { id: "calls", label: "Calls" },
+  { id: "orders", label: "Orders" },
+  { id: "menu", label: "Menu" },
   { id: "hours", label: "Hours" },
   { id: "answering", label: "Answering" },
   { id: "service", label: "Money & service" },
-  { id: "orders", label: "Orders" },
-  { id: "recording", label: "Recording" },
-  { id: "menu", label: "Menu" },
+  { id: "business", label: "Business" },
   { id: "managed", label: "System" },
 ];
 
-export const DEFAULT_SECTION: EditSectionId = "business";
+/** What the console opens on with no ?section=.
+ *
+ *  Line, because the one question an operator opens /admin/<id> with --
+ *  with a restaurant owner on the phone -- is "is this restaurant
+ *  answering, and if not what is in the way". Everything else on this
+ *  page is reference. */
+export const DEFAULT_SECTION: ConsoleSectionId = "line";
 
-function labelOf(id: EditSectionId): string {
-  return EDIT_SECTIONS.find((section) => section.id === id)?.label ?? id;
+function labelOf(id: ConsoleSectionId): string {
+  return CONSOLE_SECTIONS.find((section) => section.id === id)?.label ?? id;
 }
 
 /** Which tab an old in-page anchor opens.
  *
  *  The hash stays the contract, permanently and not as a migration
  *  step. /edit#menu is pasted into tickets, bookmarked and mailed, and
- *  those URLs can never be rewritten. All ten ids stay on their sections
+ *  those URLs can never be rewritten. All the ids stay on their sections
  *  in the DOM; nothing was renamed. #holidays and #sold-out map to their
- *  parent's tab because that is where their card now lives.
+ *  parent's tab because that is where their card lives.
  *
- *  components/admin/GoLive.tsx still sends its three checklist rows to
- *  #menu, #hours and #answering and needs no edit for this to work.
+ *  `recording` still resolves and now opens Calls, which is where the
+ *  recording setting moved to -- the anchor is unchanged, its
+ *  destination is one tab over, and the <section id="recording"> is
+ *  still in that panel so the browser's own scroll still lands on it.
  *
  *  READ IT THROUGH sectionOfAnchor(), NEVER BY INDEXING IT. */
-export const SECTION_OF_ANCHOR: Record<string, EditSectionId> = {
-  business: "business",
+export const SECTION_OF_ANCHOR: Record<string, ConsoleSectionId> = {
+  line: "line",
+  golive: "line",
+  calls: "calls",
+  recording: "calls",
+  orders: "orders",
+  menu: "menu",
+  "sold-out": "menu",
   hours: "hours",
   holidays: "hours",
   answering: "answering",
   service: "service",
-  orders: "orders",
-  recording: "recording",
-  menu: "menu",
-  "sold-out": "menu",
+  business: "business",
   managed: "managed",
 };
 
@@ -133,25 +168,25 @@ export const SECTION_OF_ANCHOR: Record<string, EditSectionId> = {
  *  The hash is the one part of the URL the browser hands over unfiltered
  *  and it is not validated anywhere upstream, so `SECTION_OF_ANCHOR[hash]`
  *  is a lookup on attacker-chosen text. An object literal inherits from
- *  Object.prototype, so /edit#constructor -- and #toString, #valueOf,
- *  #hasOwnProperty, #__proto__ -- returned a truthy value that is not an
- *  EditSectionId at all, sailed past a `if (!section)` guard, and left
- *  the editor blank: no tab checked, all eight panels hidden, the arrow
+ *  Object.prototype, so #constructor -- and #toString, #valueOf,
+ *  #hasOwnProperty, #__proto__ -- returned a truthy value that is not a
+ *  ConsoleSectionId at all, sailed past a `if (!section)` guard, and left
+ *  the console blank: no tab checked, every panel hidden, the arrow
  *  keys dead (findIndex returns -1), and `?section=function%20Object()...`
  *  written into the URL so a reload did it again. There is no way back
  *  from that except editing the address bar.
  *
  *  Two guards, because either alone is a trap for the next reader:
  *  Object.hasOwn keeps the prototype out, and the membership check keeps
- *  the answer inside the eight tabs the strip can actually show. */
-export function sectionOfAnchor(hash: string): EditSectionId | undefined {
+ *  the answer inside the tabs the strip can actually show. */
+export function sectionOfAnchor(hash: string): ConsoleSectionId | undefined {
   if (!Object.hasOwn(SECTION_OF_ANCHOR, hash)) return undefined;
   const section = SECTION_OF_ANCHOR[hash];
-  return EDIT_SECTIONS.some((known) => known.id === section) ? section : undefined;
+  return CONSOLE_SECTIONS.some((known) => known.id === section) ? section : undefined;
 }
 
-const tabDomId = (id: EditSectionId) => `edit-tab-${id}`;
-const panelDomId = (id: EditSectionId) => `edit-panel-${id}`;
+const tabDomId = (id: ConsoleSectionId) => `console-tab-${id}`;
+const panelDomId = (id: ConsoleSectionId) => `console-panel-${id}`;
 
 /* ── what each section has to say about itself ─────────────────────── */
 
@@ -161,25 +196,29 @@ const panelDomId = (id: EditSectionId) => `edit-panel-${id}`;
  *  only they know. */
 type SectionMark = "unsaved" | "replaced";
 
-type EditTabsContextValue = {
-  active: EditSectionId;
+type ConsoleTabsContextValue = {
+  active: ConsoleSectionId;
+  /** Swap the panel in place. Referentially stable. */
+  goTo: (section: ConsoleSectionId) => void;
   /** `mark: null` unregisters. Referentially stable. */
-  report: (reporterId: string, section: EditSectionId, mark: SectionMark | null) => void;
+  report: (reporterId: string, section: ConsoleSectionId, mark: SectionMark | null) => void;
 };
 
-const NO_SECTIONS: ReadonlySet<EditSectionId> = new Set<EditSectionId>();
+const NO_SECTIONS: ReadonlySet<ConsoleSectionId> = new Set<ConsoleSectionId>();
 
-/* The default is a no-op on purpose: HoursEditor and MenuAdmin claim in
-   their own headers that they can be rendered standalone and from a
-   test, and calling these hooks must not make that untrue. Outside an
-   <EditTabs> the report goes nowhere and nothing renders differently. */
-const EditTabsContext = createContext<EditTabsContextValue>({
+/* The default is a no-op on purpose: HoursEditor, MenuAdmin and GoLive
+   all claim in their own headers that they can be rendered standalone
+   and from a test, and calling these hooks must not make that untrue.
+   Outside a <ConsoleTabs> the report goes nowhere, goTo does nothing,
+   and nothing renders differently. */
+const ConsoleTabsContext = createContext<ConsoleTabsContextValue>({
   active: DEFAULT_SECTION,
+  goTo: () => {},
   report: () => {},
 });
 
-function useSectionMark(section: EditSectionId, mark: SectionMark, on: boolean): void {
-  const { report } = useContext(EditTabsContext);
+function useSectionMark(section: ConsoleSectionId, mark: SectionMark, on: boolean): void {
+  const { report } = useContext(ConsoleTabsContext);
   const reporterId = useId();
 
   useEffect(() => {
@@ -204,16 +243,16 @@ function useSectionMark(section: EditSectionId, mark: SectionMark, on: boolean):
  *  being told to do the thing that threw the other tab's work away.
  *  Every caller already computes exactly the boolean the guard needs.
  *
- *  What beforeunload cannot see is a client-side route change --
- *  pressing "Overview & go-live" in the page head. That half is
- *  <EditTabs>'s own, in useLeaveGuard below: it has the whole dirty set
- *  and can therefore name the sections, which a beforeunload dialog is
- *  not allowed to do.
+ *  What beforeunload cannot see is a client-side route change -- the
+ *  back link in the page head, an item in the operator bar. That half is
+ *  <ConsoleTabs>'s own, in useLeaveGuard below: it has the whole dirty
+ *  set and can therefore name the sections, which a beforeunload dialog
+ *  is not allowed to do.
  *
  *  One line per dirty-capable component; several reporters may sit in
  *  one section (Hours has the week, every holiday row and the add form)
  *  and they are OR'd, keyed by useId(), and unregistered on unmount. */
-export function useSectionDirty(section: EditSectionId, dirty: boolean): void {
+export function useSectionDirty(section: ConsoleSectionId, dirty: boolean): void {
   useSectionMark(section, "unsaved", dirty);
 
   useEffect(() => {
@@ -226,23 +265,81 @@ export function useSectionDirty(section: EditSectionId, dirty: boolean): void {
 
 /** Tell the page this component's unsaved typing has already been taken
  *  away by a fresh server value. See <ReplacedNote /> for what happened. */
-export function useSectionReplaced(section: EditSectionId, replaced: boolean): void {
+export function useSectionReplaced(section: ConsoleSectionId, replaced: boolean): void {
   useSectionMark(section, "replaced", replaced);
+}
+
+/** Swap the console to another tab from inside a panel.
+ *
+ *  What the go-live checklist's three "Fix in …" buttons press. They are
+ *  still real anchors -- `?section=<id>` on this same path -- so
+ *  Cmd-click, middle-click and open-in-new-tab all still work and land
+ *  on the right tab from the first byte of HTML; this only intercepts
+ *  the plain left-click, which would otherwise cost a full navigation, a
+ *  fresh Vapi read and every panel's unsaved typing. */
+export function useConsoleGoTo(): (section: ConsoleSectionId) => void {
+  return useContext(ConsoleTabsContext).goTo;
+}
+
+/** A press that moves the console to another tab.
+ *
+ *  A REAL ANCHOR, and that is the whole design. `?section=<id>` on this
+ *  same path is a URL the server already understands, so Cmd-click,
+ *  middle-click, "open in new tab" and a copied link all land on the
+ *  right panel in the first byte of HTML. Only the plain left-click is
+ *  intercepted, and only to save what the navigation would cost: four
+ *  reads, one of them a Vapi round trip, and every panel's unsaved
+ *  typing.
+ *
+ *  The same modifier tests as useLeaveGuard's, for the same reasons and
+ *  in the same order -- see its header. And it never fights that guard:
+ *  the guard ignores a link whose pathname is the current one, which
+ *  every one of these is. */
+export function SectionLink({
+  section,
+  className,
+  label,
+  children,
+}: {
+  section: ConsoleSectionId;
+  className?: string;
+  /** An accessible name, where the visible text repeats down a column
+   *  and would otherwise be the ninth identical "Fix". */
+  label?: string;
+  children: ReactNode;
+}) {
+  const goTo = useConsoleGoTo();
+
+  return (
+    <a
+      href={`?section=${section}`}
+      className={className}
+      aria-label={label}
+      onClick={(event) => {
+        if (event.defaultPrevented) return;
+        if (event.button !== 0) return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        goTo(section);
+      }}
+    >
+      {children}
+    </a>
+  );
 }
 
 /** What an operator gets instead of silence when their typing is gone.
  *
  *  Every action on this route calls revalidatePath, success or refusal,
- *  so ONE write anywhere on the page hands all eight panels fresh props
- *  at once. Each form then re-seeds during render if its own server
- *  values moved -- which is right, and deliberately so: a tab left open
- *  must not sit there showing an edit the database has already
- *  replaced. But it used to happen without a word. Flip one dish to
- *  sold out while the owner's own screen changes a weekly row, and the
- *  week somebody had retyped in the Hours tab was simply gone, on a
- *  panel that is display:none, with the tab's "Unsaved" chip
- *  disappearing in the same commit -- indistinguishable from their own
- *  save landing.
+ *  so ONE write anywhere on the page hands every panel fresh props at
+ *  once. Each form then re-seeds during render if its own server values
+ *  moved -- which is right, and deliberately so: a tab left open must
+ *  not sit there showing an edit the database has already replaced. But
+ *  it used to happen without a word. Flip one dish to sold out while the
+ *  owner's own screen changes a weekly row, and the week somebody had
+ *  retyped in the Hours tab was simply gone, on a panel that is
+ *  display:none, with the tab's "Unsaved" chip disappearing in the same
+ *  commit -- indistinguishable from their own save landing.
  *
  *  So the re-seed still happens, and now it says so: this line in the
  *  card, and a "Replaced" chip on the tab so it is legible from
@@ -261,7 +358,7 @@ export function ReplacedNote({ when }: { when: boolean }) {
   );
 }
 
-function sameMembers(a: ReadonlySet<EditSectionId>, b: ReadonlySet<EditSectionId>): boolean {
+function sameMembers(a: ReadonlySet<ConsoleSectionId>, b: ReadonlySet<ConsoleSectionId>): boolean {
   if (a.size !== b.size) return false;
   for (const value of a) if (!b.has(value)) return false;
   return true;
@@ -290,24 +387,22 @@ type PendingExit = {
  *  WHAT beforeunload DOES NOT COVER. useSectionDirty above registers
  *  beforeunload, which is the browser's own hook and fires for a reload,
  *  a tab close and a real document navigation. A client-side route
- *  change is none of those: "Overview & go-live", the back link beside
- *  it and the three items in the operator bar are <Link>s, so Next
- *  swaps the tree in place, this component unmounts, and eight panels of
- *  useState go with it without a single event the browser would call an
- *  unload.
+ *  change is none of those: the back link in the page head and the items
+ *  in the operator bar are <Link>s, so Next swaps the tree in place,
+ *  this component unmounts, and nine panels of useState go with it
+ *  without a single event the browser would call an unload.
  *
  *  HOW THIS CATCHES IT, AND WHY NOT onNavigate. next/link takes an
  *  `onNavigate(e)` prop whose e.preventDefault() cancels the navigation,
  *  and for a link this module rendered that would be the tidier hook.
  *  It is per-link, and not one of the links that loses the work is in
- *  this file: three are in app/admin/[locationId]/edit/page.tsx, two
- *  more in components/admin/EditSections.tsx, and the last two are in
+ *  this file: they are in app/admin/[locationId]/page.tsx, in
+ *  components/admin/EditSections.tsx, and in
  *  components/admin/AdminNav.tsx and app/admin/layout.tsx -- the shell,
- *  which knows nothing about an editor and would have to be handed the
- *  editor's dirty state to use the prop at all. Eight anchors in four
- *  files, nine when the operator also owns a restaurant. A route with
- *  eight ways out needs one guard, not eight that a ninth link is added
- *  without.
+ *  which knows nothing about a console panel and would have to be handed
+ *  the console's dirty state to use the prop at all. A route with that
+ *  many ways out needs one guard, not one per anchor that the next
+ *  anchor is added without.
  *
  *  So: one capture-phase click listener, which sees the press before the
  *  router does. React attaches its delegated listeners to the ROOT
@@ -333,7 +428,8 @@ type PendingExit = {
  *      beforeunload already fires -- guarding it here as well would ask
  *      twice for one press.
  *    * A link to this same pathname (?section=, #menu). The panels stay
- *      mounted through it; that is the whole design.
+ *      mounted through it; that is the whole design, and it is what the
+ *      checklist's own "Fix in …" buttons ride on.
  *    * The browser's own Back button, and every other history move. No
  *      popstate guard, on purpose: popstate arrives AFTER the entry has
  *      already changed, so "cancelling" it means pushing a state back on
@@ -344,19 +440,19 @@ type PendingExit = {
  *    * Sign out. It is a <form> posting a server action, not a link.
  *      Intercepting submits would put this listener in front of every
  *      save on the page, which is a far worse thing to get wrong. */
-function useLeaveGuard(dirtySections: ReadonlySet<EditSectionId>) {
+function useLeaveGuard(dirtySections: ReadonlySet<ConsoleSectionId>) {
   const router = useRouter();
   const [exit, setExit] = useState<PendingExit | null>(null);
   const stayRef = useRef<HTMLButtonElement>(null);
 
-  /* Registered only while something is unsaved, so a clean editor
+  /* Registered only while something is unsaved, so a clean console
      behaves exactly as it did before this existed. `dirtySections` is a
      new Set only when its MEMBERS change (see report()), so this is not
      re-registered on every keystroke. */
   useEffect(() => {
     if (dirtySections.size === 0) return;
 
-    const labels = EDIT_SECTIONS.filter((section) => dirtySections.has(section.id)).map(
+    const labels = CONSOLE_SECTIONS.filter((section) => dirtySections.has(section.id)).map(
       (section) => section.label,
     );
 
@@ -425,7 +521,7 @@ function useLeaveGuard(dirtySections: ReadonlySet<EditSectionId>) {
 
 /* ── the strip ─────────────────────────────────────────────────────── */
 
-export function EditTabs({
+export function ConsoleTabs({
   initial,
   behind,
   children,
@@ -433,26 +529,28 @@ export function EditTabs({
   /** From ?section=, already validated on the server, so the right
    *  panel is in the first byte of HTML and there is no wrong-tab
    *  flash to correct after hydration. */
-  initial: EditSectionId;
+  initial: ConsoleSectionId;
   /** Sections whose assistant is stale, from the server's one Vapi
    *  read. Passed in rather than computed here so the chip is in the
    *  first paint and never appears mid-session. */
-  behind: readonly EditSectionId[];
-  /** The eight <EditPanel>s, rendered on the server. */
+  behind: readonly ConsoleSectionId[];
+  /** The nine <ConsolePanel>s, rendered on the server. */
   children: ReactNode;
 }) {
-  const [active, setActive] = useState<EditSectionId>(initial);
-  const [dirtySections, setDirtySections] = useState<ReadonlySet<EditSectionId>>(NO_SECTIONS);
+  const [active, setActive] = useState<ConsoleSectionId>(initial);
+  const [dirtySections, setDirtySections] = useState<ReadonlySet<ConsoleSectionId>>(NO_SECTIONS);
   const [replacedSections, setReplacedSections] =
-    useState<ReadonlySet<EditSectionId>>(NO_SECTIONS);
-  const reporters = useRef<Map<string, { section: EditSectionId; mark: SectionMark }>>(new Map());
+    useState<ReadonlySet<ConsoleSectionId>>(NO_SECTIONS);
+  const reporters = useRef<Map<string, { section: ConsoleSectionId; mark: SectionMark }>>(
+    new Map(),
+  );
   const tabs = useRef<(HTMLInputElement | null)[]>([]);
 
   /* Stable for the life of the strip, so a keystroke that does not flip
      a mark costs no parent render, and so the reporting effects do not
      re-fire on every render of their own section. */
   const report = useCallback(
-    (reporterId: string, section: EditSectionId, mark: SectionMark | null) => {
+    (reporterId: string, section: ConsoleSectionId, mark: SectionMark | null) => {
       const map = reporters.current;
       if (mark) {
         const held = map.get(reporterId);
@@ -462,8 +560,8 @@ export function EditTabs({
         if (!map.has(reporterId)) return;
         map.delete(reporterId);
       }
-      const unsaved = new Set<EditSectionId>();
-      const replaced = new Set<EditSectionId>();
+      const unsaved = new Set<ConsoleSectionId>();
+      const replaced = new Set<ConsoleSectionId>();
       for (const held of map.values()) {
         (held.mark === "unsaved" ? unsaved : replaced).add(held.section);
       }
@@ -474,20 +572,20 @@ export function EditTabs({
   );
 
   /** A tab the operator chose. */
-  const choose = useCallback((id: EditSectionId) => {
+  const choose = useCallback((id: ConsoleSectionId) => {
     setActive(id);
 
     /* Kept in the URL so a reload, a bookmark and a pasted link all
        land back here -- but with replaceState rather than a <Link>.
        A navigation would re-run this route's server function on every
-       tab press: the whole getEditableRecord read plus readAssistantDrift,
-       which is a Vapi GET with a five-second ceiling, per press, and a
-       server re-render that risks the unsaved client state this whole
-       design exists to protect.
+       tab press: getAdminLocation plus getGoLiveState plus
+       getEditableRecord plus the drift read, four of them against
+       Postgres and Vapi, per press, and a server re-render that risks
+       the unsaved client state this whole design exists to protect.
 
        replaceState and never pushState: with push, nine tab presses fill
-       the back stack and Back stops returning to /admin/<id>, which is
-       where the operator came from and the one place Back must go.
+       the back stack and Back stops returning to /admin, which is where
+       the operator came from and the one place Back must go.
        window.history.state is passed through rather than null because
        Next keeps its router tree in there. */
     const params = new URLSearchParams(window.location.search);
@@ -501,9 +599,10 @@ export function EditTabs({
     window.scrollTo({ top: 0 });
   }, []);
 
-  /* An arrival by hash: /edit#menu from a bookmark, or one of GoLive's
-     three checklist rows. The hash is the most specific, most recently
-     pressed thing on the URL, so it wins over ?section=, and it is then
+  /* An arrival by hash: /admin/<id>#menu from a bookmark, or one of the
+     old /edit#… links arriving through the redirect, which re-applies
+     the fragment. The hash is the most specific, most recently pressed
+     thing on the URL, so it wins over ?section=, and it is then
      rewritten to ?section= and dropped so a reload does not fight it.
      A URL with neither is left exactly as it is -- a page that rewrites
      its own address on load with no user action is rude and pointless.
@@ -537,12 +636,12 @@ export function EditTabs({
      scrolling the page out from under the strip. preventDefault is also
      what keeps this from double-stepping: it suppresses the platform's
      own radio traversal, and this handler makes the single move. The
-     group's shared `name` is still what gives the eight one tab stop,
+     group's shared `name` is still what gives the nine one tab stop,
      with only the selected one tabbable -- the roving tabindex, from
      the platform, free. */
   const onStripKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const last = EDIT_SECTIONS.length - 1;
-    const from = EDIT_SECTIONS.findIndex((section) => section.id === active);
+    const last = CONSOLE_SECTIONS.length - 1;
+    const from = CONSOLE_SECTIONS.findIndex((section) => section.id === active);
     if (from < 0) return;
 
     let to: number;
@@ -566,15 +665,18 @@ export function EditTabs({
     }
 
     event.preventDefault();
-    choose(EDIT_SECTIONS[to].id);
+    choose(CONSOLE_SECTIONS[to].id);
     // preventScroll: the strip is already at the top of the document and
     // choose() has just scrolled there; nothing should move twice.
     tabs.current[to]?.focus({ preventScroll: true });
   };
 
-  const value = useMemo<EditTabsContextValue>(() => ({ active, report }), [active, report]);
+  const value = useMemo<ConsoleTabsContextValue>(
+    () => ({ active, goTo: choose, report }),
+    [active, choose, report],
+  );
 
-  const unsavedLabels = EDIT_SECTIONS.filter((section) => dirtySections.has(section.id)).map(
+  const unsavedLabels = CONSOLE_SECTIONS.filter((section) => dirtySections.has(section.id)).map(
     (section) => section.label,
   );
 
@@ -587,21 +689,21 @@ export function EditTabs({
 
   return (
     <>
-      <div className="edit-tabs-head">
+      <div className="console-tabs-head">
         {/* The house segmented control, worn rather than
             re-implemented: the same <div class="seg"> of
             <label class="seg-opt"> radios components/LoginForm.tsx
             already uses to swap a form in place, so the layout, the
             divider, the checked fill, the hover and the inset focus
             ring all come from app/industry.css and stay in step with
-            it. .edit-tabs is the delta app/app.css adds on top -- it
+            it. .console-tabs is the delta app/app.css adds on top -- it
             takes the panel column's width and wraps rather than
-            scrolling sideways, which is what keeps all eight inside
+            scrolling sideways, which is what keeps all nine inside
             375px, since .seg is overflow: hidden and an option past the
             edge would be unreachable rather than merely awkward.
 
             .seg and not .nav because these are not routes: one of
-            eight, chosen in place with the panel swapping under it, is
+            nine, chosen in place with the panel swapping under it, is
             what a segmented control means.
 
             AND IT IS A RADIO GROUP, WHICH IS WHAT IT IS MADE OF. This
@@ -609,7 +711,7 @@ export function EditTabs({
             halves were wrong. The tablist owned no tabs -- every radio
             sits inside a <label>, so the accessibility tree read
             tablist > LabelText > tab and nothing could compute "7 of
-            8". And role="tab" replaced the input's own `radio` role
+            9". And role="tab" replaced the input's own `radio` role
             while the code went on depending on the radio group for the
             roving tabindex, on a node industry.css makes
             position:absolute, 0x0 and opacity:0. A native radio group
@@ -619,12 +721,12 @@ export function EditTabs({
             attribute and it is the only thing tying a choice to the
             panel it swaps in. */}
         <div
-          className="seg edit-tabs"
+          className="seg console-tabs"
           role="radiogroup"
-          aria-label="Which part of the record to edit"
+          aria-label="Which part of this restaurant to work on"
           onKeyDown={onStripKeyDown}
         >
-          {EDIT_SECTIONS.map((section, index) => {
+          {CONSOLE_SECTIONS.map((section, index) => {
             const on = section.id === active;
             return (
               <label key={section.id} className="seg-opt">
@@ -634,7 +736,7 @@ export function EditTabs({
                   }}
                   type="radio"
                   id={tabDomId(section.id)}
-                  name="ed-section-tab"
+                  name="console-section-tab"
                   aria-controls={panelDomId(section.id)}
                   checked={on}
                   onChange={() => choose(section.id)}
@@ -657,8 +759,8 @@ export function EditTabs({
           })}
         </div>
 
-        {/* The chips say WHICH; this says WHAT HAPPENS NEXT. Seven of
-            the eight surfaces holding typing are display:none at any
+        {/* The chips say WHICH; this says WHAT HAPPENS NEXT. Eight of
+            the nine surfaces holding typing are display:none at any
             moment, which is exactly what the stacked cards did not have
             to say out loud.
 
@@ -672,7 +774,7 @@ export function EditTabs({
             Absent when nothing is unsaved: a standing warning is
             furniture, and furniture is not read. */}
         {unsavedLabels.length > 0 ? (
-          <p className="setup-note edit-tabs-note">
+          <p className="setup-note">
             Unsaved edits on {sentenceList(unsavedLabels)}. Moving between tabs keeps them. A
             link out of this page asks first; the browser&rsquo;s own Back button does not, and
             loses them.
@@ -680,7 +782,7 @@ export function EditTabs({
         ) : null}
       </div>
 
-      <EditTabsContext.Provider value={value}>{children}</EditTabsContext.Provider>
+      <ConsoleTabsContext.Provider value={value}>{children}</ConsoleTabsContext.Provider>
 
       {/* The house dialog, not window.confirm: confirm() cannot be
           styled, cannot be read by the section names it is about
@@ -693,14 +795,14 @@ export function EditTabs({
           loss of the same kind. */}
       {exit ? (
         <div
-          className="dialog-backdrop edit-leave-backdrop"
+          className="dialog-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="edit-leave-title"
+          aria-labelledby="console-leave-title"
         >
           <div className="dialog blueprint">
             <Corners />
-            <div id="edit-leave-title" className="dialog-title">
+            <div id="console-leave-title" className="dialog-title">
               {sentenceList(exit.labels)} {exit.labels.length === 1 ? "has" : "have"} unsaved
               changes
             </div>
@@ -731,12 +833,12 @@ export function EditTabs({
  *  `hidden` is what hides it, and it needs help: `[hidden] { display:
  *  none }` is the user agent's own rule at specificity 0,0,1 and
  *  `.setup-stack { display: flex }` is 0,1,0, so the attribute alone is
- *  inert and all eight panels would paint at once. app/app.css carries
- *  the one line that settles it -- `.setup-stack[hidden] { display:
- *  none }` -- and this element must keep wearing .setup-stack for it to
- *  bite. Do not "tidy" either half away.
+ *  inert and every panel would paint at once. app/app.css carries the
+ *  one line that settles it -- `.setup-stack[hidden] { display: none }`
+ *  -- and this element must keep wearing .setup-stack for it to bite.
+ *  Do not "tidy" either half away.
  *
- *  What that buys: display: none takes the seven hidden panels out of
+ *  What that buys: display: none takes the eight hidden panels out of
  *  the focus order, out of the accessibility tree and out of
  *  find-in-page, so only the chosen section is reachable by Tab, by a
  *  screen reader or by Ctrl-F -- while their React state, and the
@@ -746,9 +848,15 @@ export function EditTabs({
  *  role="group" with the tab's own label as its name, not
  *  role="tabpanel": there is no tablist on this page to belong to. It
  *  is the target of the radio's aria-controls and it says which of the
- *  eight the reader has landed in. */
-export function EditPanel({ id, children }: { id: EditSectionId; children: ReactNode }) {
-  const { active } = useContext(EditTabsContext);
+ *  nine the reader has landed in. */
+export function ConsolePanel({
+  id,
+  children,
+}: {
+  id: ConsoleSectionId;
+  children: ReactNode;
+}) {
+  const { active } = useContext(ConsoleTabsContext);
 
   return (
     <div

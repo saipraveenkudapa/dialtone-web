@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { EditTabs, useSectionDirty } from "@/components/admin/EditTabs";
+import { ConsoleTabs, useSectionDirty } from "@/components/admin/ConsoleTabs";
 
 /* The unsaved-edits guard, dispatched at rather than read.
  *
@@ -12,7 +12,7 @@ import { EditTabs, useSectionDirty } from "@/components/admin/EditTabs";
  * value until a click has happened. It is a capture-phase listener on
  * `document` that either calls preventDefault or does not, and with no
  * DOM there is no effect to run it and no click to give it. The only
- * assertions available were regexes over EditTabs.tsx's own source --
+ * assertions available were regexes over ConsoleTabs.tsx's own source --
  * which prove the file contains a string, not that anything guards
  * anything. A typo'd selector, an effect that never registered, or a
  * listener attached in bubble phase would have left them all green.
@@ -43,7 +43,12 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
-const EDITOR = "/admin/a10c0000-0000-0000-0000-00000000000a/edit";
+/* The console. One page now: the editor's eight tabs and the overview's
+   four subjects are nine tabs on /admin/<locationId>, and /edit is a
+   redirect. That matters to this file in one specific way -- the guard
+   lets a same-pathname link through, and every ?section= link in the
+   product is now on THIS path. */
+const CONSOLE = "/admin/a10c0000-0000-0000-0000-00000000000a";
 
 /* React's own switch for act(): without it every act() call warns that
    the test environment was not configured for it. Declared rather than
@@ -67,9 +72,9 @@ function Section({ dirty }: { dirty: boolean }) {
 function mount(dirty: boolean) {
   act(() => {
     root.render(
-      <EditTabs initial="business" behind={[]}>
+      <ConsoleTabs initial="line" behind={[]}>
         <Section dirty={dirty} />
-      </EditTabs>,
+      </ConsoleTabs>,
     );
   });
 }
@@ -99,7 +104,7 @@ function press(
 ): { prevented: boolean } {
   const anchor = document.createElement("a");
   for (const [name, value] of Object.entries(attrs)) anchor.setAttribute(name, value);
-  anchor.textContent = "Overview & go-live";
+  anchor.textContent = "Every restaurant";
   document.body.appendChild(anchor);
 
   let prevented = false;
@@ -118,7 +123,11 @@ function press(
   return { prevented };
 }
 
-const dialog = () => container.querySelector(".edit-leave-backdrop");
+/* .dialog-backdrop, not a class of the guard's own. .edit-leave-backdrop
+   existed only to carry `z-index: 5`, which is now one rule on the
+   system class -- see app.css. There is one backdrop in this container
+   at a time, so the system class identifies it exactly. */
+const dialog = () => container.querySelector(".dialog-backdrop");
 
 function button(label: string): HTMLButtonElement {
   const found = [...container.querySelectorAll("button")].find((b) =>
@@ -131,7 +140,7 @@ function button(label: string): HTMLButtonElement {
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   push.mockClear();
-  window.history.replaceState({}, "", `${EDITOR}?section=hours`);
+  window.history.replaceState({}, "", `${CONSOLE}?section=hours`);
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -142,11 +151,13 @@ afterEach(() => {
   container.remove();
 });
 
-describe("a link out of the editor with typing still in it", () => {
+describe("a link out of the console with typing still in it", () => {
   it("is stopped, and stopped before the router sees it", () => {
     mount(true);
 
-    const { prevented } = press({ href: "/admin/a10c0000-0000-0000-0000-00000000000a" });
+    // The portfolio, which is where the back link in the page head goes
+    // and the one press that genuinely leaves this restaurant behind.
+    const { prevented } = press({ href: "/admin" });
 
     // Read on the anchor itself, so this is a claim about PHASE: the
     // guard had already stopped the press before the target's own
@@ -174,14 +185,14 @@ describe("a link out of the editor with typing still in it", () => {
 
   it("completes the navigation, exactly as pressed, when the answer is Leave", () => {
     mount(true);
-    press({ href: "/admin/x/edit?section=menu#sold-out" });
+    press({ href: "/admin/other?section=menu#sold-out" });
 
     act(() => button("Leave and lose them").click());
 
     expect(dialog()).toBeNull();
     // Path AND search AND hash: dropping the query would land the
     // operator on the wrong tab of the page they chose.
-    expect(push).toHaveBeenCalledWith("/admin/x/edit?section=menu#sold-out");
+    expect(push).toHaveBeenCalledWith("/admin/other?section=menu#sold-out");
   });
 
   it("escapes to Stay, never to Leave", () => {
@@ -216,9 +227,12 @@ describe("what the guard deliberately lets through", () => {
   });
 
   it("a link to this same pathname, which the panels survive", () => {
-    // ?section= and #menu are how the editor navigates itself. Nothing
-    // unmounts through them; that is the whole design.
-    expect(press({ href: `${EDITOR}?section=menu` }).prevented).toBe(false);
+    // ?section= and #menu are how the console navigates itself, and the
+    // go-live checklist's three "Fix in …" buttons are exactly this
+    // shape. Nothing unmounts through them; that is the whole design,
+    // and a guard that stopped one would put a dialog in front of a tab
+    // press.
+    expect(press({ href: `${CONSOLE}?section=menu` }).prevented).toBe(false);
     expect(dialog()).toBeNull();
   });
 
@@ -255,7 +269,7 @@ describe("what the guard deliberately lets through", () => {
   });
 });
 
-describe("a clean editor", () => {
+describe("a clean console", () => {
   it("behaves exactly as it did before this guard existed", () => {
     mount(false);
 
@@ -275,7 +289,7 @@ describe("a clean editor", () => {
     expect(dialog()).toBeNull();
   });
 
-  it("leaves nothing on document after the editor unmounts", () => {
+  it("leaves nothing on document after the console unmounts", () => {
     mount(true);
     act(() => root.unmount());
 

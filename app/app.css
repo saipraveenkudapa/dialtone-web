@@ -605,21 +605,34 @@ a:hover { color: var(--color-accent); }
 .fact-row dt { flex: none; width: 120px; }
 .fact-row dd { margin: 0; flex: 1; word-break: break-word; }
 
-/* Seven of the twelve rows on /admin/<id> lead into the editor now, and
-   a 13px line is not a target: three of them render "—" when the column
-   is empty, so the whole press would be a few pixels of em dash. Each
-   value gets the same 34px box .admin-nav-item and .edit-index-link
-   take, and the row is given that height too so the five that are not
-   links stay level with them -- var(--space-2) top and bottom plus the
-   hairline the rule above draws. Keyed on a card that actually holds
-   links, so the read-only copy of this card on /edit is untouched. */
-.admin-facts:has(.row-link) .fact-row {
+/* A FACT ROW WHOSE VALUE IS A LINK, AND THERE IS STILL ONE.
+
+   These two rules were keyed on the /admin/<id> Account card, which the
+   console pass deleted -- seven of its twelve rows led into the editor,
+   and a 13px line is not a target when three of them render "—" for an
+   empty column. They were then removed as dead, on the claim that no
+   .fact-row in the product holds a link any more. That claim was wrong
+   by one screen: app/dashboard/messages/page.tsx draws every message as
+   a .card.blueprint.admin-facts whose last .fact-row is "Listen to the
+   call" -- a .row-link in a <dd>, on an OWNER screen the console pass
+   never touched. Without these it is accent text with no underline, no
+   box and no floor, sitting out of line with the three read-only rows
+   above it: colour alone carrying "this one you can press", which is the
+   exact defect the second rule was written to end.
+
+   Re-scoped to the row that actually holds a link rather than to every
+   row in a card that holds one. On the old Account card most rows were
+   links and levelling all twelve was right; here one row in four is,
+   and giving the other three a 51px floor would inflate a card for
+   nothing. */
+.admin-facts .fact-row:has(.row-link) {
   align-items: center;
   min-height: calc(34px + var(--space-2) * 2 + 1px);
 }
-/* Accent alone would leave "which of these can I change" carried by hue
+/* Accent alone would leave "which of these can I press" carried by hue
    -- .page-head .row-link already wears an underline for exactly that
-   reason, and this card's rows are the same choice one click away. */
+   reason. The box comes with it: the ink is a 13px phrase and the row
+   has to be pressable on the tablet this console was reported from. */
 .admin-facts .fact-row .row-link {
   display: flex;
   align-items: center;
@@ -761,9 +774,88 @@ a:hover { color: var(--color-accent); }
 .setup-card { padding: var(--space-6); gap: var(--space-3); background: var(--color-bg); }
 .setup-card h2 { margin: 0; }
 .setup-card .sub { font-size: 13px; margin: 0 0 var(--space-2); }
+
+/* A card's own headline state, under its <h2> and above its fields: the
+   go-live panel's "Answering calls" / "Not live" / "Kill switch on" with
+   a .status-dot in front of it and the sentence naming the number after.
+   An ELEMENT rule and not a class, because that is all it ever was --
+   .golive-state hand-set var(--font-heading), the heading weight and
+   25px, which are the three things <h3> already is. What is left is the
+   two facts industry.css cannot know: that a dot, a word and a sentence
+   want to sit on one line, and that they should wrap rather than
+   overflow a 300px phone.
+
+   `> h3` and not `h3`, so a heading deeper in a panel -- a menu
+   category's name, a sub-card's title -- is untouched. */
+.setup-card > h3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+}
+/* The sentence after the state word. A heading sets family AND weight,
+   so both have to be undone or this renders as small compressed heading
+   text -- the same fix, and the same reason, as .edit-flag's.
+
+   margin: 0 is load-bearing and not tidy-up. `.setup-card .sub` gives
+   every .sub a var(--space-2) bottom margin, which an inline span would
+   ignore -- but this one is a child of a flex container, so it is
+   blockified into a flex item and the margin becomes real, lifting the
+   sentence 6.8px off the state word it belongs beside. */
+.setup-card > h3 .sub {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 13px;
+  margin: 0;
+}
+/* A note in a card rather than a caption under a control: the Vapi
+   warning, the ownership warning, the sentence a run came back with.
+   .card-body is the system's class for prose inside a .card and is worn
+   unchanged; the measure is the one thing it has no opinion on, and 70ch
+   is the figure .golive-note and .edit-note already use. `flex: none`
+   undoes .card-body's own `flex: 1`, which is right for a card in a grid
+   of equal-height cards and wrong for the third paragraph of a panel. */
+.setup-card > .card-body { max-width: 70ch; flex: none; }
+/* A card's own facts, in the system's own 11px meta row: the go-live
+   panel's Our number / Falls back to / Forwarding. .card-meta is a
+   single-line flex row in the mockup, where it carries two short counts;
+   three facts with a phone number in each measure past a 343px phone,
+   and a row past the edge is a page that scrolls sideways. Wrapped, it
+   is two lines and nothing is off the screen. The same one declaration,
+   for the same reason, as .menu-edit-cat .card-meta above. */
+.setup-card > .card-meta { flex-wrap: wrap; }
+/* The system's own rule, used as the fence between a card's reading and
+   its controls -- which is what .golive-actions' hand-drawn border-top
+   was. .hr carries var(--space-4) of margin for a rule between
+   paragraphs in the flow; inside a flex column that margin does NOT
+   collapse and is paid on top of the card's own var(--space-3) gap, so
+   three fences would add about 70px of nothing to a panel whose whole
+   brief was that the page was too tall. The card's gap already spaces
+   its children; the rule only has to draw the line. */
+.setup-card > .hr { margin: 0; }
+
 .setup-form { display: flex; flex-direction: column; gap: var(--space-3); }
-.setup-row { display: flex; gap: var(--space-3); align-items: flex-end; }
-.setup-row > .field { flex: 1; min-width: 0; }
+/* A field and the buttons that act on it, bottom-aligned.
+   flex-end, not center: a 36px button beside a 58px label-plus-input
+   stack has to sit on the input's line, not float halfway up it.
+
+   IT WRAPS, and that is what let .golive-actions be deleted. That class
+   was this rule plus `flex-wrap: wrap` plus a basis on its fields --
+   .setup-row's own toolbars had simply never been long enough to need
+   either. The go-live panel's are: a field, Save, Repair assistant…, a
+   number picker, Attach and Get a new number… on one line. So the wrap
+   and the basis come here, where every consumer gets them, and the
+   duplicate goes.
+
+   1 1 220px, not 1 1 0: with a zero basis nothing ever forces a second
+   line, so six controls in a 760px column shrink the two fields to about
+   105px each instead of wrapping. min-width: 0 stays, and it is doing
+   the other half of the job -- without it the number <select>, whose
+   longest option names two restaurants and a reason, refuses to shrink
+   below its own content and pushes the row sideways. */
+.setup-row { display: flex; gap: var(--space-3); align-items: flex-end; flex-wrap: wrap; }
+.setup-row > .field { flex: 1 1 220px; min-width: 0; }
 .setup-actions {
   display: flex;
   justify-content: space-between;
@@ -1259,8 +1351,6 @@ iframe.review-image { height: 62vh; }
   box-shadow: var(--shadow-lg);
 }
 .review-dialog .dialog-body p { margin: 0 0 var(--space-3); }
-/* The tally is sticky above the list; the dialog is above both. */
-.review .dialog-backdrop { z-index: 5; }
 .review-modes { margin-bottom: var(--space-3); flex-wrap: wrap; }
 .review-consequence {
   border-left: 3px solid var(--color-divider);
@@ -1348,177 +1438,65 @@ iframe.review-image { height: 62vh; }
 .row-title-link:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
 .row-title-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
-/* ── go live (operator: /admin/[locationId]) ───────────────────────── */
+/* ── go live (operator: /admin/[locationId], the Line tab) ─────────────
 
-/* The readiness panel: one line saying what callers get right now, then
-   one row per check, then the controls. Self-sufficient -- it draws its
-   own frame and padding whether or not it is combined with .card. */
-.golive {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--color-divider);
-}
-.golive > h4 { margin: 0; }
+   ONE CLASS LEFT, AND ITS NAME IS AN ARGUMENT. This block used to hold
+   ten: .golive, -state, -list, -item (and four state modifiers), -body,
+   -link (and three of its own states), -title, -note, -actions (and five
+   descendant rules and three media rules), -run. About 160 lines of
+   frame, list, row, hairline, left border and toolbar, invented for one
+   panel, on a page whose own owner called the console "not at all
+   consistant".
 
-/* The answer to the only question the operator opened this page with.
-   Big enough to be read before anything else on the panel. */
-.golive-state {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin: 0;
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 25px;
-  line-height: 1.1;
-}
-.golive-state .status-dot { width: 10px; height: 10px; }
-.golive-state .sub {
-  font-family: var(--font-body);
-  font-weight: 400;
-  font-size: 13px;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
-}
+   Every one of them had a system class already doing the same job:
 
-.golive-list { display: flex; flex-direction: column; gap: var(--space-2); }
+     .golive        -> .card .blueprint .setup-card + <Corners/>. The one
+                       console panel with a private frame now wears the
+                       frame every other panel wears, and its <h4> became
+                       an <h2>, so the page stops mixing h1/h2/h4.
+     .golive-state  -> <h3>. It hand-set --font-heading, the heading
+                       weight and 25px, which is exactly what h3 is.
+     .golive-list,
+     -item, -body,
+     -title, -note  -> <table class="table">. A list of subjects each
+                       with a state and an instruction is a table, and
+                       the four blues on .golive-item's left border are
+                       the four tags /admin already spends on the same
+                       four states.
+     .golive-link   -> .btn.btn-secondary in its own cell -- a RESTING
+                       affordance, which is what the iPad report asked
+                       for and what colour-only accent text never was.
+     .golive-actions-> <hr class="hr"> + .setup-row, which is already
+                       "a field and the buttons that act on it,
+                       bottom-aligned". Same intent, spelled once.
+     .golive-run    -> .card + .card-kicker. .card is already
+                       flex-direction: column with a --space-2 gap, which
+                       is the whole of what .golive-run declared. */
 
-/* One check. The left edge carries the state, as in .review-item, so a
-   column of these can be scanned for what is still in the way. */
-.golive-item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--color-divider);
-  border-left-width: 3px;
-}
-
-/* There is deliberately no glyph chip here. Two dark blues separate
-   "blocked" from "warn", which would be colour-only -- but the fix the
-   house already uses is words: components/admin/GoLive.tsx opens every
-   note with the state ("Blocked —", "Worth fixing —"), which survives
-   being read aloud, printed and colour-blindness alike. A column of
-   ✓/✕/!/– badges appears nowhere in design/Dialtone.html, which has no
-   `content:` glyph at all; the status vocabulary here is .status-dot,
-   .tag and .review-item's 3px left border, and .golive-item above wears
-   the last of those. */
-.golive-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-/* The three checklist rows whose subject is a thing the operator types
-   are links into the editor card that holds it. The row keeps its shape
-   -- this only undoes the anchor's own colour and rule, and gives the
-   press somewhere to land. The whole body is the target rather than a
-   word inside it: on the tablet this was reported from, the row is the
-   thumb-sized thing on the screen. */
-.golive-link { color: inherit; text-decoration: none; }
-/* The mark has to be a RESTING one. This defect was reported from an
-   iPad: :hover never fires there, and a row left pixel-identical to the
-   three unlinked ones beside it tells the operator who said "I can't
-   able to see the menus" nothing at all. Accent and an underline
-   together, so it is never hue alone -- the same pair .page-head
-   .row-link wears. The note under it stays plain: the title is the
-   subject, and underlining a two-line instruction as well would make
-   the row look like a paragraph of links. */
-.golive-link .golive-title {
-  color: var(--color-accent);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-/* Press feedback, for the screen that has no hover to give any. */
-.golive-link:hover .golive-title,
-.golive-link:active .golive-title { color: var(--color-accent-900); }
-.golive-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
-.golive-title {
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 15px;
-  line-height: 1.2;
-}
-/* The note is the instruction, not a caption -- kept a step darker than
-   .text-muted because on a blocked row it is the thing to be acted on. */
-.golive-note {
-  margin: 0;
-  font-size: 13px;
-  max-width: 70ch;
-  color: color-mix(in srgb, var(--color-text) 70%, transparent);
-}
-
-.golive-item.is-ok {
-  border-left-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
-}
-.golive-item.is-blocked { border-left-color: var(--color-accent-900); }
-.golive-item.is-warn { border-left-color: var(--color-accent-800); }
-
-/* Not applicable: present, so the operator can see it was considered,
-   and quiet, so it never competes with something that needs doing. */
-.golive-item.is-na { border-left-color: var(--color-neutral-400); }
-.golive-item.is-na .golive-title { color: color-mix(in srgb, var(--color-text) 60%, transparent); }
-
-/* The controls, fenced off from the checklist above them the same way
-   .setup-actions is fenced off from its form.
-   flex-end, not center: the buttons here act on the field beside them
-   and have to sit on its bottom line, which is what .setup-row,
-   .menu-category-head and .add-item-form all do. Centred, a 36px button
-   floats halfway up a 58px label-plus-input stack. */
-.golive-actions {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-divider);
-}
-/* Same shape as .add-item-form's. Without a basis the number <select>
-   sizes to its longest option -- which names two restaurants and a
-   reason -- and without min-width: 0 it refuses to shrink back, pushing
-   the whole 1.6fr column sideways. */
-.golive-actions .field { flex: 1 1 220px; min-width: 0; }
-/* Phone numbers, set as figures. The house does this everywhere a number
-   is shown (.num, .stat-value, .menu-item-row .price); an <option> and a
-   tel input cannot carry the class, so the rule comes to them. */
-.golive-actions .input { font-variant-numeric: tabular-nums; }
-.golive-actions form { display: flex; }
-.golive-actions .golive-note { flex: 1 1 100%; }
-
-@media (max-width: 700px) {
-  .golive { padding: var(--space-3); }
-  .golive-state { font-size: 20px; }
-  .golive-actions .btn { flex: 1 1 auto; }
-}
-
-/* The paved road. The only .btn-primary on this panel, and the only
-   control here whose label changes while it is pressed -- so it is given
-   a floor wide enough for the longest of them ("The fallback number…",
-   measured in the button's own Barlow Condensed). A button that resizes
-   under the cursor as it steps from one leg of the run to the next is a
-   button an operator stops trusting mid-run. */
+/* THE ONE THAT STAYS, and it is a measurement. The only .btn-primary on
+   this panel, and the only control in the product whose label changes
+   while it is pressed -- so it is given a floor wide enough for the
+   longest of them ("The fallback number…", measured in the button's own
+   Barlow Condensed). A button that resizes under the cursor as it steps
+   from one leg of the run to the next is a button an operator stops
+   trusting mid-run, and no system class can express "do not reflow while
+   working". */
 .golive-go { min-width: 22ch; }
 
-/* What the run is doing, and afterwards what it did. Same stack shape as
-   .golive-list above it, because it is the same four subjects in the
-   same four words -- the account of a run and the checklist of a state
-   have to be legible as one vocabulary, or the operator has to learn
-   two. */
-.golive-run {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+@media (max-width: 700px) {
+  /* At this width .setup-row is a stretched column and the button is
+     already full width, so the floor would only be able to make it
+     wider than the screen. */
+  .golive-go { min-width: 0; }
 }
-.golive-run .golive-list { gap: var(--space-2); }
 
 /* ── the handover ─────────────────────────────────────────────────── */
 
-/* Every dialog this panel opens -- the two confirms as well as the
-   handover -- is rendered inside <section class="golive">, which sits
-   earlier in the document than the account panel beside it. That panel
-   is a .card.blueprint, so it is `position: relative`, so at z-index
-   auto it paints OVER a fixed backdrop that came before it and the
-   dialog is read through somebody else's table. Same fix, and the same
-   value, as .review .dialog-backdrop above. */
-.golive .dialog-backdrop { z-index: 5; }
+/* The z-index this panel's three dialogs used to need in their own
+   name is one rule on .dialog-backdrop now -- see the end of this file.
+   It was written out four separate times, here and in three other
+   blocks, each patching the identical fact about a fixed backdrop with
+   positioned siblings. */
 
 /* Wider and taller than a confirm, for the same reason as
    .review-dialog: this is read, not answered, and it is the one screen
@@ -1570,8 +1548,8 @@ iframe.review-image { height: 62vh; }
 .handover-number .card-kicker { flex: 1 1 100%; margin: 0; }
 .handover-number .num {
   flex: 1 1 auto;
-  /* Family AND weight, together, the way .stat-value, .golive-state,
-     .golive-title and .review-tally-number all pair them. app/layout.tsx
+  /* Family AND weight, together, the way .stat-value and
+     .review-tally-number both pair them. app/layout.tsx
      loads Barlow Condensed at 500/600/700 only, so a family set on its
      own leaves this inheriting body's 400 -- which matches no loaded
      face and renders the largest, most-read figure in the product
@@ -1591,7 +1569,6 @@ iframe.review-image { height: 62vh; }
 .handover-say .num { flex: none; font-size: inherit; letter-spacing: normal; }
 
 @media (max-width: 700px) {
-  .golive-go { min-width: 0; }
   .handover-number .num { font-size: 22px; }
 }
 
@@ -1600,10 +1577,17 @@ iframe.review-image { height: 62vh; }
 /* How far a save reaches. Every section of the editor answers the same
    question -- is this on the phone now, is it on the phone only after a
    rebuild, or is the phone still saying the old thing -- and it answers
-   it in a box shaped like .golive-item and .review-item: a hairline with
-   3px of state on the left edge, so the console has one status
-   vocabulary across the go-live panel, the menu import and this screen
-   rather than three.
+   it in a box shaped like .review-item: a hairline with 3px of state on
+   the left edge.
+
+   THE GO-LIVE PANEL NO LONGER WEARS THIS SHAPE. Its six checks were a
+   column of the same hairline-with-a-left-border rows and are a .table
+   of .tag chips now -- the same four the portfolio spends on the same
+   four states. This block is not a leftover of that: a check is a ROW in
+   a list of six and reads as a table, while an .edit-note is one
+   sentence about the card it sits inside and has nothing to be a table
+   of. Two shapes, two jobs. What they share is the rule the whole
+   console keeps: the state is a WORD, never a colour on its own.
 
    Normal flow, not a flex row, although it carries a button. .btn and
    .tag are already inline-flex, so they ride the sentence and wrap with
@@ -1616,10 +1600,8 @@ iframe.review-image { height: 62vh; }
    Colour is the quietest of the three marks here and never the only
    one: the note opens with a .tag whose words are the state ("Rebuilds
    the agent", "Phone not updated") and the sentence after it says the
-   same thing in full. That is the answer the house already gives for
-   the two dark blues on .golive-item -- words, not a glyph chip, since
-   they survive being read down a phone, printed, and colour-blindness
-   alike. */
+   same thing in full. Words, not a glyph chip, since they survive being
+   read down a phone, printed, and colour-blindness alike. */
 .edit-note {
   /* No margin of its own: everywhere it is a direct child of a section it
      is a child of .setup-card or .setup-form, and both are flex columns
@@ -1631,24 +1613,24 @@ iframe.review-image { height: 62vh; }
   border: 1px solid var(--color-divider);
   border-left-width: 3px;
   font-size: 13px;
-  /* A step darker than .text-muted, for the same reason .golive-note is:
-     on a drifted field this is the instruction, not a caption. */
+  /* A step darker than .text-muted: on a drifted field this is the
+     instruction, not a caption. */
   color: color-mix(in srgb, var(--color-text) 70%, transparent);
 }
 
 /* Saved here, live on the next call -- nothing to rebuild. The settled
-   state, tinted the way .golive-item.is-ok and .review-item.is-confirmed
-   are, because it is the same "this one is fine" in the same vocabulary. */
+   state, tinted the way .review-item.is-confirmed is, because it is the
+   same "this one is fine" in the same vocabulary. */
 .edit-note.is-live {
   border-left-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 5%, transparent);
 }
-/* Saving this also rebuilds the assistant -- the same blue .golive-item
+/* Saving this also rebuilds the assistant -- the blue the console
    spends on "worth fixing", the step short of blocked. */
 .edit-note.is-sync { border-left-color: var(--color-accent-800); }
 /* The screen and the phone disagree right now, which is the one state on
-   this page that is actively wrong, so it takes the blue .golive-item
-   spends on blocked and .setup-error spends on a refusal. */
+   this page that is actively wrong, so it takes the blue .setup-error
+   spends on a refusal. */
 .edit-note.is-drift { border-left-color: var(--color-accent-900); }
 
 /* Beside a field rather than under a lede: a .field is a plain block, so
@@ -1674,8 +1656,8 @@ iframe.review-image { height: 62vh; }
    Family and weight are re-stated because a heading sets both: worn
    beside an <h2> a bare .tag inherits Barlow Condensed and renders as
    small compressed heading text instead of matching the identical flag
-   on a label six lines below. Same fix, same reason, as .golive-state
-   .sub. Never wrapped: "Rebuilds the / agent" broken across two lines
+   on a label six lines below. Same fix, same reason, as
+   `.setup-card > h3 .sub`. Never wrapped: "Rebuilds the / agent" broken across two lines
    reads as prose, and the mark works by being obviously a chip. */
 .edit-flag {
   margin-left: var(--space-2);
@@ -1720,104 +1702,45 @@ iframe.review-image { height: 62vh; }
    grows to the row's target height; the text does not. */
 .holiday-row .hours-closed { min-height: 36px; }
 
-/* ── the section index on /admin/<id> ──────────────────────────────── */
+/* ── the console's tab strip (/admin/[locationId]) ─────────────────────
 
-/* TWO SHAPES NOW POINT AT THE SAME EIGHT SECTIONS, AND THIS IS THE
-   FIRST OF THEM. Read this and .edit-tabs below together, or the next
-   reader will delete one as a duplicate of the other.
+   THERE IS ONE STRIP NOW, AND THAT IS THE POINT OF THIS BLOCK.
 
-   This one is the way IN, and it is worn once: <nav class="nav
-   edit-index"> in app/admin/[locationId]/page.tsx, above the
-   restaurant's overview. Eight anchors that LEAVE the page for a
-   section of the editor. They are links, so .nav is the shape -- worn
-   directly, exactly as the operator bar wears `nav admin-nav`, so
-   `display/align-items` and every rule on `.nav a`, plain text at rest
-   and accent on hover, come from industry.css and stay in step with it.
-   What is below is only what a section index needs on top.
+   There used to be two, and the next reader has to be told so or they
+   will wonder what was deleted. .edit-index was a <nav class="nav
+   edit-index"> of eight links across the top of /admin/<id> -- the way
+   IN to the editor's eight tabs, on a different route. .edit-tabs was
+   the segmented control on /edit itself. Same eight subjects, two
+   shapes, two classes, ninety lines of stylesheet, and an operator who
+   said the console was "not at all consistant" while looking straight at
+   both of them.
 
-   .edit-tabs is the other one, on /edit itself, and it is NOT this
-   strip stuck to the top of a scroll -- /edit no longer has one. Its
-   nine stacked cards are eight panels of which exactly one is on
-   screen, so the act there is one of eight chosen in place, which is a
-   segmented control and not a bar of links. Same eight subjects, two
-   different acts, two classes.
+   The console is one page. The tab strip IS the section index, so the
+   bar of links is gone -- the class, its kicker, its link, and its four
+   state rules with it -- and this is what is left. It is renamed from
+   .edit-tabs for the same reason the module behind it is renamed from
+   EditTabs: the strip covers nine subjects of which only seven are the
+   editor's, and a name that says "edit" over a tab reading "Line" is a
+   name that lies.
 
-   The complaint both answer is a measurement. On an iPad the Menu
-   heading on /edit sat 5346px down an 8210px page with seven cards in
-   between and nothing to jump with; the operator's words were "I can't
-   able to see the menus from my iPad" and, later, "it's like a stack, I
-   just have to scroll all the way to the down. I don't like it". */
-.edit-index {
-  /* A block in the flow, where the only cost of a second line is a
-     second line. Nothing may be past an edge on the screen that was
-     reported blind: at 768px the eight entries take two rows and every
-     one of them is readable without discovering that anything
-     scrolls. */
-  flex-wrap: wrap;
-  /* .nav is a bar of four or five links and spaces them for it; this is
-     eight, each carrying its own 34px box, and they are separated by
-     that box rather than by air. */
-  gap: var(--space-1);
-  /* .nav carries a bar's own padding. This one is a rule across a page
-     that already has margins, so only the vertical half is wanted. */
-  padding: var(--space-2) 0;
-  background: var(--color-bg);
-  border-bottom: 1px solid var(--color-divider);
-}
-.edit-index-kicker { flex: none; margin-right: var(--space-2); }
-.edit-index-link {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  /* The same target .admin-nav-item takes, and for the same reason: the
-     ink is a 13px word, the box is a thumb on a tablet. */
-  min-height: 34px;
-  padding: 0 var(--space-3);
-  white-space: nowrap;
-}
-/* .nav a sets 14px, which is right for a bar of five. Eight entries have
-   to fit the 736px an iPad leaves, and 13px is what puts Menu -- the
-   entry the complaint was actually about -- inside that edge. Two
-   classes deep because `.nav a` is a class and a type and would
-   otherwise win on specificity alone. */
-.edit-index .edit-index-link { font-size: 13px; }
-.edit-index-link:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
-.edit-index-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
-/* Where you are. Accent alone would make it a colour-only signal, so the
-   condensed face carries it too -- the same pair .admin-nav-item and
-   .side-nav-item use to mark the current page. */
-.edit-index-link[aria-current] {
-  color: var(--color-accent);
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-}
-
-/* ── the editor's tab strip (/admin/[locationId]/edit) ─────────────── */
-
-/* THE DELTA ON .seg, AND NOTHING ELSE. The strip is
-   <div class="seg edit-tabs"> holding eight <label class="seg-opt">
+   THE DELTA ON .seg, AND NOTHING ELSE. The strip is
+   <div class="seg console-tabs"> holding nine <label class="seg-opt">
    radios, verbatim: the layout, the padding, the divider between
    options, the checked and hover states and the focus ring all come
    from industry.css and `:has(input:checked)` supplies the selection.
    The radio group's shared `name` supplies the roving tabindex, so the
-   eight tabs are one tab stop; EditTabs.tsx handles the arrow keys and
+   nine tabs are one tab stop; ConsoleTabs.tsx handles the arrow keys and
    Home/End itself on top of that, and its comment says why. Two things
    industry.css cannot get right for this strip -- the focus ring, and
    what a WRAPPED .seg looks like -- are the two overrides below.
 
    .seg is the right class rather than .nav because these are not
-   routes. One of eight, chosen in place, with the panel swapping under
+   routes. One of nine, chosen in place, with the panel swapping under
    it and nothing below it, is what a segmented control MEANS, and the
    house already wears .seg for exactly that twice: .auth-seg swaps the
    sign-in form under it, .filter-seg the calls log. This is the third
-   modifier on it, not a third vocabulary.
-
-   It is also not .edit-index.is-sticky under a new name, and that rule
-   is gone rather than renamed. That strip was an index OF a scroll: it
-   marked where you were in 8210px of stacked cards, and it could not
-   wrap, because a second row of it was a permanent tax on every screen
-   of a page seven screens deep. There is no such scroll any more. */
-.edit-tabs-head {
+   modifier on it, not a third vocabulary. */
+.console-tabs-head {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -1826,7 +1749,7 @@ iframe.review-image { height: 62vh; }
      different page element. */
   max-width: 760px;
 }
-.edit-tabs {
+.console-tabs {
   /* .seg is inline-flex, i.e. shrink-to-fit, and the options would then
      bunch at the left of a 760px column. It takes the column, and
      .setup-stack's own ceiling with it, because a strip wider than the
@@ -1838,11 +1761,13 @@ iframe.review-image { height: 62vh; }
      be past an edge: this is the control the operator presses to move,
      not a shortcut past a scroll, and a tab discovered only by finding
      that a bar scrolls sideways is the same defect as a heading 5346px
-     down. Measured in the house's 13px Barlow, the eight labels and
-     their padding come to about 630px: one row on the 712px an iPad
-     leaves, three on a 375px phone, and one more only while a chip is
-     showing. A wrapped row costs a row, and the panel below it is one
-     section tall now, so it is not a tax on anything. */
+     down. Measured in the house's 13px Barlow, the eight editor labels
+     and their padding came to about 630px; dropping "Recording" (-80px)
+     and adding "Line" (+49px) and "Calls" (+55px) puts the nine at about
+     654px -- still one row on the 712px an iPad leaves, three on a 375px
+     phone, and one more only while a chip is showing. A wrapped row
+     costs a row, and the panel below it is one section tall, so it is
+     not a tax on anything. */
   flex-wrap: wrap;
 }
 /* AND IT DOES NOT STICK. It was `position: sticky; top: 0; z-index: 2`
@@ -1860,9 +1785,9 @@ iframe.review-image { height: 62vh; }
    box expects.
 
    Giving it up costs almost nothing: choosing a tab already returns the
-   panel to the top of the document (EditTabs.tsx's choose()), which is
-   the one moment the strip is wanted, and it is the first thing on the
-   page when it gets there. */
+   panel to the top of the document (ConsoleTabs.tsx's choose()), which
+   is the one moment the strip is wanted, and it is the first thing on
+   the page when it gets there. */
 
 /* WHAT A WRAPPED .seg NEEDS AND industry.css DOES NOT HAVE. .seg is a
    single-row control taken verbatim from the mockup: one rounded box,
@@ -1881,12 +1806,12 @@ iframe.review-image { height: 62vh; }
    hidden` clips to the padding box -- so exactly the hairlines that
    would have doubled an edge are the ones that disappear, and the ones
    between two options and between two rows are the ones that stay. */
-.edit-tabs .seg-opt {
-  /* The same 34px box .edit-index-link and .admin-nav-item take, for the
-     same reason: the ink is a 13px word and the device this was reported
-     from is a tablet. .seg-opt's own padding already lands within a
-     pixel of it -- this is the floor, so the tabs stay level with each
-     other whatever they are wearing. */
+.console-tabs .seg-opt {
+  /* The same 34px box .admin-nav-item takes, for the same reason: the
+     ink is a 13px word and the device this was reported from is a
+     tablet. .seg-opt's own padding already lands within a pixel of it --
+     this is the floor, so the tabs stay level with each other whatever
+     they are wearing. */
   min-height: 34px;
   border-left: 1px solid var(--color-divider);
   border-top: 1px solid var(--color-divider);
@@ -1897,55 +1822,38 @@ iframe.review-image { height: 62vh; }
    so the state is read out with the tab it belongs to. Never wrapped:
    broken across two lines a chip stops reading as a chip and starts
    reading as prose -- the same reason .edit-flag sets this. */
-.edit-tabs .tag { white-space: nowrap; }
+.console-tabs .tag { white-space: nowrap; }
 
-/* The chips say which sections are unsaved; this says what happens to
-   them. Not muted, and still here now that EditTabs.tsx's useLeaveGuard
-   stops a client-side route change and asks: a warning that only arrives
-   in a dialog arrives after the operator has already pressed the largest
-   button in the page head, and this line is what lets them decide to
-   save first. On screen only when there is something to warn about. */
-.edit-tabs-note { margin: 0; }
+/* The sentence under the strip -- which sections are unsaved and what
+   happens to them -- is a plain .setup-note now. It wore .edit-tabs-note
+   on top, whose entire content was `margin: 0` overriding .setup-note's
+   own 4px top margin; .console-tabs-head is a flex column with a
+   var(--space-2) gap, which already supplies that space, so the class
+   was a name for a declaration that was doing nothing. */
 
-/* The leave-guard's dialog is a SIBLING of the eight panels, not a child
-   of one, so `.setup-stack .dialog-backdrop` below does not reach it and
-   it needs the rule in its own name. Same reason and the same value as
-   that rule, .review .dialog-backdrop and .golive .dialog-backdrop: a
-   fixed backdrop at z-index auto paints under any positioned box that
-   outranks it, and every panel on this page holds a .card.blueprint,
-   which is position: relative. Stated rather than left to the fact that
-   it is currently the last element in the fragment -- tree order is not
-   something the next reader can see from a stylesheet. */
-.edit-leave-backdrop { z-index: 5; }
-
-/* One panel is on screen. The other seven are still rendered, still
+/* One panel is on screen. The other eight are still rendered, still
    hydrated and still holding every half-typed price in them -- they are
    only hidden, which is the whole reason switching tabs is safe.
 
-   THIS LINE IS THE MECHANISM, NOT A GUARD -- delete it and all eight
+   THIS LINE IS THE MECHANISM, NOT A GUARD -- delete it and all nine
    sections paint at once, which is the exact defect the tabs were built
    to end. `[hidden] { display: none }` is the user agent's own rule and
    it is class-less, at specificity 0,0,1; `.setup-stack { display:
-   flex }` is 0,1,0 and outranks it. So EditPanel's `hidden` attribute
-   does nothing on its own. EditTabs.tsx renders every panel as
+   flex }` is 0,1,0 and outranks it. So ConsolePanel's `hidden` attribute
+   does nothing on its own. ConsoleTabs.tsx renders every panel as
    <div class="setup-stack" hidden> and its comment says the same thing
    from the other side: the element has to keep wearing .setup-stack for
    this rule to bite. Neither half is tidyable without the other. */
 .setup-stack[hidden] { display: none; }
 
-/* A fixed backdrop at z-index auto paints under any positioned sibling
-   that has a value of its own, and every panel here holds a
-   .card.blueprint, which is `position: relative`. Same fix, and the same
-   value, as .review .dialog-backdrop and .golive .dialog-backdrop. */
-.setup-stack .dialog-backdrop { z-index: 5; }
-
-/* The hash is still the contract -- #menu, #hours, #holidays and
-   #sold-out are pasted into tickets and linked from /admin/<id> -- and
-   a hash naming a section of the panel on screen still scrolls to it.
-   Air over the heading it lands on, and nothing more: this used to be
-   68px of clearance for a sticky strip, and the strip is not sticky any
-   more, so a jump that stopped 68px short of the top was 68px of
-   nothing.
+/* The hash is still the contract -- #menu, #hours, #holidays,
+   #sold-out, #recording and #managed are pasted into tickets, and
+   /admin/<id>/edit#menu still arrives here through the redirect with its
+   fragment re-applied -- and a hash naming a section of the panel on
+   screen still scrolls to it. Air over the heading it lands on, and
+   nothing more: this used to be 68px of clearance for a sticky strip,
+   and the strip is not sticky any more, so a jump that stopped 68px
+   short of the top was 68px of nothing.
 
    No scroll-behavior rule accompanies it any more. The 5275px slide the
    old one existed to soften cannot happen now -- the longest jump on
@@ -1986,12 +1894,36 @@ iframe.review-image { height: 62vh; }
    1.00:1, an invisible focus ring on the one option in the group that is
    selected. --color-bg on that fill is 5.19:1, and it is already the
    token the checked label wears for its text. It matters most on
-   .edit-tabs, where the radio group's roving tabindex lands Tab on the
+   .console-tabs, where the radio group's roving tabindex lands Tab on the
    CHECKED tab every time, so the whole of the keyboard's position
    indicator was going missing; .auth-seg, .filter-seg and .review-modes
    had the same blemish. One rule on the system class answers every .seg
    in the product. (0,3,2) against the ring rule's (0,2,1). */
 .seg-opt:has(input:checked):has(input:focus-visible) { outline-color: var(--color-bg); }
+
+/* ONE RULE THAT USED TO BE FOUR, AND IT CLOSES THE BUG CLASS RATHER THAN
+   PATCHING ITS FOURTH INSTANCE.
+
+   .dialog-backdrop is `position: fixed` with no z-index of its own, so
+   it paints at z-index auto -- and a fixed box at auto is painted UNDER
+   any positioned sibling that has a value, and under any positioned
+   later sibling at auto. Every dialog in the console is opened from
+   inside or beside a .card.blueprint, which industry.css makes
+   `position: relative` so the four registration marks can hang off it.
+   So the backdrop went behind somebody else's card and the dialog was
+   read through a table.
+
+   That was fixed four separate times, in four blocks, in four names:
+   `.review .dialog-backdrop`, `.golive .dialog-backdrop`,
+   `.setup-stack .dialog-backdrop` and `.edit-leave-backdrop` -- the last
+   of which existed ONLY to carry this declaration, and was a class name
+   spent on a z-index. All four are gone. The fact is about
+   .dialog-backdrop and about nothing else, so it is stated once, on
+   .dialog-backdrop, and the fifth dialog somebody adds is correct
+   without anyone remembering this.
+
+   5, the value all four used. Nothing in the product sits above 2. */
+.dialog-backdrop { z-index: 5; }
 
 /* ── state transitions ─────────────────────────────────────────────────
    Colour, opacity and border only, so a hover or a press costs the
@@ -2038,17 +1970,21 @@ a {
    lands on, and only the colour behind it should catch up.
 
    Two of the classes the audit named are absent here because they need no
-   entry of their own. .edit-tabs is a .seg of .seg-opt labels, and the
+   entry of their own. .console-tabs is a .seg of .seg-opt labels, and the
    menu card controls in .menu-edit-cat-controls and
-   .menu-edit-row-actions are .btn elements; the rule above has both. */
+   .menu-edit-row-actions are .btn elements; the rule above has both.
+
+   Three entries left this list with the classes they named:
+   .edit-index-link went with the strip of links the tab strip replaced,
+   and .golive-link and .golive-link .golive-title went with the
+   checklist's colour-only row link, which is a .btn in a table cell now
+   -- and .btn is in the rule above. Nothing lost a transition; three
+   selectors stopped pointing at nothing. */
 .side-nav-item,
 .admin-nav-item,
-.edit-index-link,
 .operator-back,
 .row-title-link,
 .row-link,
-.golive-link,
-.golive-link .golive-title,
 .lv-row,
 .lv-toggle,
 .lv-until-opt,
@@ -2095,7 +2031,7 @@ a {
    imports after industry.css — so it comes after every other rule in the
    system and equal-specificity rules here win on order. Where a rule
    earlier in THIS file sets a floor from a more specific selector
-   (.menu-item-row .btn, .edit-tabs .seg-opt, .admin-facts .fact-row
+   (.menu-item-row .btn, .console-tabs .seg-opt, .admin-facts .fact-row
    .row-link …) that exact selector is restated below, because specificity
    beats order. Controls that already clear 44px on their own — .lv-toggle
    at 56, .lv-until-opt at 48, .phone-search .input at 48, textarea.input
@@ -2162,7 +2098,7 @@ a {
 
   /* ── segmented controls ───────────────────────────────────────────
      .seg-opt everywhere it is worn: .auth-seg, .filter-seg, .review-files,
-     .review-modes, and the editor's eight tabs, which pin 34px from a
+     .review-modes, and the console's nine tabs, which pin 34px from a
      more specific selector and so are restated. Segments share an edge by
      design — that is what a segmented control IS, in the mockup and on
      every platform — so the 8px separation below is not applied between
@@ -2172,12 +2108,12 @@ a {
      "Off", measured 39.1px and 42.3px wide against their 44px height, so
      width was the failing dimension once height was fixed. It binds on
      those two and on nothing else — "Trial", "Text", "Email", "Both" and
-     the eight tab labels are all already wider. */
+     the nine tab labels are all already wider. */
   .seg-opt {
     min-width: var(--touch-target);
     min-height: var(--touch-target);
   }
-  .edit-tabs .seg-opt { min-height: var(--touch-target); }
+  .console-tabs .seg-opt { min-height: var(--touch-target); }
 
   /* ── navigation ───────────────────────────────────────────────────
      Every one of these is a bare word in the mockup that this file
@@ -2187,7 +2123,6 @@ a {
      row is the platform's own list, not two targets 0px apart. */
   .side-nav-item,
   .admin-nav-item,
-  .edit-index-link,
   .operator-back { min-height: var(--touch-target); }
 
   /* Both are inline text at rest, so they need the box before the box can
@@ -2203,24 +2138,36 @@ a {
     min-height: var(--touch-target);
   }
 
-  /* The way out of a detail page, and the account card's editable values.
-     Both are .row-link on their own line, so they take height; the
-     in-sentence .row-link further down takes hit area instead. */
+  /* The way out of a detail page, a call row's own name, and a message
+     card's "Listen to the call". All three are .row-link on their own
+     line, so they take height; the in-sentence .row-link further down
+     takes hit area instead.
+
+     The third selector is restated rather than left to the .row-link
+     rule above it because app.css sets a 34px floor on it from a more
+     specific selector (0,3,0), and specificity beats order. Its
+     consumer is /dashboard/messages -- the /admin/<id> Account card
+     these were written for is gone, but that screen was never it. */
   .page-head .row-link,
   .table td .row-link,
   .admin-facts .fact-row .row-link { min-height: var(--touch-target); }
 
-  /* The row that holds one of those values has to grow with it, or the
-     link overflows a 48.6px row. The rule above computes this height from
-     the 34px it gave the link; same sum, new floor. */
-  .admin-facts:has(.row-link) .fact-row {
+  /* The row that holds one has to grow with it, or a 44px link overflows
+     a 48.6px row and starts collecting presses aimed at the row above.
+     Same sum as the rule further up the file, computed from the new
+     floor: the target, plus the row's own padding, plus its hairline. */
+  .admin-facts .fact-row:has(.row-link) {
     min-height: calc(var(--touch-target) + var(--space-2) * 2 + 1px);
   }
 
-  /* A checklist row that leads into the editor, and a transcript line
-     that seeks the audio. Both are already blocks; both are given the
-     floor so a one-line one cannot fall under it. */
-  .golive-link,
+  /* A transcript line that seeks the audio. Already a block; given the
+     floor so a one-line one cannot fall under it.
+
+     .golive-link stood beside it and is gone: a checklist row's way into
+     the editor is a .btn in its own table cell now, which the .btn rule
+     at the top of this block already covers -- and which is a RESTING
+     affordance, where the old one was accent text with no box on a
+     device that has no hover to reveal one. */
   .transcript .line button { min-height: var(--touch-target); }
 
   /* An uploaded file's expiring link. Its own line in a flex column, not
@@ -2343,13 +2290,15 @@ a {
   .dialog-actions,
   .cred-actions,
   .review-item-actions,
-  .golive-actions,
   .player-controls,
   .add-item-form,
   .menu-category-head,
-  .hours-times,
-  .golive-list,
-  .edit-index { gap: var(--touch-gap); }
+  .hours-times { gap: var(--touch-gap); }
+  /* Three entries left this list with the classes they named.
+     .golive-actions and .golive-list are a .setup-row and a .table now,
+     and .setup-row's own gap is already var(--space-3), which IS
+     --touch-gap; .edit-index went with the strip of links the tab strip
+     replaced. Nothing lost its separation. */
 }
 
 /* ── the motion guard ──────────────────────────────────────────────────
