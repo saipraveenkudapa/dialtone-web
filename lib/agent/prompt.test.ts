@@ -407,17 +407,33 @@ describe("system prompt", () => {
     // raised by only 250. This raise is smaller than the rule that
     // required it.
     //
-    // The owner accepted that remaining cost, and for a specific,
-    // currently-true reason, not a shrug: the ~7.5s this ceiling exists to
-    // guard is the assistant-request budget, and assistant-request is not
-    // wired up today. The live phone number resolves straight to a static
-    // Vapi assistant id -- the prompt is whatever text was last pushed to
-    // it, not something fetched and rendered inside a 7.5s window on a
-    // live call. Raising this number right now does not spend a
-    // millisecond of any real caller's wait. That stops being true the day
-    // assistant-request is wired up, and whoever wires it up should re-read
-    // this ceiling against that fact rather than inherit 9150 as a number
-    // with no reasoning attached to it.
+    // The cost is paid today, in full, on every turn of every live call,
+    // by the conversational model -- exactly what the First through Fifth
+    // entries above describe: every character here is spoken-word
+    // instructions gpt-4o reads before it can answer. That is true right
+    // now, on the one path that exists: the phone number resolves
+    // straight to a static Vapi assistant, and that assistant's prompt is
+    // read in full on every turn of every call it handles. This is not
+    // deferred and it is not hypothetical.
+    //
+    // The owner accepted that cost for a specific reason, not a shrug: it
+    // is small -- +295 characters on a turn that was already reading
+    // roughly nine thousand of them -- and it is smaller than it could
+    // have been, because two vague lines were deleted in this very same
+    // change, so the net growth is less than the rule that required it.
+    //
+    // assistant-request is a separate budget, worth naming but not the
+    // reason this was acceptable. It is untouched by this raise today
+    // because assistant-request is not wired up: the static assistant's
+    // prompt is whatever text was last pushed to it, not something
+    // fetched and rendered inside a 7.5s assistant-request window on a
+    // live call. If assistant-request is ever wired up, this stops being
+    // free -- it becomes a SECOND cost stacked on the one above, the same
+    // prompt fetched and rendered inside that window once per call, on
+    // top of being read once per turn by the conversational model -- and
+    // whoever wires it up should re-read this ceiling against that fact
+    // rather than inherit 9150 as a number with no reasoning attached to
+    // it.
     //
     // None of that loosens the instruction above: this is still a latency
     // guard, not a budget to spend, and the next person to need more room
