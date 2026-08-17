@@ -461,6 +461,7 @@ describe("the menu, validated", () => {
       allergenNote: "contains egg",
       sortOrder: "3",
       soldOutUntil: "",
+      staffPick: false,
       ...over,
     };
   }
@@ -560,7 +561,15 @@ type Store = Record<Table, Row[]> & {
   /** Every statement this module sent that could change a row, and how
    *  many rows it actually touched. A refusal that "wrote nothing" is
    *  asserted against this list, not against the absence of a message. */
-  writes: { table: Table; op: "update" | "insert" | "upsert" | "delete"; applied: number }[];
+  writes: {
+    table: Table;
+    op: "update" | "insert" | "upsert" | "delete";
+    applied: number;
+    /** The exact payload passed to `.update()`, present on update writes
+     *  only -- staff-pick tests need to see is_staff_pick on the wire,
+     *  not just that a row landed. */
+    patch?: Row;
+  }[];
   readFailures: Partial<Record<Table, { code: string }>>;
   singleFailures: Partial<Record<Table, { code: string }>>;
   writeFailures: Partial<Record<Table, { code: string }>>;
@@ -682,7 +691,12 @@ class FakeQuery implements PromiseLike<Result> {
         // holds would go on matching forever.
         if (this.table === "locations") row.updated_at = `2026-01-01T00:00:${pad(++touches)}Z`;
       }
-      this.store.writes.push({ table: this.table, op: "update", applied: matched.length });
+      this.store.writes.push({
+        table: this.table,
+        op: "update",
+        applied: matched.length,
+        patch: this.payload[0],
+      });
       return { data: matched.map((row) => ({ id: row.id })), count: null, error: null };
     }
 
@@ -826,6 +840,7 @@ beforeEach(() => {
         allergen_note: null,
         sort_order: 0,
         sold_out_until: null,
+        is_staff_pick: false,
       },
       {
         id: NONNA_ITEM,
@@ -837,6 +852,7 @@ beforeEach(() => {
         allergen_note: null,
         sort_order: 0,
         sold_out_until: null,
+        is_staff_pick: false,
       },
     ],
     writes: [],
@@ -945,6 +961,7 @@ describe("the gate, which is the first statement of every export", () => {
             allergenNote: "",
             sortOrder: "1",
             soldOutUntil: "",
+            staffPick: false,
           },
         }),
     ],
@@ -962,6 +979,7 @@ describe("the gate, which is the first statement of every export", () => {
             allergenNote: "",
             sortOrder: "0",
             soldOutUntil: "",
+            staffPick: false,
           },
         }),
     ],
@@ -1088,6 +1106,7 @@ describe("a child row id is a selector and proves nothing", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
+        staffPick: false,
       },
     });
 
@@ -1126,6 +1145,7 @@ describe("a child row id is a selector and proves nothing", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
+        staffPick: false,
       },
     });
 
@@ -1145,6 +1165,7 @@ describe("a child row id is a selector and proves nothing", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
+        staffPick: false,
       },
     });
 
@@ -1298,6 +1319,7 @@ describe("the edits that take effect on the next call", () => {
         allergenNote: "contains egg and pork",
         sortOrder: "0",
         soldOutUntil: "",
+        staffPick: false,
       },
     });
     expect(priced).toMatchObject({ ok: true, phone: { state: "not-needed" } });
@@ -1333,6 +1355,7 @@ describe("the edits that take effect on the next call", () => {
         allergenNote: "",
         sortOrder: "1",
         soldOutUntil: "",
+        staffPick: false,
       },
     });
 
@@ -1355,6 +1378,7 @@ describe("the edits that take effect on the next call", () => {
           allergenNote: "",
           sortOrder: "0",
           soldOutUntil: "",
+          staffPick: false,
         },
       }),
     ).resolves.toMatchObject({ ok: true });
@@ -1391,6 +1415,7 @@ describe("the edits that take effect on the next call", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
+        staffPick: false,
       },
     });
 
@@ -1422,6 +1447,7 @@ describe("the edits that take effect on the next call", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
+        staffPick: false,
       },
     });
 
@@ -1454,6 +1480,7 @@ describe("the edits that take effect on the next call", () => {
         sortOrder: "0",
         // What a page rendered before the dish sold out would send.
         soldOutUntil: "",
+        staffPick: false,
       },
     });
 
@@ -1484,6 +1511,7 @@ describe("the edits that take effect on the next call", () => {
           allergenNote: "",
           sortOrder: "1",
           soldOutUntil: "",
+          staffPick: false,
         },
       }),
     ).resolves.toMatchObject({ ok: true });
@@ -2092,5 +2120,54 @@ describe("reading the record", () => {
 
   it("returns null for a restaurant that is genuinely not there", async () => {
     await expect(getEditableRecord("b0000000-0000-0000-0000-00000000000b")).resolves.toBeNull();
+  });
+});
+
+/* ── staff picks ───────────────────────────────────────────────────── */
+
+/** A thin wrapper over saveMenuItem, using Marty's own item so ownership
+ *  and category checks pass without being the point of the test. Reuses
+ *  the same fake PostgREST client and `store` every other saveMenuItem
+ *  test in this file drives -- `failWith` seeds store.writeFailures the
+ *  same way the rest of the suite would, to reach the 23514 branch
+ *  without a real trigger. */
+async function runSaveMenuItem(
+  over: Partial<Parameters<typeof validateMenuItem>[0]> = {},
+  opts: { failWith?: string } = {},
+) {
+  if (opts.failWith) {
+    store.writeFailures.menu_items = { code: opts.failWith };
+  }
+  const result = await saveMenuItem({
+    locationId: MARTY,
+    itemId: MARTY_ITEM,
+    input: {
+      categoryId: MARTY_CATEGORY,
+      name: "Carbonara",
+      description: "Guanciale, pecorino, egg",
+      priceDollars: "22.00",
+      allergenNote: "",
+      sortOrder: "0",
+      soldOutUntil: "",
+      staffPick: false,
+      ...over,
+    },
+  });
+  return { ...result, writes: store.writes };
+}
+
+describe("staff picks", () => {
+  it("carries the flag through to the write", async () => {
+    const { writes } = await runSaveMenuItem({ staffPick: true });
+    expect(writes.at(-1)?.patch?.is_staff_pick).toBe(true);
+  });
+
+  it("turns the trigger's refusal into a sentence an operator can act on", async () => {
+    // The trigger raises 23514. An operator must not be shown a Postgres
+    // error, and must be told the actual rule.
+    const result = await runSaveMenuItem({ staffPick: true }, { failWith: "23514" });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/three/i);
+    expect(result.ok === false && result.error).not.toMatch(/23514|violates|constraint/i);
   });
 });

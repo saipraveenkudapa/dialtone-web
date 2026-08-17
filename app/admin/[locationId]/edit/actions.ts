@@ -514,7 +514,7 @@ export async function deleteMenuCategoryAction(
 }
 
 /** Rebuilt field by field, so the only thing that can reach the write is
- *  the seven declared columns -- no location_id, no id, and nothing an
+ *  the eight declared columns -- no location_id, no id, and nothing an
  *  extra key in the body could smuggle into the patch. */
 function menuItemInput(input: {
   categoryId: string;
@@ -524,6 +524,7 @@ function menuItemInput(input: {
   allergenNote: string;
   sortOrder: string;
   soldOutUntil: string;
+  staffPick: boolean;
 }) {
   return {
     categoryId: str(input?.categoryId),
@@ -533,6 +534,7 @@ function menuItemInput(input: {
     allergenNote: str(input?.allergenNote),
     sortOrder: str(input?.sortOrder),
     soldOutUntil: str(input?.soldOutUntil),
+    staffPick: bool(input?.staffPick),
   };
 }
 
@@ -546,6 +548,7 @@ export async function createMenuItemAction(
     allergenNote: string;
     sortOrder: string;
     soldOutUntil: string;
+    staffPick: boolean;
   },
 ): Promise<EditResult> {
   const denied = await gate(locationId);
@@ -565,6 +568,7 @@ export async function saveMenuItemAction(
     allergenNote: string;
     sortOrder: string;
     soldOutUntil: string;
+    staffPick: boolean;
   },
 ): Promise<EditResult> {
   const denied = await gate(locationId);

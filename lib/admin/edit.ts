@@ -748,6 +748,9 @@ export type MenuItemInput = {
   sortOrder: string;
   /** "" | "reopen" | "close". */
   soldOutUntil: string;
+  /** The restaurant nominated this dish. At most three per location,
+   *  refused by a database trigger rather than by this form. */
+  staffPick: boolean;
 };
 
 export type MenuItemPatch = {
@@ -758,6 +761,7 @@ export type MenuItemPatch = {
   allergen_note: string | null;
   sort_order: number;
   sold_out_until: "reopen" | "close" | null;
+  is_staff_pick: boolean;
 };
 
 export function validateSoldOut(raw: string): Checked<"reopen" | "close" | null> {
@@ -815,6 +819,10 @@ export function validateMenuItem(input: MenuItemInput): Checked<MenuItemPatch> {
       allergen_note,
       sort_order,
       sold_out_until: soldOut.value,
+      // Already a boolean -- nothing to coerce. The cap itself is
+      // enforced by menu_items_staff_pick_cap (SQLSTATE 23514), not
+      // here: this form only carries the operator's intent.
+      is_staff_pick: input.staffPick,
     },
   };
 }
@@ -1558,6 +1566,9 @@ export type EditableItem = {
   allergen_note: string | null;
   sort_order: number;
   sold_out_until: "reopen" | "close" | null;
+  /** The restaurant nominated this dish. At most three true per
+   *  location, held by menu_items_staff_pick_cap. */
+  is_staff_pick: boolean;
 };
 
 export type EditableRecord = {
@@ -1618,7 +1629,7 @@ export async function getEditableRecord(locationId: string): Promise<EditableRec
     supabase
       .from("menu_items")
       .select(
-        "id, category_id, name, description, price_cents, allergen_note, sort_order, sold_out_until",
+        "id, category_id, name, description, price_cents, allergen_note, sort_order, sold_out_until, is_staff_pick",
       )
       .eq("location_id", locationId)
       .order("sort_order"),
@@ -2385,6 +2396,13 @@ export async function saveMenuItem({
 
   if (error) {
     console.error("[admin-edit] item update failed", { locationId, code: error.code });
+    // 23514 here is the staff-pick cap, the only check constraint this
+    // write can violate. Anything else keeps the generic refusal.
+    if (error.code === "23514") {
+      return refuse(
+        "This restaurant already has three staff picks. Unmark one first.",
+      );
+    }
     return { ok: false, error: WRITE_FAILED };
   }
 

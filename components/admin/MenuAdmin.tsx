@@ -792,6 +792,7 @@ function ItemRow({
   const [allergenNote, setAllergenNote] = useState(item.allergen_note ?? "");
   const [categoryId, setCategoryId] = useState(item.category_id);
   const [sortOrder, setSortOrder] = useState(String(item.sort_order));
+  const [staffPick, setStaffPick] = useState(item.is_staff_pick);
   const [confirmPriceCents, setConfirmPriceCents] = useState<number | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
 
@@ -809,6 +810,7 @@ function ItemRow({
     item.allergen_note ?? "",
     item.category_id,
     item.sort_order,
+    item.is_staff_pick,
   ].join("|");
   const [seen, setSeen] = useState(seedItem);
   const [replaced, setReplaced] = useState(false);
@@ -822,6 +824,7 @@ function ItemRow({
     allergenNote,
     categoryId,
     sortOrder,
+    staffPick,
   ].join("|");
   if (seen !== seedItem) {
     // ...and it no longer takes the typing in silence. Two conditions,
@@ -835,6 +838,7 @@ function ItemRow({
     setAllergenNote(item.allergen_note ?? "");
     setCategoryId(item.category_id);
     setSortOrder(String(item.sort_order));
+    setStaffPick(item.is_staff_pick);
     // The message from the write that CAUSED this re-seed is deliberately
     // left standing: revalidatePath lands these props in the same commit
     // as the result, so clearing here would wipe "Saved." the instant it
@@ -857,13 +861,20 @@ function ItemRow({
     !sameName(name, item.name) &&
     allItems.some((other) => other.id !== item.id && sameName(other.name, name));
   const out = item.sold_out_until !== null;
+  /* The courtesy count. menu_items_staff_pick_cap (SQLSTATE 23514) is
+     the guarantee -- this only stops an operator wasting a round trip
+     and tells them the rule before they hit it. Read from allItems,
+     which this card already has, so no extra query is made to draw it. */
+  const picksUsed = allItems.filter((other) => other.is_staff_pick).length;
+  const capReached = picksUsed >= 3 && !item.is_staff_pick;
   const dirty =
     name !== item.name ||
     price !== (item.price_cents / 100).toFixed(2) ||
     description !== (item.description ?? "") ||
     allergenNote !== (item.allergen_note ?? "") ||
     categoryId !== item.category_id ||
-    sortOrder !== String(item.sort_order);
+    sortOrder !== String(item.sort_order) ||
+    staffPick !== item.is_staff_pick;
 
   // The account of a loss stands until there is something new to lose.
   if (replaced && dirty) setReplaced(false);
@@ -884,8 +895,9 @@ function ItemRow({
       priceDollars: price,
       allergenNote,
       sortOrder,
+      staffPick,
       /* Deliberately EMPTY, and lib/admin/edit.ts's saveMenuItem
-         deliberately ignores it: an update writes the six columns this
+         deliberately ignores it: an update writes the seven columns this
          row actually shows and never touches sold_out_until.
          
          Sending `item.sold_out_until` here -- which is what this did --
@@ -1135,6 +1147,21 @@ function ItemRow({
             onChange={(e) => setSortOrder(e.target.value)}
           />
         </div>
+        <div className="field">
+          <label htmlFor={`ma-item-staff-pick-${item.id}`}>Staff pick</label>
+          <input
+            id={`ma-item-staff-pick-${item.id}`}
+            type="checkbox"
+            checked={staffPick}
+            disabled={pending || capReached}
+            onChange={(e) => setStaffPick(e.target.checked)}
+          />
+          {capReached ? (
+            <p className="setup-note">
+              Three dishes are already marked. Unmark one to choose another.
+            </p>
+          ) : null}
+        </div>
         <span className="price-preview text-muted">
           {previewCents === null ? "Not a valid price." : `Stores ${money(previewCents)}.`}
         </span>
@@ -1157,6 +1184,7 @@ function ItemRow({
             setAllergenNote(item.allergen_note ?? "");
             setCategoryId(item.category_id);
             setSortOrder(String(item.sort_order));
+            setStaffPick(item.is_staff_pick);
             setEditing(false);
             setConfirmPriceCents(null);
             setResult(null);
@@ -1170,7 +1198,8 @@ function ItemRow({
         The description is read aloud to callers as what the dish comes with. The staff note is
         not: lib/agent/menu.ts leaves it out of the assistant&rsquo;s payload on purpose,
         because an allergy question is transferred to a person rather than answered from a
-        column.
+        column. A staff pick lets the assistant say once that it is the one people come back
+        for.
       </p>
 
       {duplicate ? (
@@ -1297,6 +1326,10 @@ function AddItemForm({
               allergenNote: "",
               sortOrder: String(nextSort),
               soldOutUntil: "",
+              // No control on this form -- a new dish is marked a staff
+              // pick from the edit form, once it exists and picksUsed can
+              // be checked against it.
+              staffPick: false,
             }),
           () => {
             setName("");

@@ -182,6 +182,7 @@ function menu(over: Partial<Parameters<typeof MenuAdmin>[0]> = {}): string {
           allergen_note: null,
           sort_order: 0,
           sold_out_until: null,
+          is_staff_pick: false,
         },
       ],
       createCategoryAction: noop,
@@ -822,6 +823,7 @@ describe("the two sort orders on a category card", () => {
           allergen_note: null,
           sort_order: 7,
           sold_out_until: null,
+          is_staff_pick: false,
         },
       ],
     });
