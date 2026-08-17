@@ -2156,6 +2156,32 @@ async function runSaveMenuItem(
   return { ...result, writes: store.writes };
 }
 
+/** A thin wrapper over createMenuItem, the same shape runSaveMenuItem is
+ *  above it, and named for the same reason: `failWith` seeds
+ *  store.writeFailures to reach the 23514 branch without a real trigger.
+ *  The dish is named "Tiramisu" rather than Marty's own "Carbonara" so
+ *  the duplicate-name check does not refuse the write before it ever
+ *  reaches the insert this test is about. */
+async function runCreateMenuItem(opts: { failWith?: string } = {}) {
+  if (opts.failWith) {
+    store.writeFailures.menu_items = { code: opts.failWith };
+  }
+  const result = await createMenuItem({
+    locationId: MARTY,
+    input: {
+      categoryId: MARTY_CATEGORY,
+      name: "Tiramisu",
+      description: "",
+      priceDollars: "9.00",
+      allergenNote: "",
+      sortOrder: "0",
+      soldOutUntil: "",
+      staffPick: true,
+    },
+  });
+  return { ...result, writes: store.writes };
+}
+
 describe("staff picks", () => {
   it("carries the flag through to the write", async () => {
     const { writes } = await runSaveMenuItem({ staffPick: true });
@@ -2166,6 +2192,19 @@ describe("staff picks", () => {
     // The trigger raises 23514. An operator must not be shown a Postgres
     // error, and must be told the actual rule.
     const result = await runSaveMenuItem({ staffPick: true }, { failWith: "23514" });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/three/i);
+    expect(result.ok === false && result.error).not.toMatch(/23514|violates|constraint/i);
+  });
+
+  it("maps the same cap refusal on create as on save", async () => {
+    // AddItemForm hardcodes staffPick: false today, so this path is not
+    // reachable through the shipped UI -- but createItemAction accepts
+    // the flag from the client regardless, and the two writers of this
+    // table have to stay symmetric rather than depend on which form
+    // happens to expose the checkbox. Before this fix, createMenuItem
+    // returned the generic WRITE_FAILED for the identical 23514 here.
+    const result = await runCreateMenuItem({ failWith: "23514" });
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toMatch(/three/i);
     expect(result.ok === false && result.error).not.toMatch(/23514|violates|constraint/i);

@@ -834,3 +834,83 @@ describe("the two sort orders on a category card", () => {
     expect(prose(row)).toContain("sort 7");
   });
 });
+
+/* ── the pick has to be visible without opening the row ─────────────── */
+
+describe("a dish marked a staff pick", () => {
+  // The collapsed row -- editing=false, MenuAdmin's default render, the
+  // same branch "Not offered" and "sort N" already render in -- because
+  // the checkbox that sets is_staff_pick lives one level deeper, inside
+  // a row's own edit form, and an operator hits the three-pick cap
+  // before they have any reason to expand all of them looking for which
+  // dishes are already marked.
+  function pick(sold: boolean): string {
+    return menu({
+      items: [
+        {
+          id: ITEM,
+          category_id: CATEGORY,
+          name: "Carbonara",
+          description: null,
+          price_cents: 2200,
+          allergen_note: null,
+          sort_order: 0,
+          sold_out_until: sold ? "close" : null,
+          is_staff_pick: true,
+        },
+      ],
+    });
+  }
+
+  it("is on the collapsed row, not only inside the edit form", () => {
+    const html = pick(false);
+    expect(html).toContain("tag tag-outline edit-flag");
+    expect(prose(html)).toContain("Staff pick");
+  });
+
+  it("is silent, and says so, once the pick is also sold out", () => {
+    // lib/agent/menu.ts's isPick is `is_staff_pick && !isOut` -- a
+    // sold-out pick still fills one of the trigger's three slots (the
+    // trigger and this form's own picksUsed agree on that) but is
+    // dropped from the agent's payload before is_staff_pick is ever
+    // read, so it produces no warmth. Three ticked boxes can add up to
+    // zero warmth with nothing on the card saying why; the one marker
+    // has to carry which of the two states a pick is in, not just that
+    // it is one.
+    const html = pick(true);
+    expect(html).toContain("tag tag-out edit-flag");
+    expect(prose(html)).toContain("Not offered");
+    expect(html).toContain("tag tag-neutral edit-flag");
+    expect(prose(html)).toContain("Silent pick");
+    expect(prose(html)).not.toContain("Staff pick");
+  });
+
+  it("is absent from a dish that was never nominated", () => {
+    const html = menu();
+    expect(prose(html)).not.toContain("Staff pick");
+    expect(prose(html)).not.toContain("Silent pick");
+  });
+});
+
+describe("the staff-pick checkbox's touch target", () => {
+  it("wraps the input in the label, like the two hours checkboxes do", () => {
+    // A checkbox is 13px of chrome CSS cannot resize, so a coarse-pointer
+    // min-height only reaches the actual control if a label wraps it --
+    // see app.css's own comment over the coarse-pointer checkbox rule.
+    // A <label htmlFor> sitting beside the input, which is what this
+    // shipped with, still toggles it (the id association still works)
+    // but the 13px box itself never grows.
+    const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+    expect(menuAdmin).toMatch(/<label className="menu-edit-pick">\s*<input\b/);
+    expect(menuAdmin).not.toContain("ma-item-staff-pick");
+  });
+
+  it("is covered by the same coarse-pointer rule as .hours-closed and .radio", () => {
+    const css = source("../../app/app.css");
+    const head = css.indexOf("A checkbox is 13px of chrome");
+    const rule = css.slice(head, css.indexOf("min-height: var(--touch-target); }", head) + 1);
+    expect(rule).toContain(".radio");
+    expect(rule).toContain(".hours-closed");
+    expect(rule).toContain(".menu-edit-pick");
+  });
+});

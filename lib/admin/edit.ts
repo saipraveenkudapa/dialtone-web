@@ -2317,6 +2317,17 @@ export async function createMenuItem({
 
   if (error) {
     console.error("[admin-edit] item insert failed", { locationId, code: error.code });
+    // 23514 here is the staff-pick cap, the same constraint
+    // saveMenuItem's own 23514 branch below maps. AddItemForm hardcodes
+    // staffPick: false today, so a real caller cannot reach this yet --
+    // but createItemAction takes the flag from the client regardless,
+    // and the two writers of this table must stay symmetric rather than
+    // depend on which form happens to expose the checkbox.
+    if (error.code === "23514") {
+      return refuse(
+        "This restaurant already has three staff picks. Unmark one first.",
+      );
+    }
     return { ok: false, error: WRITE_FAILED };
   }
 

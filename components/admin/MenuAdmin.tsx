@@ -951,6 +951,21 @@ function ItemRow({
                 a scan down the card shows what the agent is refusing
                 without reading every dropdown. */}
             {out ? <span className="tag tag-out edit-flag">Not offered</span> : null}
+            {/* The pick itself, not just that the dish sells. A sold-out
+                pick still holds one of the three slots -- the trigger and
+                picksUsed below agree on that -- but lib/agent/menu.ts's
+                isPick is `is_staff_pick && !isOut`, so a sold-out pick
+                never reaches the agent's payload and produces no warmth.
+                Three ticked boxes can add up to zero warmth with nothing
+                on the card to say why, so the chip carries which of the
+                two states a pick is in rather than just that it is one --
+                the same reasoning the "Not offered" chip above and the
+                sort column below are already kept for. */}
+            {item.is_staff_pick ? (
+              <span className={out ? "tag tag-neutral edit-flag" : "tag tag-outline edit-flag"}>
+                {out ? "Silent pick" : "Staff pick"}
+              </span>
+            ) : null}
             {item.description ? (
               <div className="text-muted menu-edit-desc">{item.description}</div>
             ) : null}
@@ -1148,14 +1163,18 @@ function ItemRow({
           />
         </div>
         <div className="field">
-          <label htmlFor={`ma-item-staff-pick-${item.id}`}>Staff pick</label>
-          <input
-            id={`ma-item-staff-pick-${item.id}`}
-            type="checkbox"
-            checked={staffPick}
-            disabled={pending || capReached}
-            onChange={(e) => setStaffPick(e.target.checked)}
-          />
+          {/* Label-wrapped, like .hours-closed's "Closed" -- see
+              .menu-edit-pick in app.css for why a bare htmlFor pairing
+              does not pick up the coarse-pointer touch target. */}
+          <label className="menu-edit-pick">
+            <input
+              type="checkbox"
+              checked={staffPick}
+              disabled={pending || capReached}
+              onChange={(e) => setStaffPick(e.target.checked)}
+            />
+            Staff pick
+          </label>
           {capReached ? (
             <p className="setup-note">
               Three dishes are already marked. Unmark one to choose another.

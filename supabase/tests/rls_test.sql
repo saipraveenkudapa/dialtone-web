@@ -340,10 +340,19 @@ begin
   select array_agg(id) into ids
     from (select id from menu_items where location_id = loc order by created_at limit 4) t;
 
-  update menu_items set is_staff_pick = true where id = ids[1];
-  update menu_items set is_staff_pick = true where id = ids[2];
-  update menu_items set is_staff_pick = true where id = ids[3];
-  insert into results values ('staff picks: three allowed', 'ok', 'ok');
+  -- Guarded like the two blocks below it, and for the same reason this
+  -- block itself exists to fix: a bare UPDATE with no exception handler
+  -- that raises aborts the whole enclosing transaction, so a cap
+  -- regression here would not FAIL this assertion, it would erase every
+  -- PASS/FAIL row the file produces, including the ones above it.
+  begin
+    update menu_items set is_staff_pick = true where id = ids[1];
+    update menu_items set is_staff_pick = true where id = ids[2];
+    update menu_items set is_staff_pick = true where id = ids[3];
+    insert into results values ('staff picks: three allowed', 'ok', 'ok');
+  exception when check_violation then
+    insert into results values ('staff picks: three allowed', 'refused', 'ok');
+  end;
 
   begin
     update menu_items set is_staff_pick = true where id = ids[4];
