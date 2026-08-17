@@ -386,7 +386,43 @@ describe("system prompt", () => {
     // around 30 ("America/Argentina/Buenos_Aires"). The test below pins
     // the long-zone case, so a location in Argentina cannot quietly ship
     // a prompt this fixture says is fine.
-    expect(prompt.length).toBeLessThan(8900);
+    //
+    // Sixth, from 8900 to 9150, for the staff-pick warmth rule: one
+    // bounded paragraph in "Taking an order" that lets the agent say, once,
+    // that a dish get_menu marked as a staff pick is the one people come
+    // back for -- capped at twice in a whole call, and never claiming a
+    // preference of its own, since it does not eat and so never says a
+    // dish is its favourite, that it loves it, or that it has tried it.
+    //
+    // Two vague lines were deleted in the very same change:
+    //     -... A quick "nice" or "good choice" goes a long way.
+    //     -... React a little too - "nice" or "good choice" is plenty.
+    // -- the generic reaction cues that specific rule replaces, the ones
+    // that had been losing to "Keep every reply short" for two months
+    // straight, which is the whole reason this rule exists. So the
+    // standing instruction above -- cut something first -- was followed.
+    // It just didn't cover the whole cost: the deletion removed 105
+    // characters, the new paragraph adds 400, and the difference is a net
+    // +295 (8799 to 9094 for the Los_Angeles fixture) against a ceiling
+    // raised by only 250. This raise is smaller than the rule that
+    // required it.
+    //
+    // The owner accepted that remaining cost, and for a specific,
+    // currently-true reason, not a shrug: the ~7.5s this ceiling exists to
+    // guard is the assistant-request budget, and assistant-request is not
+    // wired up today. The live phone number resolves straight to a static
+    // Vapi assistant id -- the prompt is whatever text was last pushed to
+    // it, not something fetched and rendered inside a 7.5s window on a
+    // live call. Raising this number right now does not spend a
+    // millisecond of any real caller's wait. That stops being true the day
+    // assistant-request is wired up, and whoever wires it up should re-read
+    // this ceiling against that fact rather than inherit 9150 as a number
+    // with no reasoning attached to it.
+    //
+    // None of that loosens the instruction above: this is still a latency
+    // guard, not a budget to spend, and the next person to need more room
+    // should still cut something first.
+    expect(prompt.length).toBeLessThan(9150);
   });
 
   // The ceiling has to hold for every location, not just the one this
@@ -402,7 +438,7 @@ describe("system prompt", () => {
       "America/Indiana/Indianapolis",
     ]) {
       expect(buildSystemPrompt({ location: { ...location, timezone } }).length).toBeLessThan(
-        8900,
+        9150,
       );
     }
   });
@@ -413,6 +449,34 @@ describe("system prompt", () => {
 
     const whitespace = buildSystemPrompt({ location: { ...location, address: "   " } });
     expect(whitespace).toContain("Address: not on file");
+  });
+
+  describe("warmth is earned, not generic", () => {
+    it("ties the reaction to a staff pick and caps it", () => {
+      expect(SYSTEM_PROMPT_TEMPLATE).toContain("staff pick");
+      expect(SYSTEM_PROMPT_TEMPLATE).toContain("the one people come back for");
+      expect(SYSTEM_PROMPT_TEMPLATE).toMatch(/at most twice/i);
+    });
+
+    it("never claims a preference it cannot have", () => {
+      // She does not eat. The prompt already commits her to answering
+      // truthfully when asked whether she is an AI, and a caller who hears
+      // her name a favourite dish and then hears "I'm the automated
+      // assistant" has caught her in something.
+      expect(SYSTEM_PROMPT_TEMPLATE).not.toMatch(/my favou?rite/i);
+      expect(SYSTEM_PROMPT_TEMPLATE).toMatch(/never say a dish is your favou?rite/i);
+    });
+
+    it("drops the vague reaction lines it replaces", () => {
+      // These lost to "Keep every reply short" for two months. Leaving
+      // them in alongside the specific rule recreates the same contest.
+      expect(SYSTEM_PROMPT_TEMPLATE).not.toContain('A quick "nice" or "good choice" goes a long way');
+      expect(SYSTEM_PROMPT_TEMPLATE).not.toContain('React a little too');
+    });
+
+    it("still transfers every allergy without exception", () => {
+      expect(SYSTEM_PROMPT_TEMPLATE).toContain("There are no exceptions to this.");
+    });
   });
 });
 
@@ -471,13 +535,24 @@ describe("template", () => {
   // `Today's date and time: {{current_datetime}}`; what changed there is
   // what buildSystemPrompt substitutes INTO it, which is not part of this
   // template and so not part of this hash.
+  //
+  // Re-blessed again, for the warmth rule, and this is that reviewed
+  // record of it. The previous hash was
+  // 529b3a8f9cb294080b93b6f4eac54876e115f4c5ecbe256200beb3155d841de1.
+  // Two lines changed, both deliberately narrowing vague guidance that
+  // had been losing to "Keep every reply short" since it was written:
+  //     -... A quick "nice" or "good choice" goes a long way.
+  //     -Confirm each item ... React a little too - "nice" or "good choice" is plenty.
+  //     +Confirm each item ... (plus the staff-pick paragraph)
+  // The allergy rule and its "There are no exceptions to this." are
+  // untouched, and a test above asserts that independently of this hash.
   it("matches the blessed hash of the prompt text", () => {
     const hash = crypto
       .createHash("sha256")
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "529b3a8f9cb294080b93b6f4eac54876e115f4c5ecbe256200beb3155d841de1",
+      "28d98cd0639686fd130c4efd6cedf408c006cd410874ef3bd8a3f8c0dfb71701",
     );
   });
 
