@@ -163,6 +163,70 @@ a:hover { color: var(--color-accent); }
   gap: 22px;
 }
 
+/* ── danger ────────────────────────────────────────────────────────── 
+   A COLOUR THE APPROVED SYSTEM DOES NOT HAVE, ADDED ON PURPOSE.
+
+   grep app/industry.css for danger, error, warn or red and it returns
+   nothing: the mockup has one hue. So .btn-danger -- the kill switch in
+   the sidebar, "Kill switch on" in the go-live panel, and Remove in both
+   of the menu editor's confirm dialogs -- was painted
+   --color-accent-900, the darkest step of the same blue ramp every other
+   control on the page is drawn from. In those two dialogs it stood next
+   to a Cancel painted --color-accent: two buttons, one hue, opposite
+   consequences, and the press that cannot be undone distinguished from
+   the press that does nothing only by being darker. That is a safety
+   defect rather than a taste one -- functional colour for destructive
+   actions is in Apple's HIG and in Material, and 1.4.1 is in WCAG for
+   the same reason -- and it survived two passes because there was no
+   token to reach for. This is the token.
+
+   IT LIVES HERE, NOT IN industry.css. The "industry-system corrections"
+   block further down this file states the rule: industry.css may carry a
+   corrected VALUE for a declaration the mockup already has, and may not
+   carry a declaration the mockup does not, or the word "verbatim" stops
+   being checkable. A whole new ramp is the second kind. AGENTS.md says
+   the way to extend the system is a class in app/app.css; this is that,
+   and the dependency still points app.css -> industry.css only.
+
+   HOW THE VALUES WERE DERIVED. industry.css says its ramps are
+   "generated in OKLCH on one shared lightness scale, so the same step of
+   any role matches the others in visual value", and measurement bears it
+   out: neutral, accent and accent-2 all sit on L = 97.0 / 93.0 / 87.1 /
+   78.0 / 68.1 / 58.0 / 48.0 / 38.0 / 29.0. This ramp sits on that same
+   scale, so --color-danger-700 carries exactly the visual weight of
+   --color-accent-700 and nothing here is louder than the system it
+   joins.
+
+   Hue is OKLCH 31 degrees -- between red ochre (measured 27.3) and iron
+   oxide (32.2), clear of pink below 20 and of rust-orange above 38.
+   Chroma is 1.9x the accent's at the same step, clamped to 90% of the
+   sRGB boundary at that lightness and hue; the clamp binds on -100..-400
+   only, because at L >= 78% sRGB cannot hold this hue at the plateau
+   chroma and no red ramp can. 1.9x rather than 1.0x because a red is not
+   a blue: the accent's OWN chroma at L 48 and hue 31 is #7d5048, a
+   taupe, which would have been a danger colour nobody could name. What
+   comes out at the step this file actually uses, --color-danger-700
+   #953f31, is L 48.0 C 0.119 H 31.2; natural red ochre pigment is L 46.4
+   C 0.122 H 27.3. Restrained by measurement rather than by adjective:
+   Material's error-700 is C 0.178, Tailwind red-700 C 0.191, #FF0000 C
+   0.258.
+
+   ONE CONSUMER TODAY, ON PURPOSE. A destructive colour earns its meaning
+   by scarcity, so only .btn-danger takes it in this pass. .tag-out keeps
+   --color-accent-900 -- the reason is written at .tag-out. ── */
+
+:root {
+  --color-danger-100: #fef2ef;
+  --color-danger-200: #fde0db;
+  --color-danger-300: #fbc6bc;
+  --color-danger-400: #f99a89;
+  --color-danger-500: #e17462;
+  --color-danger-600: #bd5746;
+  --color-danger-700: #953f31;
+  --color-danger-800: #6d2a20;
+  --color-danger-900: #481c15;
+}
+
 /* ── kill switch ───────────────────────────────────────────────────── */
 
 .kill-banner {
@@ -194,9 +258,126 @@ a:hover { color: var(--color-accent); }
   color: var(--color-bg);
   font-size: 13px;
 }
-.btn-danger { border-color: var(--color-accent-900); color: var(--color-accent-900); }
-.btn-danger:hover { background: color-mix(in srgb, var(--color-accent-900) 10%, transparent); }
+/* THE KILL SWITCH. Filled rather than outlined, and the fill is the
+   whole argument.
+
+   Both Remove confirms sit inside a plain .dialog, which industry.css's
+   blueprint block leaves `background: transparent`, over a
+   .dialog-backdrop of --color-neutral-900 at 50%. The ground under those
+   two buttons is therefore #8e8e90, not paper -- and no OUTLINED
+   destructive control clears AA on it: --color-danger-700 as ink
+   measures 2.13:1 there, and even --color-danger-900 measures 4.45:1,
+   still short of 4.5:1. (The --color-accent-900 outline this replaces
+   measures 4.32:1 on that ground, and the Cancel beside it measures
+   1.79:1, so the transparent dialog was already failing both buttons.)
+   A fill makes the label's ground the button's OWN fill, so one number
+   holds on every ground in the product: --color-bg on
+   --color-danger-700 is 6.19:1, on -800 9.37:1, on -900 12.92:1. On
+   paper the fill against --color-bg is those same three numbers, so the
+   control's boundary clears the 3:1 of WCAG 1.4.11 there as well.
+
+   Filled with a --color-bg label is the shape .btn-primary already has,
+   so this is the system's own "the button you press" with the hue
+   changed -- and .btn-danger is the only filled button in every row it
+   appears in (a .btn-secondary beside it in the go-live panel's line-
+   state row, a .btn-ghost Cancel in each confirm dialog, a .btn-ghost
+   Sign out under it in the sidebar), so fill, border and hue all differ
+   from its neighbours at once.
+
+   THE BORDER RESTS A STEP DARKER THAN THE FILL, which nothing else in
+   this system does, and it is a measurement and not a flourish: the fill
+   has to carry the hue, so it rests at -700, and -700 against that
+   #8e8e90 dialog ground is 2.13:1 -- under the 3:1 WCAG 1.4.11 asks of a
+   control's own boundary. -900 as the border is 4.45:1 on the dialog
+   ground and 12.92:1 on paper. It is never LIGHTER than the fill in any
+   state, which is the failure .btn-primary's border correction further
+   down this file exists to prevent; at :active fill and border meet at
+   -900 and the rim closes.
+
+   One ramp step per state, monotonically darker, the same pattern
+   .btn-primary's hover and press take. The 10% tint that used to be the
+   hover is gone with the transparent rest state it belonged to.
+
+   COLOUR IS NOT THE ONLY SIGNAL. Each of the four .btn-danger in the
+   product names what it destroys in its own label -- "Kill switch",
+   "Kill switch on", "Remove {item}", "Remove it and N items" -- and each
+   dialog's other button says "Cancel" and carries no fill at all. Said
+   plainly because this fill and --color-accent are near-equal in
+   luminance by construction (1.19:1; both on the L 48-51 rung of the
+   shared scale), so if a filled .btn-primary and this ever land in one
+   row they are told apart by hue, by rim and by words, and never by
+   lightness. */
+.btn-danger {
+  background: var(--color-danger-700);
+  border-color: var(--color-danger-900);
+  color: var(--color-bg);
+}
+.btn-danger:hover { background: var(--color-danger-800); }
+.btn-danger:active { background: var(--color-danger-900); }
 .btn-restore { background: var(--color-accent-900); color: var(--color-bg); border-color: var(--color-accent-900); }
+
+/* ── the ground every dialog stands on ─────────────────────────────────
+
+   THE GROUND THE BLOCK ABOVE HAD TO WORK AROUND, CORRECTED AT SOURCE.
+
+   industry.css's blueprint rule is `.card, .dialog { background:
+   transparent }` -- right for a card, which sits on paper, and wrong for
+   a dialog, which floats over .dialog-backdrop's --color-neutral-900 at
+   50%. A transparent .dialog therefore composites to rgb(142.5, 142.5,
+   144) -- #8f8f90 -- and NOTHING outlined or inked clears AA there.
+   Recomputed with the WCAG relative-luminance formula, on that ground:
+
+     .btn-ghost "Cancel"/"Stay on this page"  --color-accent   1.79:1
+     .dialog-body copy (--color-text at .85)                   4.09:1
+     :focus-visible ring                      --color-accent   1.79:1
+     .setup-error                             --color-danger-800 3.23:1
+     .btn-danger's own rim                    --color-danger-900 4.45:1
+
+   The kill-switch pass read those numbers and answered them one control
+   at a time: it FILLED .btn-danger so the destructive label would stand
+   on the button's own paint instead of the dialog's. That fixed the one
+   button and left everything beside it -- so on the console's own
+   leave-guard dialog, the press that destroys an operator's unsaved
+   typing was the only thing in the box that could be read. The safe
+   press, the sentence explaining the choice, and the keyboard's own
+   position indicator were all under 4.5:1, and the ring at 1.79:1 meant
+   a Tab user could not see which of the two buttons was armed on the
+   dialog that deletes a menu category and its items with no undo.
+
+   ONE DECLARATION, and it is the one .review-dialog (below) and
+   .handover-dialog (below) each already reached for on their own,
+   naming the same reason: the system's dialog is a wireframe frame, and
+   a wireframe frame is not a reading surface. Stating it once on
+   .dialog makes the fifth dialog somebody adds correct without anyone
+   remembering this -- the same move .dialog-backdrop's z-index at the
+   end of this file makes. Their own declarations are left in place
+   because each belongs to a width change it is written beside; they are
+   now belt-and-braces rather than load-bearing.
+
+   ON --color-bg, every one of those numbers clears:
+
+     .btn-ghost Cancel                        --color-accent    5.19:1
+     .dialog-body copy (--color-text at .85)                    9.51:1
+     :focus-visible ring                      --color-accent    5.19:1
+       (2px outline-offset, so the ring's neighbours on BOTH sides are
+        --color-bg -- 5.19:1 clears the 3:1 of WCAG 1.4.11 and 2.4.11)
+     .setup-error                             --color-danger-800 9.37:1
+     .btn-danger rim                          --color-danger-900 12.92:1
+     .btn-danger fill vs the paper it sits on --color-danger-700 6.19:1
+
+   .card IS DELIBERATELY NOT INCLUDED. A card sits on --color-bg already;
+   its transparency is the blueprint look this product is drawn in, and
+   there is nothing wrong with the contrast on it. Only .dialog moves,
+   because only .dialog is put over a 50%-ink backdrop. The kill switch
+   keeps its fill -- filled-and-rimmed is now simply the shape of the
+   destructive button rather than a workaround for a ground that no
+   longer exists, and its numbers on paper are the ones listed above.
+
+   --color-bg and not --color-surface: paper is what the reader has been
+   reading all the way to this dialog, and it is the token
+   .review-dialog and .handover-dialog already chose. (Cancel on
+   --color-surface would be 4.79:1 -- passing, but for no gain.) */
+.dialog { background: var(--color-bg); }
 
 /* ── page header ───────────────────────────────────────────────────── */
 
@@ -285,9 +466,14 @@ a:hover { color: var(--color-accent); }
 .panel { display: flex; flex-direction: column; gap: 10px; }
 .panel h4 { margin: 0; }
 .num { font-variant-numeric: tabular-nums; }
+/* 55% -> 65% here and at .soldout-row .until, .transcript h5 and
+   .edit-status below: four copies of industry.css's .text-muted recipe,
+   which measured 3.64:1 on --color-bg. The whole derivation, the four
+   grounds and why .blueprint > .corner keeps 55%, is at .text-muted in
+   app/industry.css; these move with it so one recipe keeps one value. */
 .table td .caller-city {
   font-size: 12px;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
 .row-link { text-decoration: none; font-size: 13px; }
 
@@ -303,7 +489,7 @@ a:hover { color: var(--color-accent); }
 .soldout-row .until {
   margin-left: auto;
   font-size: 11px;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
 .empty-note { font-size: 13px; padding: var(--space-3) 0; }
 
@@ -360,6 +546,34 @@ a:hover { color: var(--color-accent); }
 /* 16px keeps iOS from zooming the viewport on focus. */
 .phone-search .input { min-height: 48px; font-size: 16px; }
 .phone-counts { display: flex; gap: 8px; }
+/* NOT TAKING THE DANGER COLOUR, and the reason is not that it is fine.
+   Considered because .tag-out is --color-accent-900, the same token
+   .btn-danger just left.
+
+   Sold out is a STATE, not a destructive action: an operator sets it, it
+   is one tap to unset, it costs nothing and it is expected. It is also
+   the most common chip in the product -- a restaurant with a dozen dishes
+   off renders a dozen of these down the Menu panel. Painted brick, the
+   red on the kill switch would stop meaning "this cannot be undone" and
+   start meaning "one of the many red things on this page", which is the
+   colour inflation that makes a functional palette useless. Scarcity is
+   the whole mechanism; the destructive colour has one consumer.
+
+   It is not short of emphasis either. .tag-out is already the only
+   FILLED chip in the tag family -- .tag-accent, .tag-accent-2 and
+   .tag-neutral are tints, .tag-outline is a hairline -- and its
+   --color-bg label on --color-accent-900 measures 12.56:1. Hue would add
+   alarm, not legibility.
+
+   The real defect here is one this pass cannot reach: .tag-out is
+   OVERLOADED. components/admin/GoLive.tsx maps `blocked` to it and uses
+   it for "Vapi", "Numbers", "Failed" and "Only copy" -- genuine faults --
+   while MenuAdmin, MenuEditor and ManagerScreen use it for "Not offered".
+   One chip, two meanings, and giving it the danger hue would paint "3 not
+   offered" the same red as a provisioning failure. Splitting the fault
+   chip out from the sold-out chip is a change in those .tsx files, not in
+   a token, so the token is left exactly as it was and the overload is
+   written down here. */
 .tag-out { background: var(--color-accent-900); color: var(--color-bg); }
 
 .lv-scroll {
@@ -541,10 +755,18 @@ a:hover { color: var(--color-accent); }
 .auth-seg .seg-opt { flex: 1; justify-content: center; }
 .auth-form { display: flex; flex-direction: column; gap: var(--space-3); }
 .auth-note { font-size: 13px; margin: 0; }
+/* The same correction as .setup-error further down, for the same
+   reason and with the same numbers -- these are one class with two
+   names, split only because one grew on the auth screens and one on the
+   setup form. Both render only when something has been refused. The
+   five call sites all land on the page's own paper -- .auth-card and
+   .phone set --color-bg explicitly, .sidebar inherits it, and
+   CallNotes' .card.blueprint is transparent over it -- where -800 is
+   9.37:1. */
 .auth-error {
   margin: 0;
   font-size: 13px;
-  color: var(--color-accent-900);
+  color: var(--color-danger-800);
 }
 /* Why /set-password is asking. Same frame as the operator's one-time
    credential warning, because it is the other end of the same handover. */
@@ -592,6 +814,157 @@ a:hover { color: var(--color-accent); }
 /* Wide tables scroll inside their own box; the page itself never does. */
 .table-scroll { overflow-x: auto; }
 .num-warn { color: var(--color-accent-900); font-weight: 600; }
+
+/* ── a table that stacks instead of scrolling ─────────────────────────
+   THREE CONSUMERS, all of them a log somebody reads on a phone: the
+   Accounts table on /admin (the portfolio, and the operator's first
+   screen), and the console's own Recent calls and Recent orders.
+
+   THE TWO CONSOLE LOGS ARRIVED HERE BY A SECOND ROAD, and it is worth
+   the paragraph because it is the argument for stacking rather than for
+   any amount of clever wrapping. Those two columns used to print a
+   clock, "11:09 AM", which said nothing about WHICH 11:09; they print
+   the whole instant now, "Aug 15, 2026, 10:08 PM", which is right and
+   which a 47.9px column cannot hold. Measured at 375px with (pointer:
+   coarse) on the real console: the When column resolved to 47.9px inside
+   a 300px .table-scroll and the string broke at every space -- "Aug /
+   15, / 2026, / 10:08 / PM" -- taking the row from 58.6px to 123.1px and
+   the five-row tbody from 293px to 615.4px. The log holds twenty, so
+   ~1170px of phone became ~2460px.
+
+   NEITHER NOWRAP IS AN ANSWER, and both were measured rather than
+   argued about. `white-space: nowrap` on the whole string makes the
+   column's min-content 146.2px and the table 503.5px, so 204px of 503
+   is off the right edge. Splitting it into two nowrapped lines -- the
+   shape the Caller cell in that same table already uses -- fixes the
+   height exactly (row back to 58.6px) but still costs 42.8px of column,
+   taking the table to 447.9px and the hidden part from 105px to 148px:
+   the Cost column and the whole Open button, plus most of Outcome. A
+   two-line cell with NO nowrap is worth nothing at all -- the date
+   simply breaks into three lines of its own and the row only falls from
+   123.1px to 116.9px. Every version of "make the string fit the column"
+   pays in a direction this file already ruled against one block up.
+   Stacking pays in neither: the row is a block, the whole instant sits
+   on one line inside a 145px track (it measures 135.4px), and nothing
+   is hidden.
+
+   WHAT WAS WRONG. Measured at 375px: eight columns, 572px of table in a
+   300.2px box, 272px -- 47.6% of it -- past the right edge with nothing
+   but .table-scroll's overflow-x to say so. The columns lost, in the
+   order they fell off, were Missed, Orders, Revenue, Spend and Last
+   call. The FIRST thing hidden was the count of callers nobody picked
+   up for, and the last was when the restaurant last rang: between them
+   they are the whole of "which of these needs me now", which is the only
+   question this screen answers. And an overflow scrollbar is an overlay
+   on iOS and on a trackpad -- it is not painted until something is
+   already moving -- so the affordance for the missing 47.6% was a
+   gesture nobody was told about. A scrollbar is a way to READ a wide
+   table; it is not a way to find out that one is wide.
+
+   WHAT IT DOES INSTEAD. Below 700px -- the width .setup-row and
+   .money-grid already break at, so the page changes shape once -- each
+   <tr> becomes a block: the restaurant's name and its status chip on
+   the first line, then the six figures two-up beneath, each carrying
+   the name of its own column (app/admin/page.tsx's <Figure>). Nothing
+   is hidden and nothing scrolls sideways.
+
+   IT FITS BY MEASUREMENT, NOT BY HOPE. Inside the 300.2px box the two
+   columns are 145px each. The widest label is "Answered" at 53px and
+   the widest figure "$1,234.56" at 59px, so the worst-case pair needs
+   53 + var(--space-3) + 59 = 122.2px of 145. The widest status chip,
+   "Forwarding unproven", is 127px and fits its column on one line. Only
+   the restaurant's name and the org/timezone line under it can outrun a
+   column -- "The Continental Kitchen & Bar" is 200.6px -- and they wrap,
+   which is why the name cell carries overflow-wrap and a zero min-width
+   rather than a floor.
+
+   1fr 1fr AND NOT 1fr auto, though auto would give the name 18 more
+   pixels: with two equal columns the right-hand figure starts at the
+   same x on every restaurant in the list, and six numbers being scanned
+   down a phone are worth more aligned than a name is worth unwrapped.
+
+   The equal columns are .money-grid's, the hairline-under-a-row is
+   .fact-row's and .hours-row's, and the label is .field > label's size
+   and tier -- this is the house's own list, assembled from the house's
+   own parts, not a second table vocabulary. */
+.cell-label {
+  /* Desktop: the <th> above the cell already says this. */
+  display: none;
+  font-size: 12px;
+  font-weight: 400;
+  /* Declared rather than inherited so .num-warn, which paints the
+     Missed cell accent-900 and bold, colours the FIGURE and not the
+     word "Missed" beside it. */
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+}
+
+@media (max-width: 700px) {
+  .stack-table,
+  .stack-table > tbody,
+  .stack-table > tbody > tr,
+  .stack-table > tbody > tr > td {
+    display: block;
+  }
+  /* Gone rather than clipped-but-present. The reasoning is at the call
+     site: an ARIA table announces a column header while navigating by
+     cell, which is not how a portfolio is read on a phone, so a hidden
+     <thead> would leave a linear reading as six bare numbers. The label
+     inside the cell is real text and carries it instead -- one
+     labelling mechanism live at each width, never two. */
+  .stack-table > thead { display: none; }
+
+  .stack-table > tbody > tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2) var(--space-3);
+    align-items: baseline;
+    /* The same hairline-with-air .fact-row and .hours-row use for a row
+       in a list, in place of .table td's per-cell border-bottom, which
+       border-collapse is no longer there to merge. */
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .stack-table > tbody > tr:last-child { border-bottom: 0; padding-bottom: 0; }
+  .stack-table > tbody > tr:first-child { padding-top: 0; }
+
+  .stack-table > tbody > tr > td {
+    padding: 0;
+    border-bottom: 0;
+    min-width: 0;
+  }
+  /* The name is the block's heading and the only cell that can outrun
+     its column; it wraps rather than pushing the grid wide. */
+  .stack-table > tbody > tr > td:first-child { overflow-wrap: anywhere; }
+  /* The status chip, at the end of the first line rather than the start
+     of the second. Both of these auto-place into row 1 on their own --
+     nothing here places them, so no explicit track can fall out of step
+     with the number of columns. */
+  .stack-table > tbody > tr > td:nth-child(2) { justify-self: end; }
+  /* Every figure: its column's name at the left, its value at the
+     right, on one line. */
+  .stack-table > tbody > tr > td:nth-child(n + 3) {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  /* THE ACTION CELL -- the console's call log ends each row with a
+     button, under a deliberately empty <th> (the button's own label
+     names its row, so the column has no name to print). It is the one
+     cell with nothing to put in the label half of the pair, so it
+     right-aligns its single child instead of spreading two. Auto-placed
+     like every other cell, so it takes the free half of the last row
+     rather than a track of its own -- no `grid-column` here, because a
+     spanning cell would push itself to a fresh row and leave the gap
+     beside Cost that it was spanning to avoid.
+
+     A class and not :last-child: the orders log's last cell is a Total,
+     which is an ordinary label-and-figure pair, and a positional rule
+     could not tell the two apart. */
+  .stack-table > tbody > tr > td.stack-action { justify-content: flex-end; }
+
+  .stack-table .cell-label { display: inline; }
+}
 
 .admin-facts { padding: var(--space-4); }
 .admin-facts dl { margin: 0; display: flex; flex-direction: column; }
@@ -670,7 +1043,7 @@ a:hover { color: var(--color-accent); }
   font-size: 13px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
 .transcript ol {
   list-style: none;
@@ -865,7 +1238,60 @@ a:hover { color: var(--color-accent); }
   padding-top: var(--space-3);
   border-top: 1px solid var(--color-divider);
 }
-.setup-error { font-size: 13px; margin: 0; color: var(--color-accent-900); }
+/* THE SECOND CONSUMER OF --color-danger, AND THE ONE THE DANGER PASS
+   LEFT ON THE TABLE.
+
+   .btn-danger took the new ramp and every other accent-900 refusal in
+   the product was deliberately left alone, on the argument that a
+   functional colour earns its meaning by scarcity. That argument holds
+   for .tag-out (see it) and for .kill-banner, .num-warn, .auth-why,
+   .review-consequence-hard and .edit-note.is-drift, which are all
+   states rather than faults -- and it does not hold here, for two
+   reasons that only became visible once both passes were on the tree
+   together.
+
+   ONE: THE NEW FALLBACK-NUMBER ERROR WEARS THIS CLASS. GoLive.tsx now
+   renders <p class="setup-error" id="golive-fallback-error"> and points
+   the field at it with aria-describedby -- inline validation, written
+   on the assumption that .setup-error looks like an error. On
+   --color-accent-900 it did not: that ink is 1.18:1 from --color-text,
+   which is to say it is body copy with a blue cast. A refusal a sighted
+   reader cannot pick out of the paragraph it interrupts is the same
+   defect as the kill switch that looked like Cancel, one screen along.
+
+   TWO: THESE TWO CLASSES ARE NOT STATES. Every one of the ~25 call
+   sites renders only when something has been REFUSED -- a save that
+   would not normalise, a sign-in that failed, a menu row the assistant
+   will not read out. They are already scarce by construction: nothing
+   in this product paints a .setup-error until something has gone wrong,
+   so the ramp is not inflated by taking them, and the alternative is a
+   product with a destructive colour that error messages do not use.
+
+   -800 AND NOT -700, which is what --color-accent-900 was doing here
+   correctly: a refusal is read, and it should sit at the weight of the
+   copy around it rather than under it. As ink, -800 measures 9.37:1 on
+   --color-bg, which is the ground every one of the call sites has
+   (.card and .dialog are transparent in the blueprint system, so a
+   .setup-error inside a card is on the page's own paper), 8.64:1 on
+   --color-surface and 9.62:1 on --color-accent-100 -- against the 4.5:1
+   AA asks of 13px text. And 1.58:1 from --color-text, so it is told
+   apart from the sentence beside it by more than hue, where
+   --color-accent-900 was 1.18:1. (-700 would be 6.19:1 and legible too;
+   it is the fill on .btn-danger, and ink that matched the button's fill
+   would read as a disabled button.)
+
+   ONE GROUND IT MUST NOT MOVE ONTO -- AND IT NO LONGER EXISTS. This
+   read: the #8f8f90 a transparent .dialog composites to over
+   .dialog-backdrop, where -800 is 3.23:1, so a refusal put INSIDE a
+   confirm would need the opaque background .review-dialog and
+   .handover-dialog set for themselves. That caveat is retired: `.dialog
+   { background: var(--color-bg) }` near .btn-danger above now states it
+   once for every dialog in the product, so -800 is 9.37:1 wherever a
+   .setup-error lands, inside a confirm or beside one. (The survey stands
+   as a record: all twenty-five call sites are a sibling of the confirm
+   rather than a child of it, and --color-accent-900 measured 4.35:1 on
+   that old ground, itself a miss.) */
+.setup-error { font-size: 13px; margin: 0; color: var(--color-danger-800); }
 .setup-note { font-size: 12px; margin: 4px 0 0; }
 
 /* A caption for a group of controls that has no single control to point
@@ -1344,7 +1770,13 @@ iframe.review-image { height: 62vh; }
    same token .setup-card and .menu-edit-cat already use for it. Wider
    too, because the choice this asks for has to be spelled out rather
    than summarised -- .dialog sets `width`, so `max-width` alone does
-   nothing. */
+   nothing.
+
+   (The background is belt-and-braces now: `.dialog { background:
+   var(--color-bg) }` near .btn-danger says it once for every dialog,
+   after the same ground failed Cancel and the body copy in the plain
+   confirms too. Kept here because it belongs to the width change beside
+   it, and because this dialog would want it even if that rule went.) */
 .review-dialog {
   width: min(560px, 100%);
   background: var(--color-bg);
@@ -1503,7 +1935,12 @@ iframe.review-image { height: 62vh; }
    in the product an operator reads down a phone to somebody else. Opaque
    from the same token, because the system's dialog is a transparent
    blueprint frame -- right behind a two-line confirm, unreadable behind
-   two tables. .dialog sets `width`, so `max-width` alone does nothing. */
+   two tables. .dialog sets `width`, so `max-width` alone does nothing.
+
+   (Belt-and-braces now, for the reason written at .review-dialog: the
+   system's dialog is not transparent any more. "Right behind a two-line
+   confirm" turned out to be wrong about the two-line confirm as well --
+   its Cancel measured 1.79:1 on that ground.) */
 .handover-dialog {
   width: min(560px, 100%);
   /* .dialog-backdrop is a grid with an implicit, auto-sized row, so a
@@ -1679,7 +2116,7 @@ iframe.review-image { height: 62vh; }
   min-width: 0;
   margin: 0;
   font-size: 13px;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
 
 /* A one-off closure. Worn WITH .hours-row -- <div class="hours-row
@@ -1740,6 +2177,31 @@ iframe.review-image { height: 62vh; }
    house already wears .seg for exactly that twice: .auth-seg swaps the
    sign-in form under it, .filter-seg the calls log. This is the third
    modifier on it, not a third vocabulary. */
+
+/* THE PAGE HEAD, OBEYING THE COLUMN THE PAGE IS. Measured at 1280px:
+   .page-head took the whole 1224px content box of .page while
+   .console-tabs, .console-tabs-head and every .setup-stack took 760 --
+   a 464px overhang, so the restaurant's name and the way out sat on a
+   rule of their own, wider than the strip that names the sections and
+   wider than any section under it, with the right of the screen empty
+   beneath them.
+
+   760 IS THE ONE THAT IS RIGHT AND THE HEAD IS THE OUTLIER. It is a
+   reading measure the whole route is already built on: .setup-stack's
+   own ceiling, the cap .console-tabs takes so the strip cannot disagree
+   with what it names, and the width .setup-card > .card-body's 70ch and
+   .menu-grid's two ~370px columns resolve inside. Widening the console
+   to fill 1280 would widen all of that AND leave ~466px of empty box
+   inside .seg, whose nine labels measure ~654px and whose options do not
+   grow -- a head that is too wide traded for a strip that is too wide.
+
+   Its own class rather than a declaration on .page-head, because
+   /admin's Accounts table and /dashboard's head are full-width on
+   purpose. It sits here rather than beside .page-head so the three
+   elements that share the measure share a block: change one number and
+   the other two are on screen. */
+.console-head { max-width: 760px; }
+
 .console-tabs-head {
   display: flex;
   flex-direction: column;

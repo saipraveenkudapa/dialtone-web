@@ -185,6 +185,26 @@ export function sectionOfAnchor(hash: string): ConsoleSectionId | undefined {
   return CONSOLE_SECTIONS.some((known) => known.id === section) ? section : undefined;
 }
 
+/** Which tab a `?section=` on the address bar names, or undefined.
+ *
+ *  The client's own copy of the check app/admin/[locationId]/page.tsx
+ *  makes on the server, and it exists for the same reason
+ *  sectionOfAnchor does: on the way BACK through history the query
+ *  string is read by this file and by nothing else, so nothing upstream
+ *  has vetted it. A popstate can land on any entry the operator has --
+ *  including one whose URL they typed -- and `?section=<anything>` must
+ *  resolve to one of the nine tabs the strip can show or to nothing at
+ *  all. It is never an id, never reaches Postgres or Vapi and is never
+ *  passed to a server action; the one thing it decides is which panel is
+ *  visible.
+ *
+ *  A membership test over the array rather than a map lookup, so there
+ *  is no object literal to inherit `constructor` from. */
+export function sectionOfSearch(search: string): ConsoleSectionId | undefined {
+  const value = new URLSearchParams(search).get("section");
+  return CONSOLE_SECTIONS.find((known) => known.id === value)?.id;
+}
+
 const tabDomId = (id: ConsoleSectionId) => `console-tab-${id}`;
 const panelDomId = (id: ConsoleSectionId) => `console-panel-${id}`;
 
@@ -430,13 +450,22 @@ type PendingExit = {
  *    * A link to this same pathname (?section=, #menu). The panels stay
  *      mounted through it; that is the whole design, and it is what the
  *      checklist's own "Fix in …" buttons ride on.
- *    * The browser's own Back button, and every other history move. No
- *      popstate guard, on purpose: popstate arrives AFTER the entry has
- *      already changed, so "cancelling" it means pushing a state back on
- *      to fight the operator's own button. beforeunload is what covers
- *      Back off this page to another origin; a Back that is a soft
- *      route change is not caught, and losing that is worth not
- *      breaking the button.
+ *    * The browser's own Back button, and every other history move.
+ *      Still no popstate guard, and the reason changed shape when
+ *      choose() started pushing (see its comment): a Back press inside
+ *      this console is now a move BETWEEN TABS. Nothing unmounts through
+ *      it, nothing is lost by it, and there is therefore nothing for a
+ *      guard to ask about -- which is the whole point of the push. The
+ *      one Back that still leaves is the one pressed on the tab the
+ *      console was arrived on, and that one is not cancellable from
+ *      here: popstate arrives AFTER the entry has already changed, the
+ *      App Router's own popstate listener has already started the
+ *      traverse, and "cancelling" it would mean pushing a state back on
+ *      to fight the operator's own button. beforeunload covers it
+ *      whenever this page was loaded as a document; when it was reached
+ *      by a soft route change it is the last uncovered press on the
+ *      route, down from every Back press before this change. The
+ *      sentence under the strip says so in those words.
  *    * Sign out. It is a <form> posting a server action, not a link.
  *      Intercepting submits would put this listener in front of every
  *      save on the page, which is a far worse thing to get wrong. */
@@ -538,6 +567,12 @@ export function ConsoleTabs({
   children: ReactNode;
 }) {
   const [active, setActive] = useState<ConsoleSectionId>(initial);
+  /* The same value the callbacks read, because they may not read the
+     state. choose() is handed to eight panels as `goTo` and its identity
+     is what decides whether their reporting effects re-fire, so it has
+     to stay referentially stable -- and a stable callback cannot close
+     over `active`. The ref is written by show() and by nothing else. */
+  const activeRef = useRef<ConsoleSectionId>(initial);
   const [dirtySections, setDirtySections] = useState<ReadonlySet<ConsoleSectionId>>(NO_SECTIONS);
   const [replacedSections, setReplacedSections] =
     useState<ReadonlySet<ConsoleSectionId>>(NO_SECTIONS);
@@ -571,33 +606,123 @@ export function ConsoleTabs({
     [],
   );
 
-  /** A tab the operator chose. */
-  const choose = useCallback((id: ConsoleSectionId) => {
+  /** Put a tab on screen. The one writer of `active`, so the state and
+   *  the ref the callbacks read can never disagree. Says nothing about
+   *  history: choose() writes an entry, popstate reads one. */
+  const show = useCallback((id: ConsoleSectionId) => {
+    activeRef.current = id;
     setActive(id);
-
-    /* Kept in the URL so a reload, a bookmark and a pasted link all
-       land back here -- but with replaceState rather than a <Link>.
-       A navigation would re-run this route's server function on every
-       tab press: getAdminLocation plus getGoLiveState plus
-       getEditableRecord plus the drift read, four of them against
-       Postgres and Vapi, per press, and a server re-render that risks
-       the unsaved client state this whole design exists to protect.
-
-       replaceState and never pushState: with push, nine tab presses fill
-       the back stack and Back stops returning to /admin, which is where
-       the operator came from and the one place Back must go.
-       window.history.state is passed through rather than null because
-       Next keeps its router tree in there. */
-    const params = new URLSearchParams(window.location.search);
-    params.set("section", id);
-    window.history.replaceState(window.history.state, "", `?${params.toString()}`);
-
-    /* Switching from deep inside a two-hundred-item Menu to a
-       one-screen Business panel would otherwise leave the operator
-       staring at the clamped bottom of a short document. Instant: the
-       5275px slide that once needed smooth scrolling no longer exists. */
-    window.scrollTo({ top: 0 });
   }, []);
+
+  /** A tab the operator chose. */
+  const choose = useCallback(
+    (id: ConsoleSectionId) => {
+      /* Already here. A "Fix in …" button on the panel it points at, or
+         a re-press of the checked radio, must not write a second history
+         entry for a move that did not happen -- that is how a back stack
+         fills with duplicates of one tab. The scroll below still runs:
+         the press meant "show me that", and from halfway down a long
+         panel it has somewhere to go. */
+      if (activeRef.current !== id) {
+        show(id);
+
+        /* Kept in the URL so a reload, a bookmark and a pasted link all
+           land back here -- and written with history rather than with a
+           <Link>. A navigation would re-run this route's server function
+           on every tab press: getAdminLocation plus getGoLiveState plus
+           getEditableRecord plus the drift read, four of them against
+           Postgres and Vapi, per press, and a server re-render that
+           risks the unsaved client state this whole design exists to
+           protect.
+
+           PUSH, AND IT USED TO BE REPLACE. THE ARGUMENT, IN FULL,
+           BECAUSE IT WAS DECIDED THE OTHER WAY ONCE.
+
+           The case for replace was that nine tab presses fill the back
+           stack, so Back stops returning to /admin in one press. That is
+           true and it is the entire cost. What it was weighed against
+           was not measured: with replace there is exactly ONE history
+           entry for the whole console, so the operator's first Back --
+           from the Menu tab, from Hours, from anywhere -- LEAVES THE
+           RESTAURANT. It is a client-side route change, so this
+           component unmounts and nine panels of useState go with it;
+           beforeunload does not fire for a soft navigation and
+           useLeaveGuard's click listener never sees a button press. One
+           press, no dialog, no undo, and the thing destroyed is exactly
+           what the rest of this file exists to protect. Back after a tab
+           press also does not do what the address bar says it will: the
+           URL reads ?section=hours and Back does not undo the move that
+           put it there.
+
+           So: push. Back now steps back through the tabs that were
+           opened, which is what a Back button means, and every one of
+           those steps is same-document -- nothing unmounts, nothing is
+           lost, and the guard has nothing to ask about. Leaving the
+           restaurant takes as many presses as there were tab presses,
+           which is the honest price of nine navigations, and the way out
+           in ONE press is the "← Every restaurant" link at the top of
+           the page -- which is guarded, names the unsaved sections and
+           has been sitting there the whole time.
+
+           Only a real change pushes (see the test above it), so the
+           stack holds the tabs that were actually visited and not one
+           entry per press.
+
+           window.history.state is passed through rather than null
+           because Next keeps its router tree in there: an entry without
+           it is one the App Router does not recognise, and popping onto
+           it makes it reload the document. */
+        const params = new URLSearchParams(window.location.search);
+        params.set("section", id);
+        window.history.pushState(window.history.state, "", `?${params.toString()}`);
+      }
+
+      /* Switching from deep inside a two-hundred-item Menu to a
+         one-screen Business panel would otherwise leave the operator
+         staring at the clamped bottom of a short document. Instant: the
+         5275px slide that once needed smooth scrolling no longer exists. */
+      window.scrollTo({ top: 0 });
+    },
+    [show],
+  );
+
+  /* Back and Forward, which are now moves between tabs.
+   *
+   * The other half of the push above: an entry this component wrote is
+   * an entry it has to be able to read back. Without this the URL would
+   * walk backwards while the panel stood still -- the address bar
+   * reading ?section=line over an open Menu tab, and a reload then
+   * "losing" a tab the operator never left.
+   *
+   * The section is taken from the URL rather than from a stack of our
+   * own, because the URL is the thing the entry actually carries: a
+   * reload, a Forward press, a bookmark and a session restored by the
+   * browser all arrive with nothing but this. It goes through
+   * sectionOfSearch for the reason that function's header gives -- on
+   * the way back through history nothing upstream has vetted it.
+   *
+   * ?section= missing means the arrival entry, which rendered
+   * DEFAULT_SECTION.
+   *
+   * A popstate that has left this path is NOT ours: it is the operator
+   * leaving the restaurant, the App Router already owns it, and setting
+   * a tab on a page that is going away is noise. `path` is read once, at
+   * registration, so it is the console's own pathname and not whatever
+   * the address bar has become by the time the listener runs.
+   *
+   * Nothing scrolls here, deliberately. choose() sends the page to the
+   * top because a tab press is a new subject; a Back press is a RETURN,
+   * and the browser restores that entry's own scroll offset, which is
+   * where the operator was standing when they left it. */
+  useEffect(() => {
+    const path = window.location.pathname;
+    const onPopState = () => {
+      if (window.location.pathname !== path) return;
+      show(sectionOfSearch(window.location.search) ?? DEFAULT_SECTION);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [show]);
 
   /* An arrival by hash: /admin/<id>#menu from a bookmark, or one of the
      old /edit#… links arriving through the redirect, which re-applies
@@ -608,14 +733,21 @@ export function ConsoleTabs({
      its own address on load with no user action is rude and pointless.
 
      sectionOfAnchor rather than an index: the hash is unvalidated text
-     and the map is an object literal. Its comment has the detail. */
+     and the map is an object literal. Its comment has the detail.
+
+     replaceState here and pushState in choose(), and the difference is
+     not an oversight. This is a REWRITE of the entry the console
+     arrived on into the form the rest of the file reads -- the operator
+     made no move, so there is no move to put in the history. Pushing
+     here would put a dead entry under every /edit#menu link that comes
+     through the redirect, and Back off it would appear to do nothing. */
   useEffect(() => {
     const applyHash = () => {
       const hash = window.location.hash.slice(1);
       if (hash === "") return;
       const section = sectionOfAnchor(hash);
       if (!section) return;
-      setActive(section);
+      show(section);
       const params = new URLSearchParams(window.location.search);
       params.set("section", section);
       window.history.replaceState(window.history.state, "", `?${params.toString()}`);
@@ -624,7 +756,7 @@ export function ConsoleTabs({
     applyHash();
     window.addEventListener("hashchange", applyHash);
     return () => window.removeEventListener("hashchange", applyHash);
-  }, []);
+  }, [show]);
 
   /* Arrow keys, Home and End across the strip, with the section
      changing as focus reaches it -- which costs nothing here: no fetch,
@@ -771,13 +903,24 @@ export function ConsoleTabs({
             is that they can decide to save FIRST. It also stays honest
             about the case the guard does not cover -- the back button.
 
+            AND THAT LAST CLAUSE IS NARROWER THAN IT WAS, because the
+            code under it changed. choose() pushes a history entry now,
+            so Back is a move between tabs and keeps everything; the one
+            press that still leaves is Back on the tab the console was
+            arrived on. The sentence names that press rather than the
+            button, because a line that says "Back loses your work" while
+            Back plainly does not is a line that stops being believed --
+            and the one press that IS still lossy gets disbelieved with
+            it.
+
             Absent when nothing is unsaved: a standing warning is
             furniture, and furniture is not read. */}
         {unsavedLabels.length > 0 ? (
           <p className="setup-note">
-            Unsaved edits on {sentenceList(unsavedLabels)}. Moving between tabs keeps them. A
-            link out of this page asks first; the browser&rsquo;s own Back button does not, and
-            loses them.
+            Unsaved edits on {sentenceList(unsavedLabels)}. Moving between tabs keeps them, and
+            so does the browser&rsquo;s own Back button — it steps back through the tabs you
+            opened. A link out of this page asks first; on the tab you arrived on, where the
+            next press leaves the restaurant, the Back button does not, and loses them.
           </p>
         ) : null}
       </div>
@@ -828,7 +971,8 @@ export function ConsoleTabs({
   );
 }
 
-/** One section's panel. Mounted always, shown when its tab is chosen.
+/** One section's panel. Shown when its tab is chosen, and MOUNTED FOR
+ *  GOOD from the first time it is.
  *
  *  `hidden` is what hides it, and it needs help: `[hidden] { display:
  *  none }` is the user agent's own rule at specificity 0,0,1 and
@@ -848,15 +992,72 @@ export function ConsoleTabs({
  *  role="group" with the tab's own label as its name, not
  *  role="tabpanel": there is no tablist on this page to belong to. It
  *  is the target of the radio's aria-controls and it says which of the
- *  nine the reader has landed in. */
+ *  nine the reader has landed in.
+ *
+ *  ── `defer`, AND THE ONE PROPERTY IT MAY NOT COST ──────────────────
+ *
+ *  WHAT IT IS FOR. Every panel used to be built on every load, so every
+ *  load paid for the largest section on the page whichever tab was open:
+ *  nine panels, ~1213 elements measured on a small restaurant, and the
+ *  Menu panel alone reported at 3627px of layout on one with a real
+ *  menu. The Business panel is worse than it looks -- its timezone
+ *  <select> is one <option> per zone Intl knows, 418 of them on this
+ *  machine -- and none of it can be read, tabbed to, found with Ctrl-F
+ *  or reached by a screen reader until its tab is pressed, because
+ *  display:none has already taken it out of all four.
+ *
+ *  WHAT IT DOES. A deferred panel renders its own <div> -- the tab's
+ *  aria-controls target, the id a hash lands on -- and no children,
+ *  until the first time its tab is chosen. From that moment it renders
+ *  them and NEVER STOPS: `opened` is one-way, and nothing in this file
+ *  or any caller can set it back.
+ *
+ *  THAT ONE-WAY LATCH IS THE LOAD-BEARING PART. It has been lost once
+ *  already and caught in review. The whole reason nothing unmounts is
+ *  that the sections' form state -- useSeeded's fields, WeeklyHours'
+ *  days, every half-typed price in MenuAdmin, the go-live panel's
+ *  fallback field -- lives in useState, and unmounting destroys it
+ *  silently. Deferral does not weaken that by one line, because it only
+ *  ever applies BEFORE the first open: a panel that has never been shown
+ *  has never been typed into, holds no state, and has nothing to lose.
+ *  After the first press it is an ordinary always-mounted panel and
+ *  behaves exactly as every panel did before this prop existed. A
+ *  `defer` that could go back to true, or an `opened` recomputed from
+ *  `active`, would be the unmount this design forbids, wearing a
+ *  different word.
+ *
+ *  WHY THE LATCH IS SET DURING RENDER and not in an effect: an effect
+ *  runs after paint, so the operator would see one frame of empty panel
+ *  on every first press. Setting state during a component's own render
+ *  is React's documented way to derive state from props, and it cannot
+ *  fire on the server or on the hydrating render -- `opened` is seeded
+ *  from the same `on` the condition tests, so the two agree until a
+ *  press moves one of them.
+ *
+ *  WHAT IS NOT SAVED. The RSC payload is unchanged: the children were
+ *  rendered on the server either way, so a deferred panel's contents
+ *  travel with the document and its first open is instant and needs no
+ *  request. What is saved is the HTML, the elements, the hydration and
+ *  the layout of a section nobody asked for. */
 export function ConsolePanel({
   id,
+  defer = false,
   children,
 }: {
   id: ConsoleSectionId;
+  /** Hold this panel's contents back until its tab is first chosen.
+   *  Never for the section the console opens on -- that one is on
+   *  screen -- and never for a panel whose absence would cost
+   *  something; app/admin/[locationId]/page.tsx states which nine are
+   *  which and why. */
+  defer?: boolean;
   children: ReactNode;
 }) {
   const { active } = useContext(ConsoleTabsContext);
+  const on = active === id;
+
+  const [opened, setOpened] = useState(on || !defer);
+  if (on && !opened) setOpened(true);
 
   return (
     <div
@@ -864,9 +1065,9 @@ export function ConsolePanel({
       role="group"
       aria-label={labelOf(id)}
       className="setup-stack"
-      hidden={active !== id}
+      hidden={!on}
     >
-      {children}
+      {opened ? children : null}
     </div>
   );
 }

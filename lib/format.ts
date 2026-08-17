@@ -38,8 +38,18 @@ export const ORDER_TAG: Record<OrderStatus, string> = {
   cancelled: "tag tag-out",
 };
 
-/** Clock time in the location's timezone. Timestamps are stored in UTC;
- *  staff only ever think in restaurant time. */
+/** Clock time in the location's timezone, and NOTHING ELSE.
+ *
+ *  ONLY for a moment whose date the thing around it has already
+ *  established -- the three rows of one call's timeline under a heading
+ *  that carries the date, and nothing wider than that.
+ *
+ *  NOT for a row in a log. "11:09 AM" on its own does not say which
+ *  11:09 AM, and the reader has no way to find out: a call from three
+ *  days ago read exactly like one from this morning, in a console whose
+ *  next panel said "0 answered today". Every log in this product is
+ *  bounded by COUNT ("the last twenty", "the last ten") and not by age,
+ *  so any row in one of them can be arbitrarily old. Use dateTimeIn. */
 export function timeIn(timezone: string, iso: string) {
   return new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
@@ -48,13 +58,32 @@ export function timeIn(timezone: string, iso: string) {
   }).format(new Date(iso));
 }
 
-/** A date and time in the location's timezone. The database stores UTC;
- *  nobody at the restaurant thinks in it. Absolute rather than relative
- *  so a server render and a client render of the same row agree. */
+/** The whole instant, in the location's timezone. The database stores
+ *  UTC; nobody at the restaurant thinks in it.
+ *
+ *  ABSOLUTE AND TOTAL, and both halves of that are load-bearing.
+ *
+ *  Absolute: no reference to "now", so this string is the same on a
+ *  server render, on a client render, on a console tab an operator left
+ *  open overnight, and in a screenshot pasted into a ticket next March.
+ *  A relative form ("11:09 AM today") is only true at the moment it is
+ *  computed. Server components here are per-request, so it would be
+ *  right at first paint -- and then quietly wrong at 00:01, which is
+ *  the original defect back again with a delay on it and no way for the
+ *  reader to notice. The cost is that today's rows repeat today's date;
+ *  that is noise, and noise that cannot go stale is the cheaper of the
+ *  two failures for a log people read to answer "when did this happen".
+ *
+ *  Total: the YEAR is in it. Without it "Aug 14, 11:09 AM" identifies an
+ *  instant only to within a year, and these logs are bounded by count
+ *  rather than by age -- ten orders is months for a quiet restaurant --
+ *  so a row old enough to collide is reachable in the ordinary product.
+ *  Twelve more characters buys a string that can never be misread. */
 export function dateTimeIn(timezone: string, iso: string) {
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
+    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
     timeZone: timezone,

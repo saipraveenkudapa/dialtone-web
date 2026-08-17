@@ -2,6 +2,7 @@ import "server-only";
 
 import crypto from "node:crypto";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { dialableNumber } from "@/lib/phone";
 import { hashAgentSecret } from "@/lib/agent/auth";
 import { buildGreeting, buildSystemPrompt } from "@/lib/agent/prompt";
 import { type HoursRow } from "@/lib/agent/hours";
@@ -56,10 +57,36 @@ export async function provisionAssistantForLocation({
   base: string;
   vapiKey: string;
 }): Promise<{ secret: string; assistantId: string; created: boolean }> {
-  if (!location.fallback_human_number) {
+  /* DIALABLE, NOT MERELY PRESENT.
+   *
+   *  This guard tested the column for truthiness, and the payload two
+   *  statements down is where `fallback_human_number` becomes the
+   *  assistant's NATIVE transfer destination on Vapi -- baked in at
+   *  build time and read by nothing afterwards. So a row holding "12",
+   *  or a legacy "(510) 555-0199" written before setFallbackNumber
+   *  normalized on the way in, walked through here and was pushed to
+   *  Vapi, which either 400s the whole provisioning call ("must be a
+   *  valid phone number in the E.164 format") or accepts a destination
+   *  that fails at the one moment it is used. repairAssistant is the
+   *  road an operator takes when something is already wrong; it must
+   *  not be able to write a new wrong thing on the way past.
+   *
+   *  Refused rather than repaired. Normalizing here would make the
+   *  number Vapi dials and the number the column holds two different
+   *  strings, silently, on the screen whose whole job is to say what a
+   *  restaurant will do -- and app/api/twilio/voice would still dial the
+   *  column verbatim. The go-live checklist already names this exact
+   *  state and the repair is one press by a human. */
+  const fallback = dialableNumber(location.fallback_human_number);
+  if (!fallback) {
     throw new Error(
-      "This location has no fallback number, so its assistant has nowhere to transfer a " +
-        "catering or allergy call. Set one before provisioning.",
+      location.fallback_human_number
+        ? `This location's fallback number, ${location.fallback_human_number}, is not in the ` +
+            "shape Vapi and Twilio dial, so its assistant would be built with a transfer " +
+            "destination that fails at the moment a caller needs it. Save the number again " +
+            "before provisioning."
+        : "This location has no fallback number, so its assistant has nowhere to transfer a " +
+            "catering or allergy call. Set one before provisioning.",
     );
   }
 
@@ -72,7 +99,7 @@ export async function provisionAssistantForLocation({
     config: {
       system_prompt: buildSystemPrompt({ location }),
       greeting: buildGreeting(location),
-      fallback_number: location.fallback_human_number,
+      fallback_number: fallback,
     },
   });
 

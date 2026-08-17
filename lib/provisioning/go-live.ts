@@ -2,7 +2,7 @@ import "server-only";
 
 import { currentPlatformAdmin } from "@/lib/admin/auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { normalizePhoneToE164 } from "@/lib/phone";
+import { dialableNumber, normalizePhoneToE164 } from "@/lib/phone";
 import {
   AssistantSecretWriteError,
   provisionAssistantForLocation,
@@ -398,23 +398,69 @@ function numberCheck(facts: GoLiveFacts): GoLiveCheck {
   return { ...base, status: "ok", note: `${number} rings this restaurant's assistant.` };
 }
 
+/** Whether there is a fallback number, AND whether it is one that can
+ *  actually be dialled.
+ *
+ *  "Not null" used to be the whole test, and it is not the same
+ *  question. Nothing downstream re-formats this column: app/api/agent/
+ *  transfer hands it to Vapi verbatim, lib/vapi/provision.ts bakes it
+ *  into the assistant's native transfer destination, and lib/phone.ts
+ *  records what that costs -- a bare "(510) 555-0199" 400s with "must be
+ *  a valid phone number in the E.164 format", caught live. So a row
+ *  holding "12", or a legacy local-format number written before
+ *  setFallbackNumber normalized on the way in, clears a null check and
+ *  then drops the one caller nobody can afford to drop: the one asking
+ *  about an allergy.
+ *
+ *  normalizePhoneToE164 is the arbiter rather than a second rule of this
+ *  module's own -- it is the exact function setFallbackNumber writes
+ *  through, so what this demands and what a save produces cannot drift.
+ *  Equality, not truthiness: a value that normalizes to something OTHER
+ *  than itself is not merely untidy, it is a different string from the
+ *  one that will be dialled. */
 function fallbackCheck(facts: GoLiveFacts): GoLiveCheck {
   const number = facts.location.fallback_human_number;
   const base = { key: "fallback" as const, blocking: true, title: "Fallback number" };
 
-  return number
-    ? {
-        ...base,
-        status: "ok",
-        note: `Transfers, allergy hand-offs and the kill switch all dial ${number}.`,
-      }
-    : {
-        ...base,
-        status: "blocked",
-        note:
-          "No fallback number. Transfers, allergy hand-offs and the kill switch would all have " +
-          "nowhere to go, so a caller asking something the agent cannot answer would hit dead air.",
-      };
+  if (!number) {
+    return {
+      ...base,
+      status: "blocked",
+      note:
+        "No fallback number. Transfers, allergy hand-offs and the kill switch would all have " +
+        "nowhere to go, so a caller asking something the agent cannot answer would hit dead air.",
+    };
+  }
+
+  const dialable = normalizePhoneToE164(number);
+
+  if (!dialable) {
+    return {
+      ...base,
+      status: "blocked",
+      note:
+        `${number} is on file as the fallback number, but it is not a number anything here can ` +
+        "dial, so transfers, allergy hand-offs and the kill switch would all fail at the moment " +
+        "they were needed. Type it in full below and save it, e.g. (510) 555-0100.",
+    };
+  }
+
+  if (dialable !== number) {
+    return {
+      ...base,
+      status: "blocked",
+      note:
+        `${number} is on file, and it is dialled exactly as it is stored — which Vapi and Twilio ` +
+        `both refuse, because it is not E.164. Save it again below and it is stored as ` +
+        `${dialable}, which is the same number in the shape they accept.`,
+    };
+  }
+
+  return {
+    ...base,
+    status: "ok",
+    note: `Transfers, allergy hand-offs and the kill switch all dial ${number}.`,
+  };
 }
 
 function menuCheck(facts: GoLiveFacts): GoLiveCheck {
@@ -1089,12 +1135,53 @@ export async function setKillSwitch({
 
   if (!location) return result;
 
+  /* THREE WAYS, NOT TWO, AND THE THIRD IS THE ONE THIS CONTROL EXISTS
+     FOR.
+
+     This sentence tested the column for TRUTHINESS while meaning
+     "dialable", which is the distinction fallbackCheck and
+     runMakeItLive were taught and this decoration was not. The
+     population it gets wrong is exactly the one an emergency switch is
+     reached for: a restaurant that went live before that check existed
+     and carries a legacy "(510) 555-0199", or a "12" typed into a field
+     that gave no inline feedback. For that row the switch reported
+     success AND NAMED THE NUMBER, while app/api/twilio/voice dials that
+     literal string in TwiML (`dial({ to: fallback })`) and the call
+     fails. A false all-clear is worse than a refusal: the operator
+     reads a number back to a restaurant owner mid-incident and stops
+     looking, and the caller it drops is the one asking about an
+     allergy.
+
+     Still no gate. The write above already happened and must keep
+     happening -- silence is the safe state and this is the switch
+     somebody throws while a caller is being handled badly. Only the
+     decoration is corrected, which is all that was ever wrong. */
+  const onFile = location.fallback_human_number;
+  const dialable = dialableNumber(onFile);
+
+  if (dialable) {
+    return { ok: true, message: `Kill switch on. Every call now goes straight to ${dialable}.` };
+  }
+
+  /* There IS a number, and naming it is the point: the operator is
+     looking at it. No "below" in this sentence -- the same switch is in
+     the sidebar of every console page, where there is no field below
+     anything. */
+  if (onFile) {
+    return {
+      ok: true,
+      message:
+        `Kill switch on — but ${onFile} is the fallback number on file, and it is not in the ` +
+        "shape Twilio dials, so callers will reach nobody. Save it again as a full number, " +
+        "e.g. (510) 555-0100, or take the restaurant offline instead.",
+    };
+  }
+
   return {
     ok: true,
-    message: location.fallback_human_number
-      ? `Kill switch on. Every call now goes straight to ${location.fallback_human_number}.`
-      : "Kill switch on. There is no fallback number, so callers will not reach anybody — set " +
-        "one, or take the restaurant offline instead.",
+    message:
+      "Kill switch on. There is no fallback number, so callers will not reach anybody — set " +
+      "one, or take the restaurant offline instead.",
   };
 }
 
@@ -2174,6 +2261,17 @@ const FALLBACK_REFUSAL =
   "out for you. Transfers, allergy hand-offs and the kill switch all dial it. Type the number a " +
   "caller should reach when the agent cannot help, save it, and press this again.";
 
+/* The same halt, for a restaurant that HAS a fallback number that
+   cannot be dialled. Its own sentence rather than the one above,
+   because "there is no fallback number" is not true of it and an
+   operator looking at a number on the screen would read that as the
+   panel being broken. What is wrong with it is in the check's own note,
+   which travels with this refusal as the fallback step's note. */
+const FALLBACK_UNDIALABLE =
+  "Not turned on: the fallback number on file is not one that can be dialled, and that is the " +
+  "one thing here nobody can work out for you. Transfers, allergy hand-offs and the kill switch " +
+  "all dial it. Fix it in the field below, save it, and press this again.";
+
 /* WHAT THE ONE-CLICK DOES ABOUT THE AREA CODE, AND WHY.
  *
  * It never picks one. It mints only in a code a person handed it, and
@@ -2401,8 +2499,15 @@ async function runMakeItLive(
   // S3. Verify only. No write, no Vapi mutation, nothing spent -- this
   // is the blocker no button can clear, and the run was always going to
   // stop here.
-  const fallbackNote = checkOf(state, "fallback")?.note ?? "";
-  if (!state.location.fallback_human_number) {
+  //
+  // Asked of the checklist rather than of the column: "set" and "can be
+  // dialled" are not the same question, and this step must refuse
+  // everything the checklist refuses or the run walks past a blocker
+  // the panel is showing and mints a number for a restaurant that
+  // cannot finish. See fallbackCheck.
+  const fallbackRow = checkOf(state, "fallback");
+  const fallbackNote = fallbackRow?.note ?? "";
+  if (fallbackRow?.status !== "ok") {
     steps.fallback = { key: "fallback", outcome: "refused", note: fallbackNote };
     steps.assistant = {
       key: "assistant",
@@ -2417,7 +2522,10 @@ async function runMakeItLive(
       action: null,
       number: null,
     };
-    return stopped(FALLBACK_REFUSAL, {
+    const refusal = state.location.fallback_human_number
+      ? FALLBACK_UNDIALABLE
+      : FALLBACK_REFUSAL;
+    return stopped(refusal, {
       halt: "fallback",
       focus: "fallback",
       blockedBy: ["fallback"],

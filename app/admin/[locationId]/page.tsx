@@ -302,7 +302,35 @@ export default async function AdminLocationPage({
 
   return (
     <>
-      <div className="page-head">
+      {/* .console-head is the page head OBEYING THE COLUMN THE PAGE IS.
+          Measured at 1280px: .page-head came out 1224px -- the whole
+          content box of .page -- while .console-tabs, .console-tabs-head
+          and every panel came out 760px. A 464px overhang, so the
+          restaurant's name and the way out sat on a rule of their own,
+          wider than the strip that names the sections and wider than any
+          section, with the right of the screen empty under them.
+
+          760 IS THE ONE THAT IS RIGHT, and the head is the outlier. 760
+          is a reading measure: it is what .setup-stack has always been,
+          what .console-tabs was deliberately capped to so the strip and
+          the panels it names cannot disagree, and what the eight field
+          panels are laid out inside (.setup-card > .card-body caps prose
+          at 70ch under it, .menu-grid resolves to two ~370px columns in
+          it). Widening the console to fill 1280 would widen all of that
+          and would put ~466px of empty box inside .seg, whose nine
+          labels measure ~654px and whose options do not grow -- trading
+          a head that is too wide for a strip that is too wide.
+
+          The one thing that could argue for a wider column is the call
+          log, and it does not: inside a 760px .setup-card the table gets
+          719.2px, and its six columns -- time, caller, outcome, length,
+          cost, Open -- need roughly 510px, or about 600px once the date
+          is on the timestamp. It fits, with room. .table-scroll is still
+          there and is doing its job on a phone, which is the width it
+          was written for. See the report; if a column is ever added that
+          does not fit, the honest fix is to let THAT CARD out of the
+          measure, not to widen every form on the page to suit it. */}
+      <div className="page-head console-head">
         <div>
           {/* The same .row-link every other detail page in this product
               puts above its h1 (/admin/new, /dashboard/calls/<id>). */}
@@ -320,10 +348,49 @@ export default async function AdminLocationPage({
 
       {/* One section on screen, nothing below it.
 
-          Every panel below is rendered on every render and the inactive
-          ones are display:none, so a half-typed price in Menu survives a
-          trip to Hours and back -- and so a hidden panel is out of the
-          focus order, out of the a11y tree and out of find-in-page. */}
+          ONCE A PANEL IS OPEN IT STAYS MOUNTED, and that is the contract
+          this whole design rests on: a half-typed price in Menu survives
+          a trip to Hours and back, because the inactive panels are
+          display:none rather than unmounted -- which also takes them out
+          of the focus order, out of the a11y tree and out of
+          find-in-page.
+
+          WHAT CHANGED, AND WHAT DID NOT. Eight of the nine were also
+          BUILT on every load, whether or not anybody opened them: ~1213
+          elements on a small restaurant, the Menu panel reported at
+          3627px of layout on one with a real menu, and 418 <option>s in
+          the Business panel's timezone select on every single page view.
+          Every load paid for the largest section on the page regardless
+          of which tab was open. So the eight below are `defer`: their
+          contents are held back until the first time their tab is
+          chosen, and from that moment they are mounted for good, exactly
+          like every panel was before. The one-way latch is in
+          <ConsolePanel>; its header says why it may never be reversed.
+
+          WHAT A USER LOSES BY NEVER OPENING ONE: nothing. A panel that
+          has never been shown has never been typed into, so there is no
+          state to keep, no "Unsaved" chip it could have raised and no
+          beforeunload it needed to register; and display:none had
+          already taken its markup out of Tab order, out of the
+          accessibility tree, out of Ctrl-F and out of print. All nine
+          are still RENDERED here on the server and all nine still travel
+          in the payload, so a first press paints immediately and asks
+          the network for nothing; what a deferred panel costs nobody is
+          the HTML, the elements, the hydration and the layout of a
+          section that was never asked for. The page's OWN state -- which
+          tabs are behind on the phone, which are unsaved -- is computed
+          here and in the strip, not in the panels, so every chip is on
+          screen from the first paint whether its panel has been opened
+          or not.
+
+          LINE IS THE EXCEPTION AND IT IS DELIBERATE. It is what the
+          console opens on, so it is built anyway -- but it is left
+          eager so that it is still built when it ISN'T: an operator who
+          arrives on ?section=menu from a ticket has the go-live panel,
+          Take offline and the kill switch already in the document. That
+          control is the one this file goes out of its way elsewhere to
+          keep answering (see readRecord above), and a tab press is a
+          poor time to find out it has to be built first. */}
       <ConsoleTabs initial={initial} behind={behind}>
         <ConsolePanel id="line">
           {/* The one question this page exists to answer, and the one
@@ -338,7 +405,7 @@ export default async function AdminLocationPage({
             read failed -- the tab strip stays whole, the Line tab above
             stays live, and one refused read of menu_items no longer
             costs an operator the kill switch. */}
-        <ConsolePanel id="calls">
+        <ConsolePanel id="calls" defer>
           {record ? (
             <CallsTab
               locationId={record.location.id}
@@ -354,10 +421,11 @@ export default async function AdminLocationPage({
           )}
         </ConsolePanel>
 
-        <ConsolePanel id="orders">
+        <ConsolePanel id="orders" defer>
           {record ? (
             <OrdersTab
               locationId={record.location.id}
+              timezone={tz}
               orders={orders}
               orderDelivery={record.location.order_delivery}
               orderSmsTo={record.location.order_sms_to}
@@ -371,7 +439,7 @@ export default async function AdminLocationPage({
           )}
         </ConsolePanel>
 
-        <ConsolePanel id="menu">
+        <ConsolePanel id="menu" defer>
           {/* #menu and #sold-out. The overview used to print the
               sold-out list a second time beside the call log; this panel
               already holds it AND the toggles that write it, so what
@@ -394,7 +462,7 @@ export default async function AdminLocationPage({
           )}
         </ConsolePanel>
 
-        <ConsolePanel id="hours">
+        <ConsolePanel id="hours" defer>
           {/* #hours and #holidays. Both stay in one panel: a holiday
               is an override of a weekly row, and "we close at 3 on
               Christmas Eve" is unjudgeable without Tuesday's normal
@@ -417,7 +485,7 @@ export default async function AdminLocationPage({
           )}
         </ConsolePanel>
 
-        <ConsolePanel id="answering">
+        <ConsolePanel id="answering" defer>
           {record ? (
             <AnsweringSection
               locationId={record.location.id}
@@ -432,7 +500,7 @@ export default async function AdminLocationPage({
           )}
         </ConsolePanel>
 
-        <ConsolePanel id="service">
+        <ConsolePanel id="service" defer>
           {record ? (
             <ServiceSection
               locationId={record.location.id}
@@ -452,7 +520,7 @@ export default async function AdminLocationPage({
           )}
         </ConsolePanel>
 
-        <ConsolePanel id="business">
+        <ConsolePanel id="business" defer>
           {record ? (
             <BusinessSection
               locationId={record.location.id}
@@ -473,7 +541,7 @@ export default async function AdminLocationPage({
           )}
         </ConsolePanel>
 
-        <ConsolePanel id="managed">
+        <ConsolePanel id="managed" defer>
           {record ? (
             <SystemTab location={record.location} org={record.org} timezone={tz} />
           ) : (

@@ -161,6 +161,50 @@ describe("the go-live checklist", () => {
     expect(blockersOf(checks)).toContain("fallback");
   });
 
+  /* AND ON EVERY OTHER SHAPE THAT COLUMN ARRIVES IN.
+   *
+   *  Nothing between this row and the phone re-formats it:
+   *  app/api/agent/transfer returns the column itself, and
+   *  lib/vapi/provision.ts bakes it into the assistant's transfer
+   *  destination. So "there is a string in it" was never the question,
+   *  and each case below is a real state of the database rather than a
+   *  hypothetical -- a value typed into an older screen, and a value
+   *  written before setFallbackNumber normalized on the way in. */
+
+  it("treats an empty fallback number as no fallback number at all", () => {
+    const checks = buildChecks(facts({ location: { fallback_human_number: "" } }));
+    expect(status(checks, "fallback")).toBe("blocked");
+    expect(checks.find((c) => c.key === "fallback")?.note).toMatch(/No fallback number/);
+  });
+
+  it("blocks on \"12\", which is a string in the column and not a number anybody can dial", () => {
+    const checks = buildChecks(facts({ location: { fallback_human_number: "12" } }));
+    expect(status(checks, "fallback")).toBe("blocked");
+    expect(blockersOf(checks)).toContain("fallback");
+    expect(checks.find((c) => c.key === "fallback")?.note).toMatch(
+      /not a number anything here can dial/,
+    );
+  });
+
+  it("blocks a legacy number stored in local format, and names what saving it would store", () => {
+    // The RIGHT number in the WRONG shape, which is the one a null
+    // check waves through and the phone then refuses: Vapi's transfer
+    // destination 400s on a bare "(510) 555-0199", which is why
+    // lib/phone.ts exists at all. A checklist that called this ok would
+    // be promising a transfer that fails on the one call it is for.
+    const checks = buildChecks(facts({ location: { fallback_human_number: "(510) 555-0100" } }));
+    expect(status(checks, "fallback")).toBe("blocked");
+    expect(checks.find((c) => c.key === "fallback")?.note).toContain("+15105550100");
+  });
+
+  it("passes a number that is already E.164, wherever in the world it is", () => {
+    for (const number of ["+15105550100", "+442071838750"]) {
+      const checks = buildChecks(facts({ location: { fallback_human_number: number } }));
+      expect(status(checks, "fallback")).toBe("ok");
+      expect(blockersOf(checks)).toEqual([]);
+    }
+  });
+
   it("blocks when the record has lost its assistant, even though Vapi still has one", () => {
     // The drift this feature exists to repair: an assistant answering
     // calls and a column that forgot its id.
@@ -704,6 +748,45 @@ describe("changing the state of the line", () => {
     expect(marty().is_live).toBe(true);
   });
 
+  it("refuses to go live on a fallback number the phone could not dial", async () => {
+    // Everything else about this restaurant is right. The only thing
+    // wrong with it is a column a null check would have waved through,
+    // and the cost of waving it through is one caller with an allergy
+    // question hearing dead air.
+    store.locations[0].twilio_number = "+15105550000";
+    store.locations[0].fallback_human_number = "(510) 555-0100";
+    listPhoneNumbers.mockResolvedValue([
+      { id: "n1", number: "+15105550000", name: "Marty's", provider: "vapi", assistantId: ASSISTANT, status: "active" },
+    ]);
+
+    const result = await setLocationLive({ locationId: MARTY, live: true });
+    expect(result).toMatchObject({ ok: false, blockedBy: ["fallback"] });
+    expect(marty().is_live).toBe(false);
+    expect(store.writes).toEqual([]);
+  });
+
+  it("clears that blocker when the same number is saved again", async () => {
+    // The round trip an operator actually makes, and the reason the
+    // check names the E.164 form in its note: the field is directly
+    // under the checklist, and saving through it is the one thing that
+    // puts the column in the shape the phone needs.
+    store.locations[0].twilio_number = "+15105550000";
+    store.locations[0].fallback_human_number = "(510) 555-0100";
+    listPhoneNumbers.mockResolvedValue([
+      { id: "n1", number: "+15105550000", name: "Marty's", provider: "vapi", assistantId: ASSISTANT, status: "active" },
+    ]);
+
+    await expect(
+      setFallbackNumber({ locationId: MARTY, number: "(510) 555-0100" }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(marty().fallback_human_number).toBe("+15105550100");
+
+    await expect(setLocationLive({ locationId: MARTY, live: true })).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(marty().is_live).toBe(true);
+  });
+
   it("will not attach a number another restaurant claims", async () => {
     // Posting Nonna Rosa's number id from Marty's page. The panel would
     // never draw this; the endpoint has to refuse it anyway.
@@ -1124,6 +1207,72 @@ describe("changing the state of the line", () => {
     expect(result).toMatchObject({ ok: true });
     expect(marty().kill_switch_on).toBe(true);
     expect(JSON.stringify(result)).not.toMatch(/Not found/);
+  });
+
+  /* ── what the kill switch tells the operator afterwards ─────────
+     The write is not in question here -- it has already happened and is
+     covered above. What is in question is the sentence, which used to
+     test the fallback column for TRUTHINESS while meaning "dialable".
+     For a restaurant that went live before that distinction existed,
+     the emergency control reported success and NAMED a number Twilio
+     cannot dial. A false all-clear on the one press somebody makes
+     while a caller is being handled badly. */
+
+  it("names the fallback number when it is one that can actually be dialled", async () => {
+    const result = await setKillSwitch({ locationId: MARTY, on: true });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(marty().kill_switch_on).toBe(true);
+    expect(result.ok && result.message).toContain("+18787787878");
+    expect(result.ok && result.message).toMatch(/goes straight to/);
+  });
+
+  it("still throws the switch when there is no fallback number, and says nobody is reached", async () => {
+    marty().fallback_human_number = null;
+
+    const result = await setKillSwitch({ locationId: MARTY, on: true });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(marty().kill_switch_on).toBe(true);
+    expect(result.ok && result.message).toMatch(/no fallback number/);
+    expect(result.ok && result.message).toMatch(/not reach anybody/);
+  });
+
+  it("throws the switch on an undialable fallback number, and refuses to pretend calls are landing", async () => {
+    // The legacy row: not empty, so the old truthiness test walked
+    // straight past it and printed "Every call now goes straight to
+    // 12." app/api/twilio/voice dials that literal string in TwiML.
+    marty().fallback_human_number = "12";
+
+    const result = await setKillSwitch({ locationId: MARTY, on: true });
+
+    // Still thrown. Silence is the safe state and this control is never
+    // gated on a read.
+    expect(result).toMatchObject({ ok: true });
+    expect(marty().kill_switch_on).toBe(true);
+
+    // And the sentence is the truth: the number is named, because the
+    // operator is looking at it, but nothing claims calls are arriving.
+    expect(result.ok && result.message).toContain("12");
+    expect(result.ok && result.message).toMatch(/reach nobody/);
+    expect(result.ok && result.message).not.toMatch(/goes straight to/);
+  });
+
+  it("treats a real number stored in the wrong shape exactly like an undialable one", async () => {
+    // "(510) 555-0199" is a fine number and a useless value: it is
+    // dialled exactly as stored, and Vapi and Twilio both refuse it.
+    marty().fallback_human_number = "(510) 555-0199";
+
+    const result = await setKillSwitch({ locationId: MARTY, on: true });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(marty().kill_switch_on).toBe(true);
+    expect(result.ok && result.message).toContain("(510) 555-0199");
+    expect(result.ok && result.message).toMatch(/reach nobody/);
+    // Not silently repaired on the way past: the column still holds
+    // what the operator put in it, and the sentence asks them to fix it.
+    expect(marty().fallback_human_number).toBe("(510) 555-0199");
+    expect(result.ok && result.message).not.toContain("+15105550199");
   });
 
   it("tells a failed read apart from a missing restaurant instead of 404-ing the operator", async () => {
@@ -1723,6 +1872,41 @@ describe("turning a restaurant on with one button", () => {
     expect(marty().is_live).toBe(false);
 
     expect(step(result, "fallback").outcome).toBe("refused");
+    expect(step(result, "assistant").outcome).toBe("not-reached");
+    expect(step(result, "number").outcome).toBe("not-reached");
+    expect(step(result, "live").outcome).toBe("not-reached");
+  });
+
+  it("stops on a fallback number that cannot be dialled, before it reads, writes or spends", async () => {
+    // The same halt as a missing one, from the state that used to walk
+    // straight past it. The column is not empty, so the old
+    // `!fallback_human_number` gate said nothing -- and the step
+    // immediately after this one is the one that mints a number nobody
+    // can give back.
+    marty().fallback_human_number = "12";
+    marty().vapi_assistant_id = null;
+    findAssistantForLocation.mockResolvedValue(null);
+    getAssistant.mockResolvedValue(null);
+
+    const result = await makeItLive({ locationId: MARTY, base: BASE });
+
+    expect(result).toMatchObject({
+      ok: false,
+      halt: "fallback",
+      focus: "fallback",
+      blockedBy: ["fallback"],
+    });
+    // Not "there is no fallback number": there is one, on the screen,
+    // in front of the operator reading this sentence.
+    expect(result.ok === false && result.error).toMatch(/not one that can be dialled/);
+    expect(step(result, "fallback").outcome).toBe("refused");
+    expect(step(result, "fallback").note).toMatch(/not a number anything here can dial/);
+
+    expect(store.writes).toEqual([]);
+    expect(provisionAssistantForLocation).not.toHaveBeenCalled();
+    expect(createPhoneNumber).not.toHaveBeenCalled();
+    expect(bindPhoneNumber).not.toHaveBeenCalled();
+    expect(marty().is_live).toBe(false);
     expect(step(result, "assistant").outcome).toBe("not-reached");
     expect(step(result, "number").outcome).toBe("not-reached");
     expect(step(result, "live").outcome).toBe("not-reached");

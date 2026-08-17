@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { agentSecretFromRequest, locationForSecret } from "@/lib/agent/auth";
+import { dialableNumber } from "@/lib/phone";
 import { agentFail, agentOk, agentUnauthorised } from "@/lib/agent/respond";
 import { parseToolCall } from "@/lib/agent/vapi";
 import { logTransferOutcome } from "@/lib/agent/transfer";
@@ -40,9 +41,25 @@ export async function POST(request: Request) {
   // level of the body -- see lib/agent/vapi.ts.
   const args = call.args as { reason?: string };
 
-  const number = location.fallback_human_number;
+  /* DIALABLE, NOT MERELY PRESENT. This number is handed to Vapi and
+     dialled verbatim -- nothing between here and the PSTN re-formats
+     it -- so a row holding "12" or a legacy "(510) 555-0199" used to
+     pass this gate and then fail inside the transfer, which the caller
+     experiences as dead air part-way through being helped. The same
+     refusal for both states, because they are the same state to the
+     person on the phone: there is nowhere to send them. Saying so
+     returns a sentence the agent can speak instead of a silence.
+
+     The number is never logged, only the location id -- the house rule
+     about what goes in a log does not bend for a diagnostic. */
+  const number = dialableNumber(location.fallback_human_number);
   if (!number) {
-    console.error("[agent] no fallback number for location", location.id);
+    console.error(
+      location.fallback_human_number
+        ? "[agent] fallback number for location cannot be dialled"
+        : "[agent] no fallback number for location",
+      location.id,
+    );
     return agentFail("No transfer number is set up.", call.toolCallId);
   }
 

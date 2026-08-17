@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useState, useTransition, type FormEvent } from "react";
 import Link from "next/link";
 import { Corners } from "@/components/Corners";
 import { MenuUpload } from "@/components/MenuUpload";
@@ -123,7 +123,19 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
     );
   }
 
-  function handleStart() {
+  /* Start, and Enter in any of the thirty-seven fields above it.
+   *
+   *  It stays an imperative call inside startTransition rather than
+   *  becoming <form action={createRestaurantAction}>, and that is the
+   *  deliberate half of what used to be a type="button": this action
+   *  returns a password that is rendered once, in this tab, from this
+   *  component's own state, and an action form would re-render the form
+   *  underneath the panel showing it. What was NOT deliberate is that
+   *  there was no <form> at all -- so Enter did nothing, and thirty-seven
+   *  fields went to the server without the browser ever being asked
+   *  whether the required ones were filled in. */
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setError(null);
     const menu: DraftMenuCategory[] = categories.map((c) => ({
       name: c.name,
@@ -182,7 +194,12 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
   const itemCount = categories.reduce((sum, c) => sum + c.items.length, 0);
 
   return (
-    <>
+    /* .setup-stack a second time, on purpose: app/admin/new/page.tsx
+       renders this into one, and without it here the six sections
+       become children of the form and lose the column and the gap the
+       page was laying them out with. No new CSS, and no display:
+       contents, which drops the form's own role in several browsers. */
+    <form className="setup-stack" onSubmit={handleSubmit}>
       <section className="card blueprint setup-card">
         <Corners />
         <h2>The business</h2>
@@ -198,6 +215,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
               id="nr-name"
               className="input"
               type="text"
+              required
               maxLength={120}
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -214,18 +232,31 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
               id="nr-address"
               className="input"
               type="text"
+              required
               placeholder="1412 Telegraph Ave, Oakland, CA"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
             />
           </div>
 
-          <div className="setup-row">
+          {/* A GRID, NOT .setup-row. .setup-row is "a field and the
+              buttons that act on it, bottom-aligned" -- align-items:
+              flex-end is the whole point of it and is right for that
+              job. Two FIELDS in it are only aligned while they are the
+              same height, and these two are not: the note under the
+              timezone select is 37px of text plus its 4px step, so at
+              1280px the display-phone input sat 41px below the select
+              beside it (measured). .money-grid is the two-column field
+              pair this same form already uses further down -- equal
+              columns, tops aligned, and it collapses to one column at
+              the same 700px .setup-row does. */}
+          <div className="money-grid">
             <div className="field">
               <label htmlFor="nr-timezone">Timezone</label>
               <select
                 id="nr-timezone"
                 className="input"
+                required
                 value={timezone}
                 onChange={(e) => setTimezone(e.target.value)}
               >
@@ -259,6 +290,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
               id="nr-fallback"
               className="input"
               type="tel"
+              required
               placeholder="(510) 555-0100"
               value={fallbackNumber}
               onChange={(e) => setFallbackNumber(e.target.value)}
@@ -275,6 +307,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
               id="nr-owner-email"
               className="input"
               type="email"
+              required
               placeholder="owner@therestaurant.com"
               value={ownerEmail}
               onChange={(e) => setOwnerEmail(e.target.value)}
@@ -299,6 +332,9 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
             <div key={label} className="hours-row">
               <span className="hours-day">{label}</span>
               <div className="hours-times">
+                {/* And none here either: required on a checkbox means
+                    "must be ticked", and this one means the opposite of
+                    what it would then be demanding. */}
                 <label className="hours-closed">
                   <input
                     type="checkbox"
@@ -310,6 +346,11 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                 <input
                   className="input"
                   type="time"
+                  /* Required while the day is open, and silent while it
+                     is closed -- a disabled control is excluded from
+                     constraint validation, which is verbatim what
+                     validateRestaurantDraft does with a closed day. */
+                  required
                   aria-label={`${label} opens`}
                   value={hours[day].open}
                   disabled={hours[day].closed}
@@ -319,6 +360,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                 <input
                   className="input"
                   type="time"
+                  required
                   aria-label={`${label} closes`}
                   value={hours[day].close}
                   disabled={hours[day].closed}
@@ -345,6 +387,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
               id="nr-tax"
               className="input"
               type="text"
+              required
               inputMode="decimal"
               placeholder="8.75"
               value={taxPercent}
@@ -357,6 +400,13 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
             </p>
           </div>
 
+          {/* NO required ON THESE, deliberately. The validator does
+              demand one of the three -- but one is always checked, a
+              radio cannot be un-checked, and .seg-opt inputs are
+              position: absolute with zero size. A required radio group
+              that is somehow empty and not focusable makes the browser
+              refuse to submit while reporting nothing anybody can see,
+              which is a worse failure than the one it guards against. */}
           <div className="field">
             <span className="field-label">Order types</span>
             <div className="seg">
@@ -382,6 +432,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                 id="nr-pickup"
                 className="input"
                 type="number"
+                required
                 min={5}
                 max={180}
                 value={pickupPromiseMinutes}
@@ -394,6 +445,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                 id="nr-delivery"
                 className="input"
                 type="number"
+                required
                 min={5}
                 max={180}
                 value={deliveryPromiseMinutes}
@@ -406,6 +458,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                 id="nr-seats"
                 className="input"
                 type="number"
+                required
                 min={1}
                 value={seats}
                 onChange={(e) => setSeats(e.target.value)}
@@ -417,6 +470,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                 id="nr-party"
                 className="input"
                 type="number"
+                required
                 min={1}
                 max={40}
                 value={maxPartySize}
@@ -429,6 +483,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                 id="nr-slot"
                 className="input"
                 type="number"
+                required
                 min={30}
                 max={240}
                 step={15}
@@ -465,6 +520,11 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                     id={`nr-cat-${category.key}`}
                     className="input"
                     type="text"
+                    /* The menu as a whole is optional -- a restaurant
+                       can be created with none of it. A category that
+                       has been ADDED is not: "Every menu category needs
+                       a name," says the validator, and so does this. */
+                    required
                     placeholder="Pasta"
                     maxLength={80}
                     value={category.name}
@@ -490,6 +550,7 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                         id={`nr-item-${item.key}`}
                         className="input"
                         type="text"
+                        required
                         placeholder="Cacio e Pepe"
                         maxLength={120}
                         value={item.name}
@@ -514,6 +575,12 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
                         id={`nr-price-${item.key}`}
                         className="input"
                         type="text"
+                        /* An item with no price is refused by the
+                           validator, and a price is the one thing on
+                           this form the assistant reads out loud. The
+                           description beside it is optional in both
+                           places, so it carries nothing. */
+                        required
                         inputMode="decimal"
                         placeholder="22.00"
                         value={item.priceDollars}
@@ -590,12 +657,15 @@ export function NewRestaurantForm({ timezones }: { timezones: string[] }) {
           <Link href="/admin" className="btn btn-ghost">
             Cancel
           </Link>
-          <button type="button" className="btn btn-primary" onClick={handleStart} disabled={pending}>
+          {/* A real submit button, so Enter anywhere in the form does
+              what pressing this does -- and so the browser runs its own
+              constraint check over the required fields first. */}
+          <button type="submit" className="btn btn-primary" disabled={pending}>
             {pending ? "Creating…" : "Start"}
           </button>
         </div>
       </section>
-    </>
+    </form>
   );
 }
 

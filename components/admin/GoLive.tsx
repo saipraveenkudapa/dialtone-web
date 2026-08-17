@@ -10,6 +10,7 @@ import {
   type ConsoleSectionId,
 } from "@/components/admin/ConsoleTabs";
 import { relative } from "@/lib/format";
+import { normalizePhoneToE164 } from "@/lib/phone";
 import {
   attachNumberAction,
   clearForwardingVerifiedAction,
@@ -354,6 +355,16 @@ export function GoLive({ state }: { state: GoLiveState }) {
 
   const [fallback, setFallback] = useState(location.fallback_human_number ?? "");
 
+  /* WHETHER THE FIELD HAS BEEN LEFT, which is the only moment it is
+     fair to tell somebody what they typed is wrong.
+
+     On blur rather than on keystroke: "5" is not a phone number and
+     neither is "51", and a field that says so while a number is being
+     typed is a field that is wrong more often than it is right. Cleared
+     on every change so a correction is never argued with mid-word, and
+     re-earned the next time focus leaves. */
+  const [fallbackTouched, setFallbackTouched] = useState(false);
+
   /** The area code the new number will be issued in. Pre-filled from the
    *  restaurant's own numbers by the server and re-seeded every time the
    *  confirm opens, so a code typed and then cancelled never rides along
@@ -392,6 +403,9 @@ export function GoLive({ state }: { state: GoLiveState }) {
     );
     setSeenFallback(location.fallback_human_number);
     setFallback(location.fallback_human_number ?? "");
+    // What arrived is the database's, not this operator's typing, so
+    // the field owes them no verdict on it.
+    setFallbackTouched(false);
   }
 
   // The standalone "Get a new number…" road ends at the same handover
@@ -617,6 +631,26 @@ export function GoLive({ state }: { state: GoLiveState }) {
   const fallbackDirty =
     fallback.trim() !== "" && fallback !== (location.fallback_human_number ?? "");
   useSectionDirty("line", fallbackDirty);
+
+  /* WHAT SAVE WOULD DO WITH IT, SAID BEFORE SAVE IS PRESSED.
+   *
+   *  setFallbackNumber normalizes to E.164 and refuses what will not
+   *  normalize, and that refusal is the truth -- it is what actually
+   *  guards the column. This does not re-decide it: it calls the same
+   *  lib/phone.ts function that action calls, so the field cannot come
+   *  to a different conclusion than the server it is predicting. The
+   *  round trip is still allowed to happen and its sentence still lands
+   *  in `message` above; all this buys is that the operator is not made
+   *  to press a button to find out.
+   *
+   *  Deliberately NOT the go-live check's rule. That one also refuses a
+   *  number stored in local format, because the column is dialled
+   *  exactly as stored -- but this field is about to be SAVED, and the
+   *  save turns "(510) 555-0100" into "+15105550100" on the way in. A
+   *  field that refused what the button beside it is going to fix would
+   *  be lying. */
+  const fallbackUnusable =
+    fallbackTouched && fallback.trim() !== "" && normalizePhoneToE164(fallback) === null;
 
   /* The account of a loss stands until there is something new to lose.
      Adjusted during render, the same way the re-seed above is and for
@@ -1046,7 +1080,13 @@ export function GoLive({ state }: { state: GoLiveState }) {
             placeholder="(510) 555-0100"
             value={fallback}
             disabled={busy}
-            onChange={(event) => setFallback(event.target.value)}
+            aria-invalid={fallbackUnusable || undefined}
+            aria-describedby={fallbackUnusable ? "golive-fallback-error" : undefined}
+            onChange={(event) => {
+              setFallback(event.target.value);
+              setFallbackTouched(false);
+            }}
+            onBlur={() => setFallbackTouched(true)}
           />
         </div>
         <button
@@ -1123,6 +1163,20 @@ export function GoLive({ state }: { state: GoLiveState }) {
           </>
         ) : null}
       </div>
+
+      {/* WHY THE FIELD ABOVE WILL NOT SAVE, under the row rather than
+          inside it: the row is bottom-aligned (it is a field and the
+          buttons that act on it), so a paragraph grown inside the
+          .field would push Save and Attach down away from the input
+          they belong to every time somebody mistyped. Same shape as
+          <Refusal /> on the editor's cards -- an error paragraph the
+          field points at with aria-describedby. */}
+      {fallbackUnusable ? (
+        <p className="setup-error" id="golive-fallback-error">
+          That is not a number this can dial, so saving it would be refused. Type it in full —
+          (510) 555-0100, or +442071838750 for a number outside the US.
+        </p>
+      ) : null}
 
       {needsNumber && !vapiDown ? (
         <p className="text-muted setup-note">

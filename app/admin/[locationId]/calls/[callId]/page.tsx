@@ -142,6 +142,22 @@ export default async function AdminCallPage({
             ← {location.name}
           </Link>
           <h1>{call.from_number ?? "Unknown caller"}</h1>
+          {/* THE DATE FOR THE WHOLE SCREEN, and the only thing on it that
+              carries one. <CallTimelineCard> below prints Rang /
+              Answered / Ended through timeIn -- bare clock readings,
+              which is the right call for three moments of ONE call but
+              is only readable because this line has already said which
+              day they are on. So dateTimeIn here is an invariant and not
+              a preference: shorten it to timeIn and the timeline goes
+              ambiguous with it. (The owner's twin screen,
+              app/dashboard/calls/[id]/page.tsx:36, is still on timeIn
+              and has exactly that problem -- not this pass's file.)
+
+              Absolute first, then relative. `relative` is the only
+              now-dependent string on the page and it is allowed to be
+              one BECAUSE the absolute instant is next to it: "3 d ago"
+              going stale in an open tab costs nothing when "Aug 14,
+              2026, 11:09 AM" is right there and never does. */}
           <div className="text-muted sub">
             {dateTimeIn(tz, call.started_at)} · {relative(call.started_at)} ·{" "}
             {call.duration_seconds ? mmss(call.duration_seconds) : "no answer"}

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
 
 /** Exercises `app/api/agent/transfer/route.ts` directly -- calling its
@@ -228,5 +228,53 @@ describe("POST /api/agent/transfer", () => {
   it("yields a transfer with no body at all", async () => {
     const res = await POST(request(undefined));
     expect(await okResult(res)).toEqual({ number: LOCATION.fallback_human_number });
+  });
+
+  /* ── the number has to be DIALABLE, not merely set ────────────────
+     This route hands its answer to Vapi, which dials it verbatim. A
+     truthiness test let "12" and a legacy "(510) 555-0199" through, and
+     the failure then happened INSIDE the transfer -- which the caller
+     experiences as dead air part-way through being helped, on the one
+     tool that exists for allergies, complaints and money. Refusing
+     returns a sentence the agent can say instead. */
+  describe("a fallback number that cannot be dialled", () => {
+    const stored = LOCATION.fallback_human_number;
+    afterEach(() => {
+      LOCATION.fallback_human_number = stored;
+    });
+
+    for (const bad of ["12", "(510) 555-0199", "5105550199", ""]) {
+      it(`refuses to hand out ${JSON.stringify(bad)} and schedules nothing`, async () => {
+        LOCATION.fallback_human_number = bad;
+
+        const entry = await toolResult(await POST(request({ reason: "shellfish allergy" })));
+
+        expect(entry.result).toBeUndefined();
+        expect(typeof entry.error).toBe("string");
+        expect(scheduled).toHaveLength(0);
+      });
+    }
+
+    it("logs the location id and never the number itself", async () => {
+      LOCATION.fallback_human_number = "(510) 555-0199";
+
+      await POST(request({ reason: "shellfish allergy" }));
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const logged = errorSpy.mock.calls[0];
+      expect(logged).toContain(LOCATION.id);
+      // The diagnostic says WHICH failure without repeating a caller's
+      // destination into the log.
+      expect(String(logged[0])).toMatch(/cannot be dialled/);
+      expect(JSON.stringify(logged)).not.toContain("555-0199");
+    });
+
+    it("still hands out a number that is stored exactly as it will be dialled", async () => {
+      LOCATION.fallback_human_number = "+442079460958";
+
+      const res = await POST(request({ reason: "shellfish allergy" }));
+
+      expect(await okResult(res)).toEqual({ number: "+442079460958" });
+    });
   });
 });

@@ -130,11 +130,40 @@ p { margin: 0 0 var(--space-3); }
 a { color: var(--color-accent); text-underline-offset: 3px; }
 img { display: block; max-width: 100%; }
 figure { margin: 0; }
+/* Corrected: was 55%, which composites to #7d7e7f on --color-bg and
+   measures 3.64:1 -- under the 4.5:1 WCAG AA asks of text below 24px,
+   and this is the recipe EVERY muted string in the product is painted
+   with, so one number was failing in six places at once. 65% composites
+   to #68696a: 4.93:1 on --color-bg, 4.77:1 on --color-surface, 4.99:1 on
+   --color-neutral-100 and 4.98:1 on --color-accent-100 -- every ground
+   the system lays muted ink on. 63.1% is the true floor (the binding
+   ground is --color-surface, where 63% is 4.49:1 and misses); 65% is the
+   first round step clear of it and still sits under .field > label's
+   70%, so caption -> label -> body copy still reads in that order.
+
+   A named token was ruled out, not overlooked: app/app.css's
+   "industry-system corrections" block states the rule this file lives
+   by -- industry.css may carry a corrected VALUE for a declaration the
+   mockup already has and may not carry a declaration the mockup does
+   not, and nothing in industry.css may reference anything app.css
+   declares. A --color-text-muted would break one of those two whichever
+   file it went in. So the fix is one corrected value, applied at every
+   site of one recipe, exactly the shape --color-accent's correction
+   took.
+
+   NOT changed with it: the same literal on .blueprint > .corner above.
+   Those are 1px registration marks, not text; 3.64:1 already clears the
+   3:1 WCAG 1.4.11 asks of a non-text graphic, and darkening the frame
+   would change the mockup's look for no accessibility gain.
+
+   app/app.css carries four more copies of this recipe -- .table td
+   .caller-city, .soldout-row .until, .transcript h5, .edit-status --
+   and they move with it. */
 figcaption {
   font-size: 11px; margin-top: var(--space-1);
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
-.text-muted { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.text-muted { color: color-mix(in srgb, var(--color-text) 65%, transparent); }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
@@ -279,9 +308,21 @@ textarea.input { min-height: 90px; resize: vertical; }
 
 /* — tables — */
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
+/* Corrected WITH .text-muted above, and only because of it. th was 60%
+   -- 4.22:1, its own AA miss at 11px -- and .table td .caller-city, the
+   secondary line inside a cell of the same table, is one of the four
+   app.css sites that just went to 65%. Left at 60% the column HEADER
+   would render lighter than the subtext beneath it: an inversion this
+   correction would have introduced, so it is repaired here rather than
+   shipped. 65% is 4.93:1. th is still told apart from the cells it heads
+   by 11px, uppercase and 0.08em tracking; the ink alone was never doing
+   that work, and the header-to-body separation it does carry only
+   narrows from 3.48:1 to 3.01:1 against --color-text. This is the one
+   declaration changed that the contrast audit did not name; revert this
+   rule alone and nothing else in the pass moves. */
 .table th {
   text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
   padding: var(--space-2); border-bottom: 1px solid var(--color-divider);
 }
 .table td {

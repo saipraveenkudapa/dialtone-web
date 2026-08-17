@@ -3,6 +3,35 @@ import { Corners } from "@/components/Corners";
 import { getPortfolio } from "@/lib/admin/data";
 import { money, relative } from "@/lib/format";
 
+/* The six figures a restaurant carries, named once.
+ *
+ *  On a phone this table stacks (see .stack-table in app/app.css) and
+ *  every figure cell grows a visible label, because its column heading
+ *  is no longer above it. That label and the <th> that names the column
+ *  on a desktop are the same six strings, and the type below is what
+ *  stops them drifting: <Figure label="Answerd"> is a compile error,
+ *  not a rendering nobody looks at on a 375px screen. */
+const FIGURE_COLUMNS = ["Answered", "Missed", "Orders", "Revenue", "Spend", "Last call"] as const;
+
+/** One figure, with the name of its column attached to it. */
+function Figure({
+  label,
+  warn = false,
+  children,
+}: {
+  label: (typeof FIGURE_COLUMNS)[number];
+  warn?: boolean;
+  children: string;
+}) {
+  return (
+    <td role="cell" className={warn ? "num num-warn" : "num"}>
+      {/* Hidden at desktop, where the <th> above says this. */}
+      <span className="cell-label">{label}</span>
+      <span>{children}</span>
+    </td>
+  );
+}
+
 const HEALTH_LABEL: Record<string, { text: string; tag: string }> = {
   live: { text: "Answering", tag: "tag tag-accent" },
   "kill-switch": { text: "Kill switch", tag: "tag tag-out" },
@@ -89,26 +118,68 @@ export default async function OperatorPage() {
             <Link href="/admin/new">Create a new restaurant</Link> to make the first one.
           </p>
         ) : (
+          /* EIGHT COLUMNS THAT DO NOT FIT A PHONE, AND A SCROLLBAR IS
+             NOT AN ANSWER.
+
+             Measured at 375px: this table is 572px wide inside a 300.2px
+             box, so 272px of it -- 47.6% -- was off the right edge, and
+             the only thing saying so was .table-scroll's overflow-x.
+             That hid, in order, Missed, Orders, Revenue, Spend and Last
+             call: the first thing lost was the count of callers nobody
+             picked up for, which is the single number this page exists
+             to surface, and the last was when the restaurant last rang.
+             An operator on a phone saw a name, a status chip and part of
+             one figure. A sideways scrollbar is an overlay on iOS --
+             invisible until something is already moving -- so there was
+             not even a hint that five columns existed.
+
+             So below 700px the table STACKS: one restaurant per block,
+             the name and its status on the first line, the six figures
+             two-up under it, each wearing the name of its own column
+             (<Figure> above). Nothing is hidden, nothing scrolls
+             sideways, and the block is 375px-safe by construction --
+             see .stack-table in app/app.css for the layout and the
+             measurements it was sized from.
+
+             THE ARIA ROLES ARE LOAD-BEARING AND NOT DECORATION. That
+             stacking is `display: block` on <table>, <tbody>, <tr> and
+             <td>, and changing the display of a table element strips its
+             implicit role in every current browser -- the whole thing
+             flattens to anonymous boxes and a screen reader loses where
+             one restaurant ends and the next begins. Naming the roles
+             explicitly is what survives the display change; they are
+             redundant at desktop, which is the point, because CSS cannot
+             add them at the width where they start mattering.
+
+             The column headings themselves are `display: none` at that
+             width rather than clipped-but-present, deliberately: an
+             ARIA table only announces a column header while navigating
+             BY CELL, and nobody triages a portfolio that way on a phone.
+             Read linearly -- which is how it will be read -- a clipped
+             <thead> would give "0, 0, 0, $0.00, $0.00, 1 d ago" and
+             nothing else. The visible label is real text inside the
+             cell, so the sighted reader and the screen-reader user get
+             the identical sentence. Exactly one of the two labelling
+             mechanisms is live at any width. */
           <div className="table-scroll">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Restaurant</th>
-                  <th>Status</th>
-                  <th>Answered</th>
-                  <th>Missed</th>
-                  <th>Orders</th>
-                  <th>Revenue</th>
-                  <th>Spend</th>
-                  <th>Last call</th>
+            <table className="table stack-table" role="table">
+              <thead role="rowgroup">
+                <tr role="row">
+                  <th role="columnheader">Restaurant</th>
+                  <th role="columnheader">Status</th>
+                  {FIGURE_COLUMNS.map((label) => (
+                    <th key={label} role="columnheader">
+                      {label}
+                    </th>
+                  ))}
                 </tr>
               </thead>
-              <tbody>
+              <tbody role="rowgroup">
                 {rows.map((r) => {
                   const health = HEALTH_LABEL[r.health];
                   return (
-                    <tr key={r.location.id}>
-                      <td>
+                    <tr key={r.location.id} role="row">
+                      <td role="cell">
                         {/* The name is the link. Not a JS row click: that
                             would make this page a client component, kill
                             text selection, and break cmd-click / middle
@@ -126,17 +197,19 @@ export default async function OperatorPage() {
                           {r.location.org_name} · {r.location.timezone}
                         </div>
                       </td>
-                      <td>
+                      <td role="cell">
                         <span className={health.tag}>{health.text}</span>
                       </td>
-                      <td className="num">{r.answered}</td>
-                      <td className={r.missed ? "num num-warn" : "num"}>{r.missed}</td>
-                      <td className="num">{r.orders}</td>
-                      <td className="num">{money(r.revenueCents)}</td>
-                      <td className="num">{money(r.spendCents)}</td>
-                      <td className="num">
+                      <Figure label="Answered">{String(r.answered)}</Figure>
+                      <Figure label="Missed" warn={r.missed > 0}>
+                        {String(r.missed)}
+                      </Figure>
+                      <Figure label="Orders">{String(r.orders)}</Figure>
+                      <Figure label="Revenue">{money(r.revenueCents)}</Figure>
+                      <Figure label="Spend">{money(r.spendCents)}</Figure>
+                      <Figure label="Last call">
                         {r.lastCallAt ? relative(r.lastCallAt) : "never"}
-                      </td>
+                      </Figure>
                     </tr>
                   );
                 })}
