@@ -20,7 +20,7 @@ const item = (
   name: string,
   price_cents: number,
   sold_out_until: "close" | "reopen" | null,
-  extra: { description?: string | null; allergen_note?: string | null } = {},
+  extra: { description?: string | null; allergen_note?: string | null; is_staff_pick?: boolean } = {},
 ) =>
   ({
     id,
@@ -31,6 +31,7 @@ const item = (
     price_cents,
     sold_out_until,
     allergen_note: null,
+    is_staff_pick: false,
     sort_order: 1,
     updated_at: "2026-08-12T00:00:00Z",
     ...extra,
@@ -185,5 +186,37 @@ describe("suggesting an alternative for a word a caller actually said", () => {
     const menu = shapeMenu(categories);
     expect(suggestAlternative(menu, "")).toBeNull();
     expect(suggestAlternative(menu, "   ")).toBeNull();
+  });
+});
+
+describe("staff picks in the agent payload", () => {
+  it("marks a pick that is on offer", () => {
+    const menu = shapeMenu(category([item("i1", "Bucatini", 1800, null, { is_staff_pick: true })]));
+    expect(menu.categories[0].items[0].staff_pick).toBe(true);
+  });
+
+  it("leaves the key off an ordinary item entirely", () => {
+    const menu = shapeMenu(category([item("i1", "Cacio e Pepe", 1800, null, { is_staff_pick: false })]));
+    // Absent, not false: this payload is fetched on every call that
+    // mentions food and sits in the latency budget.
+    expect("staff_pick" in menu.categories[0].items[0]).toBe(false);
+  });
+
+  it("suppresses a pick that is sold out until reopen", () => {
+    const menu = shapeMenu(category([
+      item("i1", "Bucatini", 1800, "reopen", { is_staff_pick: true }),
+    ]));
+    // Praising a dish and refusing it in the same breath is worse than
+    // saying nothing. The flag was set weeks ago; sold-out was set this
+    // afternoon, and the fresher fact wins.
+    expect("staff_pick" in menu.categories[0].items[0]).toBe(false);
+    expect(menu.categories[0].items[0].sold_out).toBe(true);
+  });
+
+  it("suppresses a pick that is sold out until close", () => {
+    const menu = shapeMenu(category([
+      item("i1", "Bucatini", 1800, "close", { is_staff_pick: true }),
+    ]));
+    expect("staff_pick" in menu.categories[0].items[0]).toBe(false);
   });
 });
