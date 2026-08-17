@@ -309,16 +309,36 @@ exception when insufficient_privilege then
 end $$;
 
 -- ── staff pick cap ───────────────────────────────────────────────────
+--
+-- Runs as an authenticated owner, the same way the sections above do --
+-- NOT as agent_service, which is still the role in effect from the
+-- section above and holds SELECT only on menu_items. A bare UPDATE run
+-- as agent_service raises insufficient_privilege with no exception
+-- handler around it, which aborts the whole enclosing transaction: every
+-- statement after it, including this file's own `reset role;` and final
+-- report, would fail with "current transaction is aborted" and the suite
+-- would emit no PASS/FAIL rows at all.
+--
+-- The fixtures above give location A exactly one menu item (Cacio e
+-- Pepe). Three more, in Nonna Rosa's own category, are added here so
+-- there are four real rows to press the cap against -- "three allowed"
+-- must mark three distinct items, not silently no-op against a missing
+-- fourth row.
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}';
+
+insert into menu_items (category_id, name, price_cents, location_id) values
+  ('ca100000-0000-0000-0000-0000000000ca', 'Tiramisu', 900, 'a10c0000-0000-0000-0000-00000000000a'),
+  ('ca100000-0000-0000-0000-0000000000ca', 'Caprese Salad', 1100, 'a10c0000-0000-0000-0000-00000000000a'),
+  ('ca100000-0000-0000-0000-0000000000ca', 'Osso Buco', 3200, 'a10c0000-0000-0000-0000-00000000000a');
+
 do $$
 declare
   loc uuid := 'a10c0000-0000-0000-0000-00000000000a';
-  cat uuid;
   ids uuid[];
 begin
-  select id into cat from menu_categories where location_id = loc limit 1;
-
   select array_agg(id) into ids
-    from (select id from menu_items where location_id = loc limit 4) t;
+    from (select id from menu_items where location_id = loc order by created_at limit 4) t;
 
   update menu_items set is_staff_pick = true where id = ids[1];
   update menu_items set is_staff_pick = true where id = ids[2];
@@ -340,17 +360,26 @@ begin
   exception when check_violation then
     insert into results values ('staff picks: unmarking frees a slot', 'refused', 'ok');
   end;
+end $$;
 
-  -- A second restaurant is counted separately.
-  begin
-    update menu_items set is_staff_pick = true
-     where location_id = 'd7be1400-7c38-4933-a248-407ff339cd73'
-       and id = (select id from menu_items
-                  where location_id = 'd7be1400-7c38-4933-a248-407ff339cd73' limit 1);
-    insert into results values ('staff picks: counted per restaurant', 'ok', 'ok');
-  exception when check_violation then
-    insert into results values ('staff picks: counted per restaurant', 'refused', 'ok');
-  end;
+-- A second restaurant is counted separately. Nonna Rosa (location A) is
+-- sitting at its cap of three from the block above; Rival Pizza (location
+-- B, a fixture this file actually creates at the top -- not the
+-- production-only location the earlier version of this test named) has
+-- none, so marking its one item must succeed. This has to run as owner
+-- B, not owner A: under RLS, a write to another org's row is filtered to
+-- zero rows rather than raising, which produces a vacuous pass that never
+-- touches the cap logic at all.
+set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}';
+
+do $$
+begin
+  update menu_items set is_staff_pick = true
+   where location_id = 'b10c0000-0000-0000-0000-00000000000b'
+     and name = 'Margherita';
+  insert into results values ('staff picks: counted per restaurant', 'ok', 'ok');
+exception when check_violation then
+  insert into results values ('staff picks: counted per restaurant', 'refused', 'ok');
 end $$;
 
 reset role;
