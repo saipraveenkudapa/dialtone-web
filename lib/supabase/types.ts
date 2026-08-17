@@ -79,6 +79,9 @@ export type MenuItemRow = {
   description: string | null;
   price_cents: number;
   sold_out_until: SoldOutUntil | null;
+  /** The restaurant nominated this dish. Capped at three per location by
+   *  a database trigger, not by the form. */
+  is_staff_pick: boolean;
   allergen_note: string | null;
   sort_order: number;
   updated_at: string;

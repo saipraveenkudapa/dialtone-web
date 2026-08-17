@@ -505,6 +505,7 @@ export function MenuProvider({
           description: input.description,
           price_cents: input.priceCents,
           sold_out_until: null,
+          is_staff_pick: false,
           allergen_note: null,
           sort_order: nextOrder,
           updated_at: new Date().toISOString(),

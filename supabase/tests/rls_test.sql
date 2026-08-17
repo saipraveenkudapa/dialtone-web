@@ -308,6 +308,51 @@ exception when insufficient_privilege then
   insert into results values ('agent: read menu imports', 'denied', 'denied');
 end $$;
 
+-- ── staff pick cap ───────────────────────────────────────────────────
+do $$
+declare
+  loc uuid := 'a10c0000-0000-0000-0000-00000000000a';
+  cat uuid;
+  ids uuid[];
+begin
+  select id into cat from menu_categories where location_id = loc limit 1;
+
+  select array_agg(id) into ids
+    from (select id from menu_items where location_id = loc limit 4) t;
+
+  update menu_items set is_staff_pick = true where id = ids[1];
+  update menu_items set is_staff_pick = true where id = ids[2];
+  update menu_items set is_staff_pick = true where id = ids[3];
+  insert into results values ('staff picks: three allowed', 'ok', 'ok');
+
+  begin
+    update menu_items set is_staff_pick = true where id = ids[4];
+    insert into results values ('staff picks: fourth refused', 'allowed', 'refused');
+  exception when check_violation then
+    insert into results values ('staff picks: fourth refused', 'refused', 'refused');
+  end;
+
+  -- Unmarking frees a slot.
+  update menu_items set is_staff_pick = false where id = ids[1];
+  begin
+    update menu_items set is_staff_pick = true where id = ids[4];
+    insert into results values ('staff picks: unmarking frees a slot', 'ok', 'ok');
+  exception when check_violation then
+    insert into results values ('staff picks: unmarking frees a slot', 'refused', 'ok');
+  end;
+
+  -- A second restaurant is counted separately.
+  begin
+    update menu_items set is_staff_pick = true
+     where location_id = 'd7be1400-7c38-4933-a248-407ff339cd73'
+       and id = (select id from menu_items
+                  where location_id = 'd7be1400-7c38-4933-a248-407ff339cd73' limit 1);
+    insert into results values ('staff picks: counted per restaurant', 'ok', 'ok');
+  exception when check_violation then
+    insert into results values ('staff picks: counted per restaurant', 'refused', 'ok');
+  end;
+end $$;
+
 reset role;
 
 select case when got is not distinct from want then 'PASS' else 'FAIL' end as status,
