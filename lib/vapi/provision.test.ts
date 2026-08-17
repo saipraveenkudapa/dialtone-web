@@ -82,7 +82,7 @@ describe("buildAssistantPayload", () => {
   });
 
   it("sets pacing so the assistant doesn't talk over callers or leave gaps", () => {
-    expect(payload.startSpeakingPlan.waitSeconds).toBe(0.6);
+    expect(payload.startSpeakingPlan.waitSeconds).toBe(0.8);
     expect(payload.startSpeakingPlan.transcriptionEndpointingPlan).toEqual({
       onPunctuationSeconds: 0.1,
       onNoPunctuationSeconds: 1.8,
@@ -126,6 +126,7 @@ describe("buildAssistantPayload", () => {
       provider: "11labs",
       voiceId: "sarah",
       model: "eleven_flash_v2_5",
+      speed: 0.92,
     });
   });
 
@@ -140,6 +141,30 @@ describe("buildAssistantPayload", () => {
     });
     expect(p.model.provider).toBe("anthropic");
     expect(p.model.model).toBe("claude");
+  });
+});
+
+describe("pace", () => {
+  it("speaks at 0.92 and waits 0.8s before answering", () => {
+    const payload = buildAssistantPayload({
+      locationId: "a10c0000-0000-0000-0000-00000000000a",
+      base: "https://dialtone.example.com",
+      agentSecret: "swordfish",
+      config: {
+        system_prompt: "You are answering the phone for Nonna Rosa.",
+        greeting: "Hi, thanks for calling Nonna Rosa!",
+        fallback_number: "+15105550142",
+      },
+    }) as {
+      voice: { speed: number };
+      startSpeakingPlan: { waitSeconds: number };
+    };
+
+    // Chosen by ear against a real call, not by theory: below ~0.85 she
+    // sounds sedated, and above ~1.2s of wait a phone line reads as dead
+    // and callers say "hello? are you there?".
+    expect(payload.voice.speed).toBe(0.92);
+    expect(payload.startSpeakingPlan.waitSeconds).toBe(0.8);
   });
 });
 

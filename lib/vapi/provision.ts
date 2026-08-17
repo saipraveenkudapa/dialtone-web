@@ -404,7 +404,16 @@ function nativeTransferTool(fallbackNumber: string) {
  */
 const TRANSCRIBER = { provider: "deepgram", model: "nova-3", language: "multi" };
 
-const VOICE = { provider: "11labs", voiceId: "sarah", model: "eleven_flash_v2_5" };
+const VOICE = {
+  provider: "11labs",
+  voiceId: "sarah",
+  model: "eleven_flash_v2_5",
+  // The product owner heard a real call as "too fast ... calm and a
+  // little slow, not too slow". 1.0 is the ElevenLabs default and was
+  // never set here. 0.92 is a starting value to tune by ear: below about
+  // 0.85 she stops sounding calm and starts sounding sedated.
+  speed: 0.92,
+};
 
 /** How long the assistant waits before it starts speaking, and how it
  *  decides the caller is actually done talking rather than mid-thought. */
@@ -415,7 +424,11 @@ const START_SPEAKING_PLAN = {
   // that default assumes, and getting cut off while re-ordering a
   // sentence is a worse experience than a few hundred extra ms of
   // silence. 0.6s buys headroom for that without reading as a hung line.
-  waitSeconds: 0.6,
+  // Raised from 0.6 with the same complaint in mind: a beat before she
+  // answers reads as composure. Every 100ms here is dead air on every
+  // turn of every call, so this moves in small steps and gets heard
+  // before it moves again.
+  waitSeconds: 0.8,
   // Text-based (transcript) endpointing, not `smartEndpointingPlan`.
   // Smart endpointing requires picking a provider (LiveKit, Vapi,
   // Krisp, ...), and Vapi's own docs say LiveKit is for English only --
