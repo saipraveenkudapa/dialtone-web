@@ -22,7 +22,31 @@
  *  *string*. The Nonna Rosa log above is the second. Accept both, plus
  *  `toolWithToolCallList` as a last resort, plus a flat body so that
  *  `curl`, scripts/exercise-tools.mjs and the existing route tests keep
- *  exercising the same routes. */
+ *  exercising the same routes.
+ *
+ *  THE CONTAINER DOES NOT DECIDE THE ENTRY SHAPE, and reading it as if
+ *  it did cost two real orders on 2026-08-18. This module used to branch
+ *  on which KEY was present and then assume the shape of the entries
+ *  inside it: `toolCallList` meant flat entries, `toolCalls` meant
+ *  OpenAI ones. Vapi sends `toolCallList` carrying OPENAI-SHAPED
+ *  entries. The first branch won, read `entry.arguments` (undefined),
+ *  coerced it to `{}`, and every route was handed a tool call with no
+ *  arguments at all -- so a caller who had just confirmed a $40 total
+ *  heard "I don't have any items yet." and the `orders` table stayed
+ *  empty.
+ *
+ *  Nothing caught it because the two tools anyone reaches for while
+ *  probing -- get_menu and get_hours -- declare no required arguments,
+ *  and for them `{}` is indistinguishable from a successful parse. They
+ *  answered perfectly on the very calls whose orders were being dropped.
+ *
+ *  So each entry is now read BY ITS OWN SHAPE, in every container: an
+ *  entry carrying a nested `function` object is read there, an entry
+ *  carrying `name`/`arguments` flat is read flat, and `arguments` may be
+ *  a JSON string or an already-parsed object in either. See
+ *  lib/agent/vapi-entry-shape.test.ts, which runs every tool's real
+ *  declared arguments through all twelve container x entry-shape x
+ *  encoding combinations. */
 
 export type ToolCall = {
   /** Vapi matches a result back to its call by exact string equality on
@@ -128,6 +152,57 @@ function firstOf(list: unknown[]): unknown {
   return list[0];
 }
 
+/** The three keys a tool call has been seen to arrive under, in the
+ *  order they are trusted. `toolCallList` is the documented one;
+ *  `toolCalls` is what the Nonna Rosa call sent; `toolWithToolCallList`
+ *  nests the call one level deeper and is the least stable of the three.
+ *  On a payload carrying more than one of them they are redundant, so
+ *  the first that yields a readable entry wins. */
+const CONTAINERS = ["toolCallList", "toolCalls", "toolWithToolCallList"] as const;
+
+/** One entry, read by its own shape.
+ *
+ *  The only question asked is "does this entry carry a nested `function`
+ *  object" -- never "which list did it arrive in". Both shapes put the
+ *  id at the ENTRY level, so `entry.id` is right for both.
+ *
+ *  The two fallbacks to the entry level are not speculative: a hybrid
+ *  entry that names the tool inside `function` while leaving
+ *  `arguments` outside it (or the reverse) is exactly the kind of
+ *  half-and-half payload this module was caught out by once already, and
+ *  the alternative to reading it is dropping a live caller's order. On a
+ *  purely flat entry `fn` IS `entry`, so both are no-ops.
+ *
+ *  `null` means "nothing identifiable here", which lets the next
+ *  container be tried rather than answering a real tool call sitting one
+ *  key over with silence. An entry with neither an id nor a name is not
+ *  a tool call anyone can answer: Vapi matches a result back by exact
+ *  string equality on the id, and a route is chosen by the name. */
+function readEntry(entry: unknown): Omit<ToolCall, "providerCallId"> | null {
+  if (!isPlainObject(entry)) return null;
+
+  // Deliberately NOT gated on `type === "function"`: a future type value
+  // that still carries a function payload should be answered, not
+  // silently dropped.
+  const fn = isPlainObject(entry.function) ? entry.function : entry;
+
+  const toolCallId = stringOrNull(entry.id);
+  const name = stringOrNull(fn.name) ?? stringOrNull(entry.name);
+  if (toolCallId === null && name === null) return null;
+
+  const rawArgs = fn.arguments === undefined ? entry.arguments : fn.arguments;
+  return { toolCallId, name, args: coerceArgs(rawArgs) };
+}
+
+/** The entry a container's first element actually holds.
+ *  `toolWithToolCallList` wraps the call in `{ tool, toolCall }`; the
+ *  other two hold it directly. */
+function entryIn(container: (typeof CONTAINERS)[number], first: unknown): unknown {
+  if (container !== "toolWithToolCallList") return first;
+  if (isPlainObject(first) && isPlainObject(first.toolCall)) return first.toolCall;
+  return null;
+}
+
 /** Reads a Vapi tool-call POST body in either shape it really sends, and
  *  falls back to treating a flat body as the arguments themselves. */
 export function parseToolCall(body: unknown): ToolCall {
@@ -156,57 +231,15 @@ export function parseToolCall(body: unknown): ToolCall {
   const call = isPlainObject(message.call) ? message.call : null;
   const providerCallId = call ? stringOrNull(call.id) : null;
 
-  // B1. The documented shape.
-  if (Array.isArray(message.toolCallList) && message.toolCallList.length > 0) {
-    const entry = firstOf(message.toolCallList);
-    if (isPlainObject(entry)) {
-      return {
-        toolCallId: stringOrNull(entry.id),
-        name: stringOrNull(entry.name),
-        args: coerceArgs(entry.arguments),
-        providerCallId,
-      };
-    }
-  }
+  // B1-B3. Each container in turn, and each entry read by its own shape
+  // rather than by the container it arrived in. That distinction is the
+  // whole of this module's second repair -- see the header.
+  for (const container of CONTAINERS) {
+    const list = message[container];
+    if (!Array.isArray(list) || list.length === 0) continue;
 
-  // B2. The OpenAI shape, which is what the live call actually sent.
-  if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
-    const entry = firstOf(message.toolCalls);
-    if (isPlainObject(entry) && isPlainObject(entry.function)) {
-      const fn = entry.function;
-      // Deliberately NOT gated on `type === "function"`: a future type
-      // value that still carries a function payload should be answered,
-      // not silently dropped into the "no tool call found" branch.
-      if (typeof fn.name === "string") {
-        return {
-          toolCallId: stringOrNull(entry.id),
-          name: stringOrNull(fn.name),
-          args: coerceArgs(fn.arguments),
-          providerCallId,
-        };
-      }
-    }
-  }
-
-  // B3. Last resort. Vapi nests the call one level deeper here, and this
-  // is the least stable of the three shapes -- every field access is
-  // guarded, and on any payload that carries both this and B1 the two
-  // are redundant.
-  if (
-    Array.isArray(message.toolWithToolCallList) &&
-    message.toolWithToolCallList.length > 0
-  ) {
-    const entry = firstOf(message.toolWithToolCallList);
-    if (isPlainObject(entry) && isPlainObject(entry.toolCall)) {
-      const toolCall = entry.toolCall;
-      const fn = isPlainObject(toolCall.function) ? toolCall.function : toolCall;
-      return {
-        toolCallId: stringOrNull(toolCall.id),
-        name: stringOrNull(fn.name),
-        args: coerceArgs(fn.arguments),
-        providerCallId,
-      };
-    }
+    const entry = readEntry(entryIn(container, firstOf(list)));
+    if (entry) return { ...entry, providerCallId };
   }
 
   // B4. An envelope with no tool call in it -- a status-update or an
