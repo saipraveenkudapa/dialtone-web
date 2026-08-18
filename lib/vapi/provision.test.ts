@@ -75,10 +75,19 @@ describe("buildAssistantPayload", () => {
     expect(p.metadata).toEqual({ dialtone_location_id: longId });
   });
 
-  it("defaults to openai/gpt-4o at temperature 0.3, boring on purpose", () => {
+  // Re-pinned from 0.3, deliberately. Two real calls came back correct and
+  // flat -- "Got it. Meatballs al forno and an olive oil cake. This for
+  // pickup?" -- and the prompt had been asking for warmth in two places
+  // and losing to the concrete rule beside it, which is what 0.3 does.
+  //
+  // This stays a pin rather than a range because the number is the thing
+  // being tuned by ear: it is expected to move again after a real call,
+  // and each move should be a reviewed edit here, not a silent drift.
+  // See the reasoning block at the temperature in lib/vapi/provision.ts.
+  it("defaults to openai/gpt-4o at temperature 0.6, warm but still on script", () => {
     expect(payload.model.provider).toBe("openai");
     expect(payload.model.model).toBe("gpt-4o");
-    expect(payload.model.temperature).toBe(0.3);
+    expect(payload.model.temperature).toBe(0.6);
   });
 
   it("sets pacing so the assistant doesn't talk over callers or leave gaps", () => {

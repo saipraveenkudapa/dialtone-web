@@ -551,8 +551,30 @@ export function buildAssistantPayload({
     model: {
       provider: modelProvider,
       model: modelName,
-      // "Boring and consistent, not creative" -- docs/vapi-setup.md step 4.
-      temperature: 0.3,
+      // Raised from 0.3 after two real calls came back correct and
+      // completely flat: "Got it. Meatballs al forno and an olive oil
+      // cake. This for pickup?" -- accurate, and with no more warmth in
+      // it than a form. The prompt had been asking for warmth in two
+      // places for weeks and losing, and 0.3 is why: at that temperature
+      // the concrete rule beside it ("Keep every reply short") wins every
+      // time, and the softer instruction never fires.
+      //
+      // What this canNOT do, which is the reason it is safe to move: she
+      // cannot invent a dish or a price at any temperature. place_order
+      // matches every item against the real menu server-side and refuses
+      // what is not on it, and prices are read from the database, never
+      // from the model. The blast radius here is WORDING.
+      //
+      // What it can do, and what to listen for: drift from procedure --
+      // skipping the order read-back, improvising a policy, not spelling
+      // an unusual name back. She already failed that last one at 0.3,
+      // hearing "Sai" and saying "Sy" and then "Si", so this is a thing
+      // to watch rather than a thing this number caused.
+      //
+      // 0.6, not higher: one deliberate step, reversible in one push, and
+      // large enough to hear on a single call. If she comes back chatty
+      // or loose with the script, this is the first number to move back.
+      temperature: 0.6,
       messages: [{ role: "system", content: config.system_prompt }],
       tools: [
         ...AGENT_TOOLS.map((tool) => buildFunctionTool(tool, base, agentSecret)),

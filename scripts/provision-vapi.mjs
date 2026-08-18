@@ -334,7 +334,7 @@ async function main() {
   for (const tool of AGENT_TOOLS) console.log(`  - ${tool.name} -> ${base}/api/agent/${tool.path}`);
   console.log(`  - (native transferCall, static destination) -> ${config.fallback_number}`);
   console.log("");
-  console.log(`Model: ${modelProvider}/${modelName}, temperature 0.3`);
+  console.log(`Model: ${modelProvider}/${modelName}, temperature ${payload.model.temperature}`);
   console.log(`First message: greeting fetched above, spoken verbatim (not model-generated)`);
   console.log("");
   console.log("Put this in VAPI_ASSISTANT_ID:");
