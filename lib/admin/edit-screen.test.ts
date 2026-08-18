@@ -192,6 +192,7 @@ function menu(over: Partial<Parameters<typeof MenuAdmin>[0]> = {}): string {
       saveItemAction: noop,
       deleteItemAction: noop,
       setSoldOutAction: noop,
+      setPickAction: noop,
       ...over,
     }),
   );
@@ -698,19 +699,38 @@ describe("the tab strip's stylesheet", () => {
 describe("a menu row in a 300px card", () => {
   const css = source("../../app/app.css");
 
-  it("keeps its three controls on one line, so Remove never moves", () => {
+  it("keeps Edit and Remove on one line, so Remove never moves", () => {
     // Measured at 768px: the card is 357.8px, the row 328.6px, and the
     // controls block gets 230px. At the 160px select cap this shipped
-    // with, the three controls needed 261.6px and wrapped -- putting
-    // Remove, which destroys a dish with no undo, on the second line
-    // for a dish with a description and beside Edit for one without. At
-    // 130px they are 231.6px: one bar, and Remove at the same x on
-    // every row.
+    // with, the sold-out select plus Edit and Remove needed 261.6px and
+    // wrapped -- putting Remove, which destroys a dish with no undo, on
+    // the second line for a dish with a description and beside Edit for
+    // one without. At 130px they were 231.6px: one bar, and Remove at
+    // the same x on every row.
+    //
+    // The row now carries a second select -- the pick, which used to be
+    // reachable only by opening the dish -- and four controls do not fit
+    // one line of a 328.6px row at any cap that leaves "Out until close"
+    // readable. So the two selects sit outside .menu-edit-row-actions
+    // and the row's own flex-wrap breaks the line between them and the
+    // buttons; the block itself keeps nowrap, which is what holds Remove
+    // beside Edit. Inside the block, nowrap would have hung 369.6px of
+    // controls past the card's edge instead.
     expect(css).toContain(".menu-item-row .input { max-width: 130px; }");
     expect(css).toContain(".menu-item-row .menu-edit-row-actions { flex-wrap: nowrap; }");
     // The same cap .hours-times .input takes, which is what the comment
     // above it claims to be following.
     expect(css).toContain(".hours-times .input { max-width: 130px; }");
+    // Both selects are the row's own children, and the block holds the
+    // two buttons and nothing else.
+    const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+    const row = menuAdmin.slice(
+      menuAdmin.indexOf('className={out ? "menu-item-row is-out" : "menu-item-row"}'),
+    );
+    const actions = row.indexOf('<div className="menu-edit-row-actions">');
+    expect(row.indexOf("${item.name} on the phone")).toBeLessThan(actions);
+    expect(row.indexOf("${item.name} as a pick")).toBeLessThan(actions);
+    expect(row.slice(actions, row.indexOf("</div>", actions))).not.toContain("<select");
   });
 });
 
@@ -893,17 +913,80 @@ describe("a dish the restaurant nominated", () => {
   });
 
   it("is absent from a dish that was never nominated", () => {
+    // Asserted against the CHIP rather than against the page's prose:
+    // both kinds are now named on every row by the pick control itself,
+    // which is the whole point of that control existing. What must not
+    // appear on an un-nominated dish is the mark that claims the
+    // restaurant chose it.
     const html = menu();
-    expect(prose(html)).not.toContain("Best seller");
-    expect(prose(html)).not.toContain("Chef\u2019s special");
+    expect(html).not.toContain("edit-flag");
     expect(prose(html)).not.toContain("Silent");
   });
 });
 
-describe("the pick control in an item's edit row", () => {
-  /* Asserted against the source, not the markup, for the reason the
-     block above states: the control sits inside `if (!editing)`'s other
-     branch, which renderToStaticMarkup never enters. */
+describe("the pick control on a dish's row", () => {
+  /* IT MOVED, and that is the defect this block now guards. The control
+     used to sit inside the row's own edit form, behind the Edit button:
+     the words "pick", "best seller" and "chef's special" appeared
+     NOWHERE on the Menu tab until an operator had already opened a dish
+     and scrolled past six other fields. The owner's report was "i see no
+     option in the menu to label them", on a screen where fourteen rows
+     each carried a sold-out select on the row itself.
+
+     The asymmetry was the bug. The sold-out control is on the collapsed
+     row so that a scan down the card shows what the agent is refusing
+     without reading every dropdown; the identical reasoning applies to
+     what the agent is PRAISING, and to whether the operator knows they
+     may praise anything at all. So this is the same shape of control,
+     beside it, writing on change through its own action. */
+
+  const OTHER = "17e00000-0000-0000-0000-0000000000e2";
+  const THIRD = "17e00000-0000-0000-0000-0000000000e3";
+  const FOURTH = "17e00000-0000-0000-0000-0000000000e4";
+
+  function dish(id: string, name: string, pick: "best_seller" | "chefs_special" | null) {
+    return {
+      id,
+      category_id: CATEGORY,
+      name,
+      description: null,
+      price_cents: 2200,
+      allergen_note: null,
+      sort_order: 0,
+      sold_out_until: null,
+      pick_label: pick,
+    };
+  }
+
+  /** The row as it is actually rendered -- editing=false, MenuAdmin's
+   *  default branch, the one renderToStaticMarkup enters. Nothing below
+   *  needs the source to see this control any more. */
+  function rows(...items: ReturnType<typeof dish>[]): string {
+    return menu({ items });
+  }
+
+  it("is on the collapsed row, beside the sold-out select", () => {
+    const html = rows(dish(ITEM, "Carbonara", null));
+
+    // Named for the dish, the way the sold-out control beside it is.
+    expect(html).toContain('aria-label="Carbonara on the phone"');
+    expect(html).toContain('aria-label="Carbonara as a pick"');
+
+    // Both selects stand ahead of Edit and Remove, and outside the block
+    // that holds them: .menu-edit-row-actions is nowrap so that Remove
+    // never comes apart from Edit, and a fourth control inside it would
+    // be a bar too wide for a 300px card to wrap out of.
+    const soldOut = html.indexOf('aria-label="Carbonara on the phone"');
+    const pick = html.indexOf('aria-label="Carbonara as a pick"');
+    const actions = html.indexOf("menu-edit-row-actions");
+    expect(soldOut).toBeGreaterThan(-1);
+    expect(pick).toBeGreaterThan(soldOut);
+    expect(actions).toBeGreaterThan(pick);
+
+    // ...and it is no longer inside the edit form, where an operator had
+    // to open a dish to find out the feature existed.
+    expect(source("../../components/admin/MenuAdmin.tsx")).not.toContain("ma-item-pick-");
+  });
 
   it("is a select over the two kinds plus not-a-pick, like the sold-out one", () => {
     // The neighbouring control on this same row is already a select over
@@ -911,18 +994,54 @@ describe("the pick control in an item's edit row", () => {
     // is the same shape of choice. A second shape for the same job is
     // how a 34-class system became a 73-class one.
     const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
-    const form = menuAdmin.slice(menuAdmin.indexOf("ma-item-pick-"));
-    expect(form).toMatch(/<option value="">Not a pick<\/option>/);
-    expect(form).toMatch(/<option value="best_seller">\{PICK_LABEL\.best_seller\}<\/option>/);
+    const control = menuAdmin.slice(menuAdmin.indexOf("${item.name} as a pick"));
+    expect(control).toMatch(/<option value="">Not a pick<\/option>/);
+    expect(control).toMatch(/<option value="best_seller">\{PICK_LABEL\.best_seller\}<\/option>/);
     // Same option, wearing the one-per-restaurant courtesy the test at
     // the bottom of this block pins.
-    expect(form).toMatch(
+    expect(control).toMatch(
       /<option value="chefs_special" disabled=\{specialTaken\}>\s*\n\s*\{PICK_LABEL\.chefs_special\}\s*\n\s*<\/option>/,
     );
     // The wearing of .input is what puts it on the same rail as every
-    // other field in the row, and what the coarse-pointer rule below
+    // other field on the row, and what the coarse-pointer rule below
     // reaches.
-    expect(form).toMatch(/id=\{`ma-item-pick-\$\{item\.id\}`\}\s*\n\s*className="input"/);
+    expect(control).toMatch(/className="input"/);
+
+    // Rendered, the three choices are the three the column admits.
+    // (renderToStaticMarkup marks the chosen one with `selected`, which
+    // is why the "not a pick" option is matched rather than compared.)
+    const html = rows(dish(ITEM, "Carbonara", null));
+    expect(html).toMatch(/<option value=""[^>]*>Not a pick<\/option>/);
+    expect(html).toContain('<option value="best_seller">Best seller</option>');
+    expect(html).toContain("Chef\u2019s special</option>");
+  });
+
+  it("writes on the change, through an action of its own", () => {
+    // One control, one write, exactly as the sold-out select beside it:
+    // no Save button, no edit form, no six other columns re-sent. The
+    // row's own pending helper is what disables it while the write is in
+    // flight, so a double change cannot race itself.
+    const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+    expect(menuAdmin).toContain(
+      "onChange={(e) => run(() => setSoldOutAction(locationId, item.id, e.target.value))}",
+    );
+    expect(menuAdmin).toContain(
+      "onChange={(e) => run(() => setPickAction(locationId, item.id, e.target.value))}",
+    );
+    // And the edit form no longer carries a second control for the same
+    // column that would save at a different moment: its patch sends the
+    // empty string, which lib/admin/edit.ts's saveMenuItem drops on the
+    // floor along with sold-out.
+    expect(menuAdmin).toContain('pickLabel: ""');
+    expect(menuAdmin).not.toMatch(/pickLabel: pickLabel/);
+  });
+
+  it("shows the kind that is on file as the selected one", () => {
+    // The control must never sit on "Not a pick" while the chip beside
+    // it says the dish is the chef's special: they are one fact.
+    const html = rows(dish(ITEM, "Carbonara", "chefs_special"));
+    expect(html).toContain('<option value="chefs_special" selected="">');
+    expect(html).toContain("tag tag-outline edit-flag");
   });
 
   it("takes its touch target from the rule every select on the page uses", () => {
@@ -953,6 +1072,27 @@ describe("the pick control in an item's edit row", () => {
     );
     expect(menuAdmin).toContain("picksUsed >= 3 && item.pick_label === null");
     expect(menuAdmin).toMatch(/Three dishes are already picked/);
+
+    /* Rendered: at three picks the control on a dish that is NOT one of
+       them is shut, because every option it could offer is one the
+       trigger will refuse -- and the sentence saying why is on the Menu
+       card, once, rather than repeated under each of the eleven rows it
+       would apply to. */
+    const full = rows(
+      dish(ITEM, "Carbonara", "best_seller"),
+      dish(OTHER, "Amatriciana", "best_seller"),
+      dish(THIRD, "Cacio e Pepe", "chefs_special"),
+      dish(FOURTH, "Tiramisu", null),
+    );
+    expect(full).toContain('aria-label="Tiramisu as a pick" disabled=""');
+    expect(prose(full)).toContain("Three dishes are already picked");
+
+    // The three that hold a slot keep their control: the trigger's
+    // "already counted" branch lets a pick be re-worded or cleared, and
+    // clearing one is the only way back under the cap. The whole opening
+    // tag is compared, so a `disabled` on it would fail this.
+    expect(full).toContain('<select class="input" aria-label="Carbonara as a pick">');
+    expect(full).toContain('<select class="input" aria-label="Cacio e Pepe as a pick">');
   });
 
   it("offers the chef's special to one dish at a time, and says why", () => {
@@ -968,9 +1108,53 @@ describe("the pick control in an item's edit row", () => {
     // able to keep it, and to be re-worded or cleared -- the same reason
     // capReached is not a bare `picksUsed >= 3`.
     expect(menuAdmin).toContain("other.id !== item.id && other.pick_label ===");
-    expect(menuAdmin).toMatch(/Another dish is already the chef&rsquo;s special/);
+    // The sentence moved to the Menu card with the count, because it is
+    // a fact about the RESTAURANT and not about the row it was written
+    // under -- thirteen rows repeating it is furniture, and furniture is
+    // not read.
+    expect(menuAdmin).toMatch(
+      /One dish is already the chef&rsquo;s special, so that option is offered on\s+that\s+dish alone/,
+    );
     // "best seller" carries no such rule and must not grow one: any
     // number of dishes can be one of several best sellers.
     expect(menuAdmin).not.toMatch(/<option value="best_seller" disabled/);
+
+    /* Rendered: the option is shut on every OTHER dish, and open on the
+       one that holds it. */
+    const html = rows(
+      dish(ITEM, "Carbonara", "chefs_special"),
+      dish(OTHER, "Amatriciana", null),
+    );
+    const other = html.slice(html.indexOf('aria-label="Amatriciana as a pick"'));
+    expect(other.slice(0, 300)).toContain('<option value="chefs_special" disabled=""');
+    const holder = html.slice(html.indexOf('aria-label="Carbonara as a pick"'));
+    expect(holder.slice(0, 300)).toContain('<option value="chefs_special" selected=""');
+    expect(prose(html)).toContain("One dish is already the chef\u2019s special");
+  });
+});
+
+describe("finding out that a dish can be picked at all", () => {
+  it("is said on the Menu card, before any dish has ever been picked", () => {
+    /* The chip on a row names the picks a restaurant HAS. Production
+       holds zero, so on the screen this was reported from no chip
+       rendered anywhere and the feature was invisible until after it had
+       been used. A control on every row is most of the answer; the
+       sentence that says what the control is for, and what the two rules
+       are, is the rest of it. */
+    const text = prose(menu());
+    expect(text).toMatch(/best sellers/i);
+    expect(text).toMatch(/chef\u2019s special/i);
+    expect(text).toMatch(/three dishes/i);
+    // Not the cap's refusal: nothing has been picked here.
+    expect(text).not.toContain("Three dishes are already picked");
+  });
+
+  it("says nothing at all on a restaurant with no menu yet", () => {
+    // A rule about rows that do not exist is furniture on the emptiest
+    // version of this screen, where the only useful sentence is "add a
+    // category".
+    const text = prose(menu({ categories: [], items: [] }));
+    expect(text).not.toMatch(/best sellers/i);
+    expect(text).toContain("No categories yet");
   });
 });

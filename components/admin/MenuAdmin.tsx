@@ -110,6 +110,11 @@ export type MenuAdminProps = {
   deleteItemAction: (locationId: string, itemId: string) => Promise<EditResult>;
   /** "" puts it back on sale. */
   setSoldOutAction: (locationId: string, itemId: string, until: string) => Promise<EditResult>;
+  /** Which kind of pick a dish is; "" is not a pick. Its own action, like
+   *  sold-out, because it is its own one-click control on the row --
+   *  lib/admin/edit.ts's saveMenuItem deliberately does not write this
+   *  column. */
+  setPickAction: (locationId: string, itemId: string, label: string) => Promise<EditResult>;
 };
 
 const DROPPED: EditResult = {
@@ -248,6 +253,16 @@ export function MenuAdmin(props: MenuAdminProps) {
 
   const soldOut = items.filter((item) => item.sold_out_until !== null);
   const nextSort = categories.reduce((max, c) => Math.max(max, c.sort_order + 1), 0);
+  /* The two rules, counted where they are true: per RESTAURANT. The row
+     controls below carry the courtesy (an option that is certain to be
+     refused is not offered), and the database carries the guarantee --
+     menu_items_staff_pick_cap and menu_items_one_chefs_special_idx. What
+     this card carries is the only thing neither of those can: that any
+     of it exists at all. A restaurant with no picks yet has no chip on
+     any row, which is exactly the restaurant whose operator reported
+     seeing "no option in the menu to label them". */
+  const picksUsed = items.filter((item) => item.pick_label !== null).length;
+  const specialUsed = items.some((item) => item.pick_label === "chefs_special");
 
   /* Everything below is behind the Menu tab, and every reporter in it is
      OR'd into one "Unsaved" chip on that tab. This is the biggest panel
@@ -328,6 +343,32 @@ export function MenuAdmin(props: MenuAdminProps) {
           </p>
         ) : null}
 
+        {/* Not on a restaurant with no dishes: a rule about rows that do
+            not exist is furniture on the emptiest version of this screen,
+            and furniture is not read. */}
+        {items.length > 0 ? (
+          <p className="text-muted setup-note">
+            Three dishes at a time can be picks. The assistant volunteers one of them once in a
+            call, in the caller&rsquo;s own language — that the dish is one of your best
+            sellers, or that it is the chef&rsquo;s special. Set one on any row, beside the
+            sold-out control. Any number of dishes can be a best seller; only one can be the
+            chef&rsquo;s special.
+            {picksUsed >= 3 ? (
+              <>
+                {" "}
+                Three dishes are already picked. Set one back to “not a pick” to choose another.
+              </>
+            ) : null}
+            {specialUsed ? (
+              <>
+                {" "}
+                One dish is already the chef&rsquo;s special, so that option is offered on that
+                dish alone.
+              </>
+            ) : null}
+          </p>
+        ) : null}
+
         {tiedSortOrders(categories) ? (
           <p className="text-muted setup-note">
             Two categories share a sort order. Ties are resolved by nothing, so the assistant can
@@ -367,6 +408,7 @@ export function MenuAdmin(props: MenuAdminProps) {
               saveItemAction={props.saveItemAction}
               deleteItemAction={props.deleteItemAction}
               setSoldOutAction={props.setSoldOutAction}
+              setPickAction={props.setPickAction}
             />
           ))}
         </div>
@@ -448,6 +490,7 @@ function CategoryCard({
   saveItemAction,
   deleteItemAction,
   setSoldOutAction,
+  setPickAction,
 }: {
   locationId: string;
   category: EditableCategory;
@@ -464,6 +507,7 @@ function CategoryCard({
   saveItemAction: MenuAdminProps["saveItemAction"];
   deleteItemAction: MenuAdminProps["deleteItemAction"];
   setSoldOutAction: MenuAdminProps["setSoldOutAction"];
+  setPickAction: MenuAdminProps["setPickAction"];
 }) {
   const { pending, result, setResult, run } = useWrite();
 
@@ -656,6 +700,7 @@ function CategoryCard({
               saveItemAction={saveItemAction}
               deleteItemAction={deleteItemAction}
               setSoldOutAction={setSoldOutAction}
+              setPickAction={setPickAction}
             />
           ))}
         </div>
@@ -774,6 +819,7 @@ function ItemRow({
   saveItemAction,
   deleteItemAction,
   setSoldOutAction,
+  setPickAction,
 }: {
   locationId: string;
   item: EditableItem;
@@ -782,6 +828,7 @@ function ItemRow({
   saveItemAction: MenuAdminProps["saveItemAction"];
   deleteItemAction: MenuAdminProps["deleteItemAction"];
   setSoldOutAction: MenuAdminProps["setSoldOutAction"];
+  setPickAction: MenuAdminProps["setPickAction"];
 }) {
   const { pending, result, setResult, run } = useWrite();
 
@@ -792,10 +839,11 @@ function ItemRow({
   const [allergenNote, setAllergenNote] = useState(item.allergen_note ?? "");
   const [categoryId, setCategoryId] = useState(item.category_id);
   const [sortOrder, setSortOrder] = useState(String(item.sort_order));
-  /* A string, and "" is not-a-pick: the same shape the sold-out select
-     on this row uses, and the same shape MenuItemInput carries, so
-     nothing has to be translated on the way to the action. */
-  const [pickLabel, setPickLabel] = useState<string>(item.pick_label ?? "");
+  /* NO pickLabel state, for the same reason there is no sold-out state:
+     both are one-click controls on the collapsed row that write on the
+     change and are re-rendered from the server's answer. A useState here
+     would be a second, slower opinion about a column this form no longer
+     saves. */
   const [confirmPriceCents, setConfirmPriceCents] = useState<number | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
 
@@ -813,7 +861,6 @@ function ItemRow({
     item.allergen_note ?? "",
     item.category_id,
     item.sort_order,
-    item.pick_label ?? "",
   ].join("|");
   const [seen, setSeen] = useState(seedItem);
   const [replaced, setReplaced] = useState(false);
@@ -827,7 +874,6 @@ function ItemRow({
     allergenNote,
     categoryId,
     sortOrder,
-    pickLabel,
   ].join("|");
   if (seen !== seedItem) {
     // ...and it no longer takes the typing in silence. Two conditions,
@@ -841,7 +887,6 @@ function ItemRow({
     setAllergenNote(item.allergen_note ?? "");
     setCategoryId(item.category_id);
     setSortOrder(String(item.sort_order));
-    setPickLabel(item.pick_label ?? "");
     // The message from the write that CAUSED this re-seed is deliberately
     // left standing: revalidatePath lands these props in the same commit
     // as the result, so clearing here would wipe "Saved." the instant it
@@ -889,8 +934,7 @@ function ItemRow({
     description !== (item.description ?? "") ||
     allergenNote !== (item.allergen_note ?? "") ||
     categoryId !== item.category_id ||
-    sortOrder !== String(item.sort_order) ||
-    pickLabel !== (item.pick_label ?? "");
+    sortOrder !== String(item.sort_order);
 
   // The account of a loss stands until there is something new to lose.
   if (replaced && dirty) setReplaced(false);
@@ -911,20 +955,23 @@ function ItemRow({
       priceDollars: price,
       allergenNote,
       sortOrder,
-      pickLabel,
-      /* Deliberately EMPTY, and lib/admin/edit.ts's saveMenuItem
-         deliberately ignores it: an update writes the seven columns this
-         row actually shows and never touches sold_out_until.
-         
+      /* BOTH deliberately EMPTY, and lib/admin/edit.ts's saveMenuItem
+         deliberately ignores both: an update writes the six columns this
+         form actually shows and touches neither sold_out_until nor
+         pick_label.
+
          Sending `item.sold_out_until` here -- which is what this did --
          echoed a prop that may be minutes old. The owner marks the
          branzino sold out from their own screen at seven; the operator
          fixes its description in a tab opened at ten to, and the save
          puts the fish back on sale, live on the very next call, with the
-         success sentence talking about the description. Sold-out is its
-         own one-click control because the kitchen runs out mid-service,
-         and it stays the only writer of that column. */
+         success sentence talking about the description. The pick is now
+         the same kind of control and carries the same hazard: an echoed
+         `item.pick_label` would un-pick the dish somebody made the
+         chef's special while this tab was open. Each column has one
+         writer, and it is the control that sits on the row. */
       soldOutUntil: "",
+      pickLabel: "",
     };
   }
 
@@ -996,22 +1043,70 @@ function ItemRow({
               list names a number, and an operator who cannot see it on
               the rows has to open every dish to find which two collide. */}
           <span className="text-muted num">sort {item.sort_order}</span>
+          {/* One control, one write. The kitchen runs out of branzino at
+              seven and the agent has to stop selling it on the next call
+              -- opening an edit row and re-saving six other fields is the
+              wrong shape for that. */}
+          <select
+            className="input"
+            aria-label={`${item.name} on the phone`}
+            value={item.sold_out_until ?? ""}
+            disabled={pending}
+            onChange={(e) => run(() => setSoldOutAction(locationId, item.id, e.target.value))}
+          >
+            <option value="">Available</option>
+            <option value="reopen">{UNTIL_LABEL.reopen}</option>
+            <option value="close">{UNTIL_LABEL.close}</option>
+          </select>
+          {/* AND THE SAME SHAPE FOR THE OTHER THING THE AGENT SAYS ABOUT
+              A DISH, for the reason the sold-out control is already on
+              the row: a scan down the card has to show what the phone is
+              refusing AND what it is praising, without opening anything.
+              This one used to sit inside the edit form below, which meant
+              the words "pick", "best seller" and "chef's special"
+              appeared nowhere on this tab until an operator had already
+              opened a dish -- and the chip that names a pick only renders
+              on a restaurant that has one, so on the restaurant that has
+              none the whole feature was invisible. Its own action, its
+              own write, on the change: no Save, and nothing else on the
+              row re-sent with it.
+
+              BOTH SELECTS SIT OUTSIDE .menu-edit-row-actions, which is
+              nowrap so that Remove -- which destroys a dish with no undo
+              -- can never come apart from the Edit an operator is aiming
+              at. Four controls do not fit one line of a 300px card, so
+              inside that block they would have overflowed the card's edge
+              instead of wrapping; out here the row's own flex-wrap puts
+              the pair of selects on one line and the pair of buttons on
+              the next. */}
+          <select
+            className="input"
+            aria-label={`${item.name} as a pick`}
+            value={item.pick_label ?? ""}
+            /* Shut, not merely refused afterwards, when this dish is not
+               one of the three and there is no fourth slot: every option
+               it could offer is one the trigger will certainly refuse.
+               The dishes that HOLD the three keep their control -- the
+               trigger's "already counted" branch lets a pick be re-worded
+               or cleared, and clearing one is the only way back under the
+               cap. The sentence saying why is on the Menu card, once,
+               because it is a fact about the restaurant rather than about
+               this row. */
+            disabled={pending || capReached}
+            onChange={(e) => run(() => setPickAction(locationId, item.id, e.target.value))}
+          >
+            <option value="">Not a pick</option>
+            <option value="best_seller">{PICK_LABEL.best_seller}</option>
+            {/* Only this one. A restaurant may call any number of dishes
+                a best seller -- lib/agent/menu.ts says "one of our best
+                sellers", partitive -- and exactly one the chef's special,
+                because that phrase is definite and the agent may name two
+                picks in a single call. */}
+            <option value="chefs_special" disabled={specialTaken}>
+              {PICK_LABEL.chefs_special}
+            </option>
+          </select>
           <div className="menu-edit-row-actions">
-            {/* One control, one write. The kitchen runs out of branzino
-                at seven and the agent has to stop selling it on the next
-                call -- opening an edit row and re-saving six other
-                fields is the wrong shape for that. */}
-            <select
-              className="input"
-              aria-label={`${item.name} on the phone`}
-              value={item.sold_out_until ?? ""}
-              disabled={pending}
-              onChange={(e) => run(() => setSoldOutAction(locationId, item.id, e.target.value))}
-            >
-              <option value="">Available</option>
-              <option value="reopen">{UNTIL_LABEL.reopen}</option>
-              <option value="close">{UNTIL_LABEL.close}</option>
-            </select>
             <button
               type="button"
               className="btn btn-secondary"
@@ -1180,39 +1275,14 @@ function ItemRow({
             onChange={(e) => setSortOrder(e.target.value)}
           />
         </div>
-        <div className="field">
-          {/* The same shape as the sold-out control further up this row:
-              a select over a constrained set with an explicit "none of
-              them" option. Not a checkbox any more -- there are two kinds
-              of pick and a third would cost nothing -- and not a new
-              control family either: .field + .input is what every other
-              choice on this screen already wears, including the touch
-              target, which `.input, select` gives it under a coarse
-              pointer with no class of its own. */}
-          <label htmlFor={`ma-item-pick-${item.id}`}>Pick</label>
-          <select
-            id={`ma-item-pick-${item.id}`}
-            className="input"
-            value={pickLabel}
-            disabled={pending || capReached}
-            onChange={(e) => setPickLabel(e.target.value)}
-          >
-            <option value="">Not a pick</option>
-            <option value="best_seller">{PICK_LABEL.best_seller}</option>
-            <option value="chefs_special" disabled={specialTaken}>
-              {PICK_LABEL.chefs_special}
-            </option>
-          </select>
-          {capReached ? (
-            <p className="setup-note">
-              Three dishes are already picked. Clear one to choose another.
-            </p>
-          ) : specialTaken ? (
-            <p className="setup-note">
-              Another dish is already the chef&rsquo;s special. There can only be one.
-            </p>
-          ) : null}
-        </div>
+        {/* NO PICK FIELD HERE, and its absence is the point. The control
+            is on the collapsed row above, where it saves on the change;
+            a second control for the same column that saved only on Save
+            would be two controls disagreeing about when the column is
+            written -- and the one behind the Edit button would be the one
+            re-sending a value the page may have rendered minutes ago.
+            Sold-out made the same journey off this form for the same
+            reason. */}
         <span className="price-preview text-muted">
           {previewCents === null ? "Not a valid price." : `Stores ${money(previewCents)}.`}
         </span>
@@ -1235,7 +1305,6 @@ function ItemRow({
             setAllergenNote(item.allergen_note ?? "");
             setCategoryId(item.category_id);
             setSortOrder(String(item.sort_order));
-            setPickLabel(item.pick_label ?? "");
             setEditing(false);
             setConfirmPriceCents(null);
             setResult(null);
@@ -1249,10 +1318,8 @@ function ItemRow({
         The description is read aloud to callers as what the dish comes with. The staff note is
         not: lib/agent/menu.ts leaves it out of the assistant&rsquo;s payload on purpose,
         because an allergy question is transferred to a person rather than answered from a
-        column. A pick lets the assistant say once that the dish is one of your best sellers,
-        or that it is the chef&rsquo;s special &mdash; in the caller&rsquo;s own language,
-        since that is a phrase and not a name. Any number of dishes can be a best seller;
-        only one can be the chef&rsquo;s special.
+        column. Whether the dish is a pick, and whether the phone is offering it at all, are
+        set on the row itself and save the moment they are changed.
       </p>
 
       {duplicate ? (

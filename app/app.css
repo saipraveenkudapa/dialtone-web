@@ -1360,22 +1360,37 @@ a:hover { color: var(--color-accent); }
 /* The controls leave the row's right edge -- and on a wrapped row, the
    right edge of whatever line they land on. */
 .menu-item-row .menu-edit-row-actions { margin-left: auto; }
-/* The one control in the row is a <select class="input">, and .input is
-   width:100%: unbound it takes the whole line and the buttons wrap off
-   it on every row. Capped exactly as .hours-times .input is, and for
-   the same reason -- 130px and not the 160px this first shipped with,
-   because 160 did not fit. Measured on the reported iPad: the card's
-   row is 328.6px, the three controls at 160 came to 261.6px against the
-   230px the name and price leave them, so they wrapped on every row and
-   the row stood 116-160px tall against the ~44px a card grid is worth
-   having. At 130 they are 231.6px and the bar is one line. */
+/* THE ROW CARRIES TWO SELECTS NOW -- what the phone is refusing, and
+   what it is praising -- and .input is width:100%: unbound, either one
+   takes the whole line and everything after it wraps off. Capped exactly
+   as .hours-times .input is, and for the same reason -- 130px and not the
+   160px this first shipped with, because 160 did not fit. Measured on the
+   reported iPad: the card's row is 328.6px, and at 160 the sold-out
+   select plus Edit and Remove came to 261.6px against the 230px the name
+   and the price leave them, so they wrapped on every row and the row
+   stood 116-160px tall against the ~44px a card grid is worth having.
+
+   At 130 the two selects are 268px with the gap between them: one line
+   of their own, under the name. The buttons are 101.6px and take the
+   line after it. The four cannot share a line at any cap that leaves
+   "Out until close" and "Chef's special" readable in the closed box --
+   which is what the sold-out select's chosen option is FOR, since it is
+   one of the three marks that say a dish is off. */
 .menu-item-row .input { max-width: 130px; }
-/* And once they fit, they stay put. A wrapped actions block puts Remove
-   -- which destroys a dish with no undo -- on the second line for a dish
-   with a description and beside Edit for one without, so the destructive
-   button moves depending on what the row happens to say. .menu-item-row
-   already wraps as a whole, so the controls still take their own line on
-   a phone; what they may not do is come apart from each other. */
+/* And what does share a line stays put. A wrapped actions block puts
+   Remove -- which destroys a dish with no undo -- on the second line for
+   a dish with a description and beside Edit for one without, so the
+   destructive button moves depending on what the row happens to say.
+   .menu-item-row already wraps as a whole, so the controls still take
+   their own line on a phone; what they may not do is come apart from
+   each other.
+
+   Which is why the two selects sit OUTSIDE this block, as children of
+   the row: inside it, nowrap would hold 369.6px of controls on one line
+   in a 328.6px row and hang them past the card's edge -- the one thing a
+   card grid may never do. Out there the row's own flex-wrap breaks the
+   line between the selects and the buttons, and the pair that must not
+   come apart never does. */
 .menu-item-row .menu-edit-row-actions { flex-wrap: nowrap; }
 /* And the two buttons beside that select are given its height, so the
    three controls of a row are one bar rather than a 36px box with two
@@ -1422,14 +1437,17 @@ a:hover { color: var(--color-accent); }
   color: color-mix(in srgb, var(--color-text) 70%, transparent);
 }
 
-/* The item edit row's pick control had a class of its own here: a label
-   wrapped round a checkbox, so a coarse pointer had something bigger
-   than the 13px of browser chrome a checkbox is to hit. The checkbox is
-   gone -- there are two kinds of pick now, so it is a <select> like the
-   sold-out control beside it, wearing .input like every other field on
-   the row. The class went with it rather than staying as dead CSS naming
-   a control that no longer exists: `.input, select` in the coarse-pointer
-   block below already gives a select the same target. */
+/* The pick control had a class of its own here: a label wrapped round a
+   checkbox, so a coarse pointer had something bigger than the 13px of
+   browser chrome a checkbox is to hit. The checkbox is gone -- there are
+   two kinds of pick now, so it is a <select> like the sold-out control
+   beside it, wearing .input like every other field on the row -- and the
+   control itself has since moved out of the item edit form and onto the
+   collapsed row, beside sold-out, where it needs nothing this file does
+   not already give the select next to it. The class went with the
+   checkbox rather than staying as dead CSS naming a control that no
+   longer exists: `.input, select` in the coarse-pointer block below
+   already gives a select the same target. */
 .add-item-form { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: flex-end; margin-top: var(--space-2); }
 /* Put away, not thrown away. The category card discloses this form and
    Cancel hides it; unmounting it would take the typed name, price and
