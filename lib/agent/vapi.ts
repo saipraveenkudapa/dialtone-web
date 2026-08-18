@@ -42,11 +42,12 @@
  *
  *  So each entry is now read BY ITS OWN SHAPE, in every container: an
  *  entry carrying a nested `function` object is read there, an entry
- *  carrying `name`/`arguments` flat is read flat, and `arguments` may be
- *  a JSON string or an already-parsed object in either. See
- *  lib/agent/vapi-entry-shape.test.ts, which runs every tool's real
- *  declared arguments through all twelve container x entry-shape x
- *  encoding combinations. */
+ *  carrying `name`/`arguments` flat is read flat, the arguments are
+ *  taken from `arguments` OR `parameters` (Vapi's docs use both -- see
+ *  `argumentsIn`), and either may be a JSON string or an already-parsed
+ *  object in either shape. See lib/agent/vapi-entry-shape.test.ts, which
+ *  runs every tool's real declared arguments through all twenty-four
+ *  container x entry-shape x wire-key x encoding combinations. */
 
 export type ToolCall = {
   /** Vapi matches a result back to its call by exact string equality on
@@ -160,24 +161,85 @@ function firstOf(list: unknown[]): unknown {
  *  the first that yields a readable entry wins. */
 const CONTAINERS = ["toolCallList", "toolCalls", "toolWithToolCallList"] as const;
 
+/** A tool call's arguments, from whichever of the four places they came.
+ *
+ *  Vapi delivers them under TWO different key names and does not say
+ *  which you will get. Its own docs, fetched raw, disagree with each
+ *  other on the same page pair:
+ *
+ *    fern/server-url/events.mdx
+ *      toolCallList:         [{ id, name, parameters: {...} }]
+ *      toolWithToolCallList: [{ name, toolCall: { id, parameters } }]
+ *    fern/tools/custom-tools.mdx
+ *      toolCallList:         [{ id, name, arguments: {...} }]
+ *      toolWithToolCallList: [{ ..., toolCall: { id,
+ *                                function: { name, parameters } } }]
+ *
+ *  Three of those four carry `parameters`; production sends `arguments`.
+ *  Reading only `arguments` because that is what production sends is the
+ *  same mistake as reading `toolCallList` entries as flat because that
+ *  is what the docs said -- a guess about a shape, dressed as knowledge,
+ *  one Vapi serialization change away from the outage above. The
+ *  failure mode is identical too: the id survives, so the response is a
+ *  healthy-looking 200, `get_menu` and `get_hours` keep answering
+ *  perfectly because they have nothing to lose, and only a caller
+ *  placing an order hears "I don't have any items yet."
+ *
+ *  So both names are read, at both levels, first one defined wins --
+ *  `!== undefined` rather than truthiness so that an explicit `null` or
+ *  `""` still means "arguments were sent and are unreadable", which
+ *  `coerceArgs` turns into `{}` exactly as before.
+ *
+ *  THE ONE PLACE THIS WOULD BE WRONG is the OUTER element of
+ *  `toolWithToolCallList`, whose `parameters` is the tool's JSON SCHEMA
+ *  DECLARATION -- `{type:"object",properties:{location:{type:"string"}}}`
+ *  in custom-tools.mdx -- and not any caller's arguments. `entryIn`
+ *  descends into `toolCall` and hands back `null` if it cannot, so that
+ *  element never reaches this function. Keep it that way: loosening
+ *  `entryIn` would feed a route a JSON Schema as if a caller had said
+ *  it. */
+function argumentsIn(entry: Record<string, unknown>, fn: Record<string, unknown>): unknown {
+  if (fn.arguments !== undefined) return fn.arguments;
+  if (fn.parameters !== undefined) return fn.parameters;
+  if (entry.arguments !== undefined) return entry.arguments;
+  return entry.parameters;
+}
+
 /** One entry, read by its own shape.
  *
  *  The only question asked is "does this entry carry a nested `function`
  *  object" -- never "which list did it arrive in". Both shapes put the
  *  id at the ENTRY level, so `entry.id` is right for both.
  *
- *  The two fallbacks to the entry level are not speculative: a hybrid
- *  entry that names the tool inside `function` while leaving
- *  `arguments` outside it (or the reverse) is exactly the kind of
- *  half-and-half payload this module was caught out by once already, and
- *  the alternative to reading it is dropping a live caller's order. On a
- *  purely flat entry `fn` IS `entry`, so both are no-ops.
+ *  The fallbacks to the entry level are not speculative: a hybrid entry
+ *  that names the tool inside `function` while leaving the arguments
+ *  outside it (or the reverse) is exactly the kind of half-and-half
+ *  payload this module was caught out by once already, and the
+ *  alternative to reading it is dropping a live caller's order. On a
+ *  purely flat entry `fn` IS `entry`, so they are no-ops.
  *
  *  `null` means "nothing identifiable here", which lets the next
  *  container be tried rather than answering a real tool call sitting one
- *  key over with silence. An entry with neither an id nor a name is not
- *  a tool call anyone can answer: Vapi matches a result back by exact
- *  string equality on the id, and a route is chosen by the name. */
+ *  key over with silence. Only an entry with NEITHER an id NOR a name is
+ *  refused, and the `&&` is load-bearing in both directions:
+ *
+ *   - An id with no readable name is still answerable and must be kept.
+ *     Every tool has its own `server.url`, so the route already knows
+ *     which tool it is and nothing dispatches on `name`; the id, by
+ *     contrast, is the only thing Vapi can match a result back by, and
+ *     `agentUnauthorised` (lib/agent/respond.ts) keys its 200-vs-401
+ *     posture off it. Dropping the entry here would carry the id into
+ *     B4 as `null` and hand the caller silence -- the outage's own
+ *     failure class. Vapi's documented `toolWithToolCallList` puts the
+ *     name on the OUTER element, so an id with no name at entry level is
+ *     a shape Vapi prints in its own docs.
+ *   - A name with no id is worth keeping for the same reason
+ *     `parseToolCall` answers a flat body at all: the route can still do
+ *     the work and say so, and `toolCallId: null` is the honest report
+ *     that no id was sent.
+ *
+ *  Both directions are pinned by tests, so tightening this to `||`
+ *  fails rather than ships. */
 function readEntry(entry: unknown): Omit<ToolCall, "providerCallId"> | null {
   if (!isPlainObject(entry)) return null;
 
@@ -190,13 +252,19 @@ function readEntry(entry: unknown): Omit<ToolCall, "providerCallId"> | null {
   const name = stringOrNull(fn.name) ?? stringOrNull(entry.name);
   if (toolCallId === null && name === null) return null;
 
-  const rawArgs = fn.arguments === undefined ? entry.arguments : fn.arguments;
-  return { toolCallId, name, args: coerceArgs(rawArgs) };
+  return { toolCallId, name, args: coerceArgs(argumentsIn(entry, fn)) };
 }
 
 /** The entry a container's first element actually holds.
- *  `toolWithToolCallList` wraps the call in `{ tool, toolCall }`; the
- *  other two hold it directly. */
+ *  `toolWithToolCallList`'s element is the TOOL -- `{type, name,
+ *  parameters, description, server, messages, toolCall}` -- with the
+ *  call nested one level in under `toolCall`; the other two containers
+ *  hold the call directly.
+ *
+ *  Strict on purpose -- see `argumentsIn`. The outer element of a
+ *  `toolWithToolCallList` describes the TOOL, and its `parameters` is
+ *  the JSON Schema Vapi was given at provisioning time, so returning it
+ *  as a fallback would hand a route the schema as the caller's words. */
 function entryIn(container: (typeof CONTAINERS)[number], first: unknown): unknown {
   if (container !== "toolWithToolCallList") return first;
   if (isPlainObject(first) && isPlainObject(first.toolCall)) return first.toolCall;

@@ -34,10 +34,22 @@ import { parseToolCall } from "./vapi";
  *  had ever constructed one.
  *
  *  So this file does not test a shape. It tests the MATRIX: every
- *  container crossed with every entry shape crossed with both argument
- *  encodings, for every tool that carries arguments, asserting that all
- *  of them arrive at the route identically. A test that exercises one
- *  combination is how this shipped. */
+ *  container crossed with every entry shape crossed with both KEY NAMES
+ *  Vapi delivers arguments under crossed with both encodings, for every
+ *  tool that carries arguments, asserting that all of them arrive at the
+ *  route identically. A test that exercises one combination is how this
+ *  shipped.
+ *
+ *  The key-name axis was added after the first repair, and for the same
+ *  reason the repair was needed. Vapi's own docs, fetched raw, print the
+ *  arguments under `parameters` in three of the four argument-carrying
+ *  payloads they show (fern/server-url/events.mdx for both
+ *  `toolCallList` and `toolWithToolCallList`, fern/tools/custom-tools.mdx
+ *  for `toolCall.function`) and under `arguments` in the fourth.
+ *  Production sends `arguments`. Reading only what production sends is
+ *  the same guess that lost the two orders -- and it fails the same way,
+ *  invisibly: the id survives, so the response is a healthy 200 and only
+ *  a caller placing an order hears anything wrong. */
 
 // ---------------------------------------------------------------------
 // The matrix.
@@ -53,9 +65,16 @@ type Container = (typeof CONTAINERS)[number];
 const ENTRY_SHAPES = ["flat", "openai"] as const;
 type EntryShape = (typeof ENTRY_SHAPES)[number];
 
-/** `arguments` is a JSON string in OpenAI's own wire format and an
+/** The two key names Vapi puts a call's arguments under. Its docs use
+ *  `parameters` in events.mdx (both containers) and in custom-tools.mdx's
+ *  `toolCall.function`; production sends `arguments`. Which one arrives
+ *  says nothing about the container or the entry shape either. */
+const WIRE_KEYS = ["arguments", "parameters"] as const;
+type WireKey = (typeof WIRE_KEYS)[number];
+
+/** Arguments are a JSON string in OpenAI's own wire format and an
  *  already-parsed object in Vapi's documented one, and either can turn
- *  up in either entry shape. */
+ *  up in either entry shape under either key. */
 const ENCODINGS = ["object", "string"] as const;
 type Encoding = (typeof ENCODINGS)[number];
 
@@ -63,22 +82,35 @@ type Combination = {
   label: string;
   container: Container;
   shape: EntryShape;
+  wireKey: WireKey;
   encoding: Encoding;
 };
 
 const COMBINATIONS: Combination[] = CONTAINERS.flatMap((container) =>
   ENTRY_SHAPES.flatMap((shape) =>
-    ENCODINGS.map((encoding) => ({
-      label: `${container} + ${shape} entry + ${encoding} arguments`,
-      container,
-      shape,
-      encoding,
-    })),
+    WIRE_KEYS.flatMap((wireKey) =>
+      ENCODINGS.map((encoding) => ({
+        label: `${container} + ${shape} entry + ${encoding} ${wireKey}`,
+        container,
+        shape,
+        wireKey,
+        encoding,
+      })),
+    ),
   ),
 );
 
 const TOOL_CALL_ID = "call_9w3zzVmqKj04ah0kW95p5BjI";
 const PROVIDER_CALL_ID = "01a000a0-430a-766c-ad61-b9ac47a0552b";
+
+/** The JSON Schema this repo actually provisions for a tool -- the same
+ *  object lib/vapi/provision.ts sends to Vapi as `function.parameters`.
+ *  Used as the decoy on the outer element below: it is a real, plausible
+ *  `parameters` value that is emphatically NOT a set of arguments. */
+function declarationSchema(name: string) {
+  const tool = AGENT_TOOLS.find((t) => t.name === name);
+  return { type: "object", properties: tool?.properties ?? {}, required: tool?.required ?? [] };
+}
 
 function entryFor(
   combination: Combination,
@@ -88,8 +120,8 @@ function entryFor(
 ) {
   const encoded = combination.encoding === "string" ? JSON.stringify(args) : args;
   return combination.shape === "openai"
-    ? { id, type: "function", function: { name, arguments: encoded } }
-    : { id, name, arguments: encoded };
+    ? { id, type: "function", function: { name, [combination.wireKey]: encoded } }
+    : { id, name, [combination.wireKey]: encoded };
 }
 
 /** One Vapi POST body for a given point in the matrix. */
@@ -102,9 +134,27 @@ function envelope(
   const entry = entryFor(combination, name, args, id);
   const list =
     combination.container === "toolWithToolCallList"
-      ? // This container nests the call one level deeper, under a `tool`
-        // describing the declaration it came from.
-        [{ tool: { type: "function", function: { name } }, toolCall: entry }]
+      ? // This container nests the call one level deeper, inside an
+        // element that describes the tool DECLARATION it came from --
+        // built here exactly as Vapi's custom-tools.mdx prints it,
+        // `parameters` and all, because that outer `parameters` is the
+        // JSON SCHEMA and reading it as a caller's arguments would hand
+        // a route `{type:"object",properties:{...}}` as if someone had
+        // said it out loud. The parser must descend into `toolCall` and
+        // must never fall back to this element; every assertion in this
+        // file that compares this container against the other two is
+        // also the assertion that it doesn't.
+        [
+          {
+            type: "function",
+            name,
+            parameters: declarationSchema(name),
+            description: "the declaration, not anything a caller said",
+            server: { url: `https://x.test/api/agent/${name}` },
+            messages: [],
+            toolCall: entry,
+          },
+        ]
       : [entry];
 
   return {
@@ -411,7 +461,7 @@ describe("the fixtures are the tools' own declared arguments", () => {
   it("covers all nine tools and no others", () => {
     expect(Object.keys(ARGUMENTS).sort()).toEqual(AGENT_TOOLS.map((t) => t.name).sort());
     expect(AGENT_TOOLS).toHaveLength(9);
-    expect(COMBINATIONS).toHaveLength(12);
+    expect(COMBINATIONS).toHaveLength(24);
   });
 
   it.each(AGENT_TOOLS.map((t) => [t.name, t] as const))(
@@ -442,7 +492,7 @@ describe("the fixtures are the tools' own declared arguments", () => {
 
 describe("parseToolCall reads an entry by its own shape, not by its container", () => {
   it.each(AGENT_TOOLS.map((t) => [t.name] as const))(
-    "%s parses identically in all twelve container/entry combinations",
+    "%s parses identically in all twenty-four container/entry/key/encoding combinations",
     (name) => {
       for (const combination of COMBINATIONS) {
         expect(
@@ -541,6 +591,189 @@ describe("parseToolCall reads an entry by its own shape, not by its container", 
     });
   });
 
+  // -------------------------------------------------------------------
+  // The key name. Verbatim from Vapi's own documentation, fetched raw
+  // from github.com/VapiAI/docs. Production sends `arguments`; three of
+  // the four argument-carrying payloads Vapi PRINTS send `parameters`.
+  // Both are read, so a serialization change on Vapi's side cannot
+  // reopen the outage on a key Vapi itself documents.
+  // -------------------------------------------------------------------
+
+  it("reads the `parameters` key fern/server-url/events.mdx documents on toolCallList", () => {
+    const body = {
+      message: {
+        type: "tool-calls",
+        toolCallList: [
+          {
+            id: "abc123",
+            name: "sendEmail",
+            parameters: { emailAddress: "john@example.com", message: "Hi!" },
+          },
+        ],
+        call: { id: PROVIDER_CALL_ID },
+      },
+    };
+    expect(parseToolCall(body)).toEqual({
+      toolCallId: "abc123",
+      name: "sendEmail",
+      args: { emailAddress: "john@example.com", message: "Hi!" },
+      providerCallId: PROVIDER_CALL_ID,
+    });
+  });
+
+  it("reads the `parameters` key events.mdx documents on toolWithToolCallList", () => {
+    const body = {
+      message: {
+        type: "tool-calls",
+        toolWithToolCallList: [
+          {
+            name: "sendEmail",
+            toolCall: {
+              id: "abc123",
+              parameters: { emailAddress: "john@example.com", message: "Hi!" },
+            },
+          },
+        ],
+        call: { id: PROVIDER_CALL_ID },
+      },
+    };
+    // `name` is null on purpose, and harmlessly: this documented shape
+    // puts the tool's name on the OUTER element, which is the element
+    // whose `parameters` is a JSON Schema and which the parser therefore
+    // refuses to read. Nothing dispatches on `name` -- every tool has
+    // its own `server.url`, so the route already knows which tool it is
+    // -- while the id and the arguments, the two things that decide
+    // whether a caller is answered and with what, both survive.
+    expect(parseToolCall(body)).toEqual({
+      toolCallId: "abc123",
+      name: null,
+      args: { emailAddress: "john@example.com", message: "Hi!" },
+      providerCallId: PROVIDER_CALL_ID,
+    });
+  });
+
+  it("reads the `parameters` key custom-tools.mdx documents inside toolCall.function", () => {
+    const body = {
+      message: {
+        type: "tool-calls",
+        toolWithToolCallList: [
+          {
+            type: "function",
+            name: "get_weather",
+            // The DECLARATION's schema, on the outer element.
+            parameters: { type: "object", properties: { location: { type: "string" } } },
+            toolCall: {
+              id: "toolu_01DTPAzUm5Gk3zxrpJ969oMF",
+              type: "function",
+              // The CALL's arguments, under the same key name, one level in.
+              function: { name: "get_weather", parameters: { location: "San Francisco" } },
+            },
+          },
+        ],
+        call: { id: PROVIDER_CALL_ID },
+      },
+    };
+    expect(parseToolCall(body)).toEqual({
+      toolCallId: "toolu_01DTPAzUm5Gk3zxrpJ969oMF",
+      name: "get_weather",
+      args: { location: "San Francisco" },
+      providerCallId: PROVIDER_CALL_ID,
+    });
+  });
+
+  it("never reads the outer element's schema as the caller's arguments", () => {
+    // The same shape with NOTHING in the toolCall to read. The tempting
+    // fallback -- "no arguments here, try the element outside" -- would
+    // hand app/api/agent/order/route.ts a JSON Schema and let it act on
+    // `properties` as if a caller had said it. `{}` is the only honest
+    // answer, and it is the one every argument-less tool already sends.
+    const body = {
+      message: {
+        type: "tool-calls",
+        toolWithToolCallList: [
+          {
+            type: "function",
+            name: "place_order",
+            parameters: declarationSchema("place_order"),
+            toolCall: { id: TOOL_CALL_ID, function: { name: "place_order" } },
+          },
+        ],
+        call: { id: PROVIDER_CALL_ID },
+      },
+    };
+    expect(parseToolCall(body)).toEqual({
+      toolCallId: TOOL_CALL_ID,
+      name: "place_order",
+      args: {},
+      providerCallId: PROVIDER_CALL_ID,
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // The fall-through guard. `toolCallId === null && name === null` is
+  // the one branch that decides whether a partly-readable entry is
+  // answered or discarded, and it guards the id -- the only thing Vapi
+  // matches a result back by, and what respond.ts's 200-vs-401 posture
+  // keys off. Tightened to `||`, an entry carrying an id but no readable
+  // name would fall through every container to B4 and be answered with
+  // `toolCallId: null`: a result Vapi cannot match, which is the
+  // outage's own silence, in a new shape. These three pin both
+  // directions so that tightening fails instead of shipping.
+  // -------------------------------------------------------------------
+
+  it("keeps a flat entry that has an id and arguments but no readable name", () => {
+    const body = {
+      message: {
+        type: "tool-calls",
+        toolCallList: [{ id: TOOL_CALL_ID, arguments: { item: "wings" } }],
+        call: { id: PROVIDER_CALL_ID },
+      },
+    };
+    expect(parseToolCall(body)).toEqual({
+      toolCallId: TOOL_CALL_ID,
+      name: null,
+      args: { item: "wings" },
+      providerCallId: PROVIDER_CALL_ID,
+    });
+  });
+
+  it("keeps an OpenAI entry whose function carries arguments but no name", () => {
+    const body = {
+      message: {
+        type: "tool-calls",
+        toolCallList: [
+          { id: TOOL_CALL_ID, type: "function", function: { arguments: '{"item":"wings"}' } },
+        ],
+        call: { id: PROVIDER_CALL_ID },
+      },
+    };
+    expect(parseToolCall(body)).toEqual({
+      toolCallId: TOOL_CALL_ID,
+      name: null,
+      args: { item: "wings" },
+      providerCallId: PROVIDER_CALL_ID,
+    });
+  });
+
+  it("keeps an entry that has a name and arguments but no id", () => {
+    // The other direction. `toolCallId: null` is the honest report that
+    // no id was sent -- respond.ts answers 401 rather than minting one
+    // -- but the call is still identified rather than discarded.
+    const body = {
+      message: {
+        type: "tool-calls",
+        toolCallList: [{ name: "get_menu", arguments: { item: "wings" } }],
+        call: { id: PROVIDER_CALL_ID },
+      },
+    };
+    expect(parseToolCall(body)).toEqual({
+      toolCallId: null,
+      name: "get_menu",
+      args: { item: "wings" },
+      providerCallId: PROVIDER_CALL_ID,
+    });
+  });
+
   it("still answers an envelope whose entries are not objects at all with the call id alone", () => {
     const body = {
       message: { type: "tool-calls", toolCallList: ["nope"], call: { id: PROVIDER_CALL_ID } },
@@ -575,12 +808,13 @@ async function call(path: string, body: unknown) {
 
 describe("every tool that carries arguments delivers them to its route, whatever the shape", () => {
   it.each(ARGUMENT_CARRYING.map((t) => [t.name, t.path] as const))(
-    "%s reaches app/api/agent/%s identically in all twelve combinations",
+    "%s reaches app/api/agent/%s identically in all twenty-four combinations",
     async (name, path) => {
       const args = ARGUMENTS[name];
 
       // The reference: the one combination that always worked -- the
-      // documented container with the documented entry shape.
+      // documented container, the documented entry shape, the key
+      // production actually sends.
       const reference = await call(path, envelope(COMBINATIONS[0], name, args));
 
       for (const combination of COMBINATIONS) {
@@ -589,14 +823,14 @@ describe("every tool that carries arguments delivers them to its route, whatever
       }
 
       // ...and the arguments were load-bearing. Without this the
-      // assertion above is satisfied by twelve routes that all read
+      // assertion above is satisfied by twenty-four routes that all read
       // nothing, which is precisely what production was doing.
       const withoutArguments = await call(path, envelope(COMBINATIONS[0], name, {}));
       expect(reference).not.toEqual(withoutArguments);
     },
   );
 
-  it("get_hours still answers the same call id in all twelve combinations", async () => {
+  it("get_hours still answers the same call id in all twenty-four combinations", async () => {
     // The tool that hid the bug. It has no arguments to lose, but the
     // toolCallId it must be answered with is lost by the same mismatch.
     const reference = await call("hours", envelope(COMBINATIONS[0], "get_hours", {}));
@@ -606,6 +840,26 @@ describe("every tool that carries arguments delivers them to its route, whatever
       const actual = await call("hours", envelope(combination, "get_hours", {}));
       expect(actual, combination.label).toEqual(reference);
     }
+  });
+
+  it("answers an order whose entry carries an id and arguments but no name", async () => {
+    // What the fall-through guard is actually protecting, at the far end
+    // of it. `name` is nothing a route needs -- each tool has its own
+    // `server.url` -- but the id is the only string Vapi can match a
+    // result back by, so discarding this entry would place no order and
+    // send back an id Vapi is not waiting on: silence, on a call where
+    // the caller has already confirmed a total.
+    const { response, effects } = await call("order", {
+      message: {
+        type: "tool-calls",
+        toolCallList: [{ id: TOOL_CALL_ID, arguments: ARGUMENTS.place_order }],
+        call: { id: PROVIDER_CALL_ID },
+      },
+    });
+
+    expect(response.results[0].toolCallId).toBe(TOOL_CALL_ID);
+    expect(response.results[0].error).toBeUndefined();
+    expect(effects.rpc.find((r: { fn: string }) => r.fn === "place_order")).toBeDefined();
   });
 });
 
