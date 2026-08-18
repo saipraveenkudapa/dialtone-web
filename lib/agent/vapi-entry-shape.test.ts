@@ -11,7 +11,7 @@ import { parseToolCall } from "./vapi";
  *
  *    {"type":"pickup","items":[{"name":"Meatballs al Forno","quantity":1},
  *                              {"name":"Lasagne Verdi","quantity":1}],
- *     "customer_name":"Mike","customer_phone":"4093337727"}
+ *     "customer_name":"Mike","customer_phone":"4095550142"}
  *
  *  -- and got back "I don't have any items yet.", which is
  *  app/api/agent/order/route.ts's answer to `items` being absent.
@@ -377,7 +377,7 @@ const ROUTES: Record<string, (request: Request) => Promise<Response>> = {
 
 const FUTURE = "2026-08-20T19:00:00-07:00";
 const LATER = "2026-08-21T20:00:00-07:00";
-const PHONE = "4093337727";
+const PHONE = "4095550142";
 
 const ARGUMENTS: Record<string, Record<string, unknown>> = {
   get_menu: { item: "meatballs" },
@@ -524,7 +524,7 @@ describe("parseToolCall reads an entry by its own shape, not by its container", 
               arguments:
                 '{"type":"pickup","items":[{"name":"Meatballs al Forno","quantity":1},' +
                 '{"name":"Lasagne Verdi","quantity":1}],' +
-                '"customer_name":"Mike","customer_phone":"4093337727"}',
+                '"customer_name":"Mike","customer_phone":"4095550142"}',
             },
           },
         ],
@@ -542,7 +542,7 @@ describe("parseToolCall reads an entry by its own shape, not by its container", 
           { name: "Lasagne Verdi", quantity: 1 },
         ],
         customer_name: "Mike",
-        customer_phone: "4093337727",
+        customer_phone: "4095550142",
       },
       providerCallId: PROVIDER_CALL_ID,
     });
