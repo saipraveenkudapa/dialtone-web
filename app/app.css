@@ -1505,6 +1505,13 @@ a:hover { color: var(--color-accent); }
        registration marks, because it sits in /edit's .setup-stack among
        eight other blueprint sections; MenuEditor's is the only card on
        its page and does not.
+     * the pick control's width. Both screens now carry it -- one control
+       per dish, on the row, beside what the phone is refusing -- but
+       MenuAdmin's row is a flex line that sizes a <select> to its
+       content, while MenuEditor's is a table cell, and .input is
+       width:100%. Left alone, auto table layout hands that column a
+       third of the row and takes it off the dish's own name. So one
+       owner-scoped bound below, and nothing on the operator's side.
 
    If this block is ever reworked, the cheaper fix is the one the design
    called for and this did not take: an injectable write transport on
@@ -1513,6 +1520,32 @@ a:hover { color: var(--color-accent); }
 .menu-edit { display: flex; flex-direction: column; gap: var(--space-6); }
 .menu-edit .page-head .actions { margin-left: auto; }
 .menu-edit-add { max-width: 420px; }
+/* The pick, in the owner's item table only -- MenuAdmin has no .table.
+   .input is width:100%, which is right for a field standing in a .field
+   column and wrong for a <select> in a table cell, in BOTH directions:
+   at 1280px auto table layout handed this column a third of the row and
+   took it off the dish's own name, and at 375px the same declaration
+   collapsed the control to a 37px stub, because a percentage width
+   contributes nothing to a column's min-content size. Measured, not
+   guessed.
+
+   width:auto is a select's own answer to both. It sizes to its longest
+   option ("Chef's special"), identically on every row since every row
+   offers the same three, so the column can neither run away nor be
+   crushed, and no width is written down here to go stale when the
+   wording changes. The table stays inside .table-scroll, which is what
+   takes the overflow on a phone -- at 375px the fifth column takes the
+   table from 314px to 408px and that wrapper scrolls, while the page
+   itself still does not; the 44px touch floor is the coarse-pointer
+   rule's, untouched.
+
+   `td >` AND NOT A DESCENDANT. The row's own edit form opens inside a
+   <td> of this same table and carries a Category <select class="input">
+   of its own, in a .field beside three text boxes -- that one is a
+   field in a form column and MUST keep .input's width:100%, or its
+   label renders wider than the control it labels. The pick is the only
+   select that is a table cell's own child. */
+.menu-edit .table td > select.input { width: auto; }
 
 /* The categories side by side rather than end to end (/edit only --
    MenuEditor.tsx does not wear this). The operator's words were "can you

@@ -383,106 +383,111 @@ function ItemRow({
   if (!editing) {
     return (
       <>
-      <tr>
-        <td>
-          <div className={out ? "name out" : "name"}>{item.name}</div>
-          {item.description ? <div className="text-muted menu-edit-desc">{item.description}</div> : null}
-        </td>
-        <td className="num">{money(item.price_cents)}</td>
-        <td>
-          {out ? (
-            <span className="tag tag-out">{UNTIL_LABEL[item.sold_out_until!]}</span>
-          ) : (
-            <span className="tag tag-neutral">Available</span>
-          )}
-        </td>
-        <td>
-          {/* ONE CONTROL, ONE WRITE, on the row and not behind Edit. The
-              same shape as the operator's, for the same two reasons: a
-              scan down the menu has to show what the agent is praising
-              without opening fourteen dishes, and a restaurant that has
-              never picked anything must still be able to SEE that it
-              may. Saving it with the description would be the wrong
-              moment as well as the wrong write -- see setPickAndWrite in
-              MenuStore.
-
-              The CAP GREYS THE OPTIONS, NEVER THE BOX. A disabled select
-              is not focusable, so shutting it would leave a restaurant
-              at its three holding a faded control no keyboard and no
-              screen reader could reach, on every dish that is not one of
-              the three -- and no click on it could even raise a refusal
-              to read. Open, it is tabbed to, announced with the dish's
-              name, and reads out the kind on file. The chef's-special
-              courtesy already worked this way, so the row runs one
-              mechanism and not two. `pending` is the exception and is
-              this row's own write in flight, not a rule. */}
-          <select
-            className="input"
-            aria-label={`${item.name} as a pick`}
-            value={item.pick_label ?? ""}
-            disabled={pending}
-            onChange={(e) => void choosePick(e.target.value)}
-          >
-            <option value="">Not a pick</option>
-            <option value="best_seller" disabled={capReached}>
-              {PICK_LABEL.best_seller}
-            </option>
-            <option value="chefs_special" disabled={capReached || specialTaken}>
-              {PICK_LABEL.chefs_special}
-            </option>
-          </select>
-          {/* A pick on a dish that is sold out spends one of the three
-              slots and reaches nobody: lib/agent/menu.ts drops it from
-              the payload while the dish is out. Three spent slots can
-              add up to no warmth at all on the phone, and this is the
-              only place that can say why. */}
-          {item.pick_label && out ? (
-            <div className="text-muted menu-edit-desc">
-              Sold out, so the agent says nothing about it until it is back.
-            </div>
-          ) : null}
-        </td>
-        <td>
-          <div className="menu-edit-row-actions">
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon"
-              aria-label={`Move ${item.name} up`}
-              disabled={isFirst}
-              onClick={() => void moveItem(item.id, "up")}
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon"
-              aria-label={`Move ${item.name} down`}
-              disabled={isLast}
-              onClick={() => void moveItem(item.id, "down")}
-            >
-              ↓
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={() => setEditing(true)}>
-              Edit
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={() => void handleDelete()}>
-              Remove
-            </button>
-          </div>
-        </td>
-      </tr>
-      {/* Under the dish it is about, across the whole row, because these
-          are sentences: "you already have three picks", and the one a
-          failed Remove has always set and no closed row has ever shown.
-          A refusal squeezed into the Pick column would wrap to six
-          lines and sit beside the wrong thing. */}
-      {error ? (
         <tr>
-          <td colSpan={5}>
-            <p className="setup-error">{error}</p>
+          <td>
+            <div className={out ? "name out" : "name"}>{item.name}</div>
+            {item.description ? <div className="text-muted menu-edit-desc">{item.description}</div> : null}
+          </td>
+          <td className="num">{money(item.price_cents)}</td>
+          <td>
+            {out ? (
+              <span className="tag tag-out">{UNTIL_LABEL[item.sold_out_until!]}</span>
+            ) : (
+              <span className="tag tag-neutral">Available</span>
+            )}
+          </td>
+          <td>
+            {/* ONE CONTROL, ONE WRITE, on the row and not behind Edit. The
+                same shape as the operator's, for the same two reasons: a
+                scan down the menu has to show what the agent is praising
+                without opening fourteen dishes, and a restaurant that has
+                never picked anything must still be able to SEE that it
+                may. Saving it with the description would be the wrong
+                moment as well as the wrong write -- see setPickAndWrite in
+                MenuStore.
+
+                The CAP GREYS THE OPTIONS, NEVER THE BOX. A disabled select
+                is not focusable, so shutting it would leave a restaurant
+                at its three holding a faded control no keyboard and no
+                screen reader could reach, on every dish that is not one of
+                the three -- and no click on it could even raise a refusal
+                to read. Open, it is tabbed to, announced with the dish's
+                name, and reads out the kind on file. The chef's-special
+                courtesy already worked this way, so the row runs one
+                mechanism and not two. `pending` is the exception and is
+                this row's own write in flight, not a rule. */}
+            <select
+              className="input"
+              aria-label={`${item.name} as a pick`}
+              value={item.pick_label ?? ""}
+              disabled={pending}
+              onChange={(e) => void choosePick(e.target.value)}
+            >
+              <option value="">Not a pick</option>
+              <option value="best_seller" disabled={capReached}>
+                {PICK_LABEL.best_seller}
+              </option>
+              <option value="chefs_special" disabled={capReached || specialTaken}>
+                {PICK_LABEL.chefs_special}
+              </option>
+            </select>
+            {/* A pick on a dish that is sold out spends one of the three
+                slots and reaches nobody: lib/agent/menu.ts drops it from
+                the payload while the dish is out. Three spent slots can
+                add up to no warmth at all on the phone, and this is the
+                only place that can say why.
+
+                SHORT, and measured. A cell's widest line sets its column's
+                width under auto table layout, so one sold-out pick on one
+                dish was widening this column to 422px of a 1280px table --
+                wider than the dish names -- for a sentence that only
+                appears on that one row. "Silent" is the word the
+                operator's chip for the same state already uses. */}
+            {item.pick_label && out ? (
+              <div className="text-muted menu-edit-desc">Silent while sold out.</div>
+            ) : null}
+          </td>
+          <td>
+            <div className="menu-edit-row-actions">
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon"
+                aria-label={`Move ${item.name} up`}
+                disabled={isFirst}
+                onClick={() => void moveItem(item.id, "up")}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon"
+                aria-label={`Move ${item.name} down`}
+                disabled={isLast}
+                onClick={() => void moveItem(item.id, "down")}
+              >
+                ↓
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditing(true)}>
+                Edit
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => void handleDelete()}>
+                Remove
+              </button>
+            </div>
           </td>
         </tr>
-      ) : null}
+        {/* Under the dish it is about, across the whole row, because these
+            are sentences: "you already have three picks", and the one a
+            failed Remove has always set and no closed row has ever shown.
+            A refusal squeezed into the Pick column would wrap to six
+            lines and sit beside the wrong thing. */}
+        {error ? (
+          <tr>
+            <td colSpan={5}>
+              <p className="setup-error">{error}</p>
+            </td>
+          </tr>
+        ) : null}
       </>
     );
   }
