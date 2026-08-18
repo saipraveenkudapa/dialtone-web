@@ -6,7 +6,7 @@ import { Corners } from "./Corners";
 import { useMenu, type ItemPatch } from "./MenuStore";
 import { parseDollarsToCents } from "@/lib/money";
 import { money } from "@/lib/format";
-import { UNTIL_LABEL } from "@/lib/menu";
+import { PICK_LABEL, UNTIL_LABEL, pickLabelFromControl } from "@/lib/menu";
 import type { MenuCategoryWithItems } from "@/lib/data";
 import type { MenuItemRow } from "@/lib/supabase/types";
 
@@ -14,9 +14,18 @@ import type { MenuItemRow } from "@/lib/supabase/types";
  *  writers -- the same context ManagerScreen reads -- so a category or
  *  item added here shows up there without a reload, and the sold-out
  *  state ManagerScreen owns shows up here the same way. Nothing on this
- *  screen can flip sold-out itself; see the read-only tag in ItemRow. */
+ *  screen can flip sold-out itself; see the read-only tag in ItemRow.
+ *
+ *  THE PICK IS THE OTHER WAY ROUND, and deliberately. Sold-out is a
+ *  mid-service reflex and belongs on ManagerScreen: one hand, 56px
+ *  targets, no dialog. Which dish the restaurant wants the agent to
+ *  praise is a considered decision made once a season, about what the
+ *  kitchen stands behind -- so it is set HERE, on the row, beside the
+ *  price and the description it belongs with, and ManagerScreen carries
+ *  no pick control at all. The two screens each own the fact that moves
+ *  at their own speed. */
 export function MenuEditor() {
-  const { categories, itemCount, createCategory } = useMenu();
+  const { categories, itemCount, picks, createCategory } = useMenu();
   const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +66,29 @@ export function MenuEditor() {
         the phone agent quotes on the very next call -- the new value is always shown next to
         the old one before it commits.
       </p>
+
+      {/* Not on a menu with no dishes: a rule about rows that do not
+          exist is furniture on the emptiest version of this screen, and
+          furniture is not read. Same reasoning, and the same three
+          sentences, as the operator's Menu card -- rewritten for the
+          person whose restaurant it is. */}
+      {itemCount > 0 ? (
+        <p className="text-muted">
+          Three of your dishes at a time can be picks. The agent may say once on a call that a
+          picked dish is one of your best sellers, or that it is the chef&rsquo;s special -- in
+          the caller&rsquo;s own language, and at most twice in a whole call. Choose one on any
+          row. Any number of your dishes can be a best seller; only one can be the chef&rsquo;s
+          special. Like a price, a pick is read live on the very next call, with nothing to
+          re-push.
+          {picks.length >= 3 ? (
+            <>
+              {" "}
+              All three are taken -- {picks.map((p) => p.name).join(", ")}. Set one of those
+              back to &ldquo;not a pick&rdquo; on its row to choose another.
+            </>
+          ) : null}
+        </p>
+      ) : null}
 
       <form className="setup-row menu-edit-add" onSubmit={handleAdd}>
         <div className="field">
@@ -219,6 +251,11 @@ function CategoryCard({
                 <th>Item</th>
                 <th>Price</th>
                 <th>Status</th>
+                {/* Its own column, next to the other thing the agent says
+                    about a dish. Status is what the phone is REFUSING and
+                    is read-only here; this is what it is praising, and is
+                    the one fact on the row this screen owns outright. */}
+                <th>Pick</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -253,7 +290,7 @@ function ItemRow({
   isFirst: boolean;
   isLast: boolean;
 }) {
-  const { updateItem, deleteItem, moveItem } = useMenu();
+  const { updateItem, deleteItem, moveItem, picks, setPick } = useMenu();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(item.name);
   const [price, setPrice] = useState(String(item.price_cents / 100));
@@ -265,6 +302,35 @@ function ItemRow({
 
   const previewCents = parseDollarsToCents(price);
   const out = item.sold_out_until !== null;
+
+  /* The two courtesies, and neither is the enforcement. The cap is
+     menu_items_staff_pick_cap (23514) and the one-chef's-special rule is
+     menu_items_one_chefs_special_idx (23505); both sit below RLS and
+     refuse this screen's own UPDATE exactly as they refuse the
+     operator's. All these do is avoid spending a round trip to be told,
+     and say the rule before it is hit.
+
+     Not `!item.pick_label`: a row that already holds a slot may always
+     be re-worded or cleared -- the trigger's "already counted" branch
+     allows exactly that -- so the control must not be shut on the one
+     dish it still works for. */
+  const capReached = picks.length >= 3 && item.pick_label === null;
+  /* Excludes this row, so the dish that already is the chef's special
+     keeps it. A restaurant may call any number of dishes a best seller
+     -- the agent says "one of our best sellers", partitive -- and
+     exactly one the chef's special, because that phrase is definite and
+     the agent may name two picks in a single call. */
+  const specialTaken = picks.some(
+    (p) => p.id !== item.id && p.label === "chefs_special",
+  );
+
+  async function choosePick(value: string) {
+    setPending(true);
+    setError(null);
+    const result = await setPick(item.id, pickLabelFromControl(value));
+    setPending(false);
+    if (result.error) setError(result.error);
+  }
 
   function beginSave() {
     if (!name.trim() || previewCents === null) return;
@@ -316,6 +382,7 @@ function ItemRow({
 
   if (!editing) {
     return (
+      <>
       <tr>
         <td>
           <div className={out ? "name out" : "name"}>{item.name}</div>
@@ -328,6 +395,52 @@ function ItemRow({
           ) : (
             <span className="tag tag-neutral">Available</span>
           )}
+        </td>
+        <td>
+          {/* ONE CONTROL, ONE WRITE, on the row and not behind Edit. The
+              same shape as the operator's, for the same two reasons: a
+              scan down the menu has to show what the agent is praising
+              without opening fourteen dishes, and a restaurant that has
+              never picked anything must still be able to SEE that it
+              may. Saving it with the description would be the wrong
+              moment as well as the wrong write -- see setPickAndWrite in
+              MenuStore.
+
+              The CAP GREYS THE OPTIONS, NEVER THE BOX. A disabled select
+              is not focusable, so shutting it would leave a restaurant
+              at its three holding a faded control no keyboard and no
+              screen reader could reach, on every dish that is not one of
+              the three -- and no click on it could even raise a refusal
+              to read. Open, it is tabbed to, announced with the dish's
+              name, and reads out the kind on file. The chef's-special
+              courtesy already worked this way, so the row runs one
+              mechanism and not two. `pending` is the exception and is
+              this row's own write in flight, not a rule. */}
+          <select
+            className="input"
+            aria-label={`${item.name} as a pick`}
+            value={item.pick_label ?? ""}
+            disabled={pending}
+            onChange={(e) => void choosePick(e.target.value)}
+          >
+            <option value="">Not a pick</option>
+            <option value="best_seller" disabled={capReached}>
+              {PICK_LABEL.best_seller}
+            </option>
+            <option value="chefs_special" disabled={capReached || specialTaken}>
+              {PICK_LABEL.chefs_special}
+            </option>
+          </select>
+          {/* A pick on a dish that is sold out spends one of the three
+              slots and reaches nobody: lib/agent/menu.ts drops it from
+              the payload while the dish is out. Three spent slots can
+              add up to no warmth at all on the phone, and this is the
+              only place that can say why. */}
+          {item.pick_label && out ? (
+            <div className="text-muted menu-edit-desc">
+              Sold out, so the agent says nothing about it until it is back.
+            </div>
+          ) : null}
         </td>
         <td>
           <div className="menu-edit-row-actions">
@@ -358,12 +471,25 @@ function ItemRow({
           </div>
         </td>
       </tr>
+      {/* Under the dish it is about, across the whole row, because these
+          are sentences: "you already have three picks", and the one a
+          failed Remove has always set and no closed row has ever shown.
+          A refusal squeezed into the Pick column would wrap to six
+          lines and sit beside the wrong thing. */}
+      {error ? (
+        <tr>
+          <td colSpan={5}>
+            <p className="setup-error">{error}</p>
+          </td>
+        </tr>
+      ) : null}
+      </>
     );
   }
 
   return (
     <tr>
-      <td colSpan={4}>
+      <td colSpan={5}>
         <div className="menu-edit-row-edit">
           <div className="field">
             <label htmlFor={`item-name-${item.id}`}>Item</label>

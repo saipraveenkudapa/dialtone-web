@@ -12,8 +12,14 @@ import {
 import type { RealtimePostgresUpdatePayload } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { primeRealtimeAuth } from "@/lib/supabase/realtime";
+import { pickRefusal } from "@/lib/menu";
 import type { MenuCategoryWithItems } from "@/lib/data";
-import type { MenuCategoryRow, MenuItemRow, SoldOutUntil } from "@/lib/supabase/types";
+import type {
+  MenuCategoryRow,
+  MenuItemRow,
+  PickLabel,
+  SoldOutUntil,
+} from "@/lib/supabase/types";
 
 export type NewItemInput = {
   categoryId: string;
@@ -34,9 +40,19 @@ type WriteResult = { error?: string };
 type MenuStore = {
   categories: MenuCategoryWithItems[];
   soldOut: { id: string; name: string; until: SoldOutUntil }[];
+  /** The dishes the restaurant nominated, at most three, in menu order.
+   *  Read the same way `soldOut` is: the editor draws its own note from
+   *  this rather than re-deriving it, and a row asks it how many slots
+   *  are spent and whether the chef's special is taken. */
+  picks: { id: string; name: string; label: PickLabel; soldOut: boolean }[];
   itemCount: number;
   toggleSoldOut: (id: string) => void;
   setSoldOutUntil: (id: string, until: SoldOutUntil) => void;
+  /** Which kind of pick a dish is; null is not a pick. Its own writer,
+   *  like sold-out and for the same reason -- one control, one column,
+   *  saved on the change. `updateItem` below deliberately never touches
+   *  this column. */
+  setPick: (id: string, label: PickLabel | null) => Promise<WriteResult>;
   lastChangeAt: Date | null;
   /** Set when a write failed and the row was rolled back. */
   error: string | null;
@@ -309,6 +325,57 @@ export function MenuProvider({
     [applyItemFull],
   );
 
+  /* WHICH KIND OF PICK, and nothing else in the same statement.
+   *
+   * One column, written on its own, exactly as `write` above sends
+   * sold_out_until on its own -- and for a sharper reason than symmetry:
+   * updateItemAndWrite names five columns and pick_label is
+   * deliberately not among them, so an owner fixing a description cannot
+   * clear a pick. That guarantee is only worth anything if the reverse
+   * also holds. A pick sent as part of a row would echo whatever this
+   * tab last rendered, and un-sold-out a dish the kitchen pulled at
+   * seven, or un-pick the one somebody made the chef's special while
+   * this tab was open.
+   *
+   * THE TWO RULES ARE THE DATABASE'S, AND THEY REACH THIS WRITE. This
+   * goes out as the signed-in user under RLS (menu_items_rw, which
+   * admits any member of the restaurant's organization), and both rules
+   * sit below RLS: menu_items_staff_pick_cap is a BEFORE ROW trigger on
+   * menu_items with no role condition, and menu_items_one_chefs_special_idx
+   * is a unique index, which the storage engine checks for every writer
+   * there is. So the owner's UPDATE is refused by the same two things
+   * that refuse the operator's service-role UPDATE, and arrives here as
+   * 23514 or 23505. Counting rows in this browser first would be a check
+   * two people editing at once could both pass; the greyed options on
+   * the row are a courtesy, and this is the enforcement.
+   *
+   * Optimistic, like every other write in this file: the row shows the
+   * new kind at once and goes back to what it was if the write is
+   * refused, with the sentence that names the rule that refused it. */
+  const setPickAndWrite = useCallback(
+    async (previous: MenuItemRow, next: PickLabel | null) => {
+      applyItemFull({ ...previous, pick_label: next });
+      setLastChangeAt(new Date());
+      setError(null);
+
+      const { error: writeError } = await supabaseBrowser()
+        .from("menu_items")
+        .update({ pick_label: next })
+        .eq("id", previous.id);
+
+      if (writeError) {
+        applyItemFull(previous);
+        // The code alone. A PostgrestError's message, details and hint
+        // name columns, constraints and sometimes row values.
+        const message = pickRefusal(writeError.code);
+        setError(message);
+        return { error: message };
+      }
+      return {};
+    },
+    [applyItemFull],
+  );
+
   const deleteItemAndWrite = useCallback(
     async (item: MenuItemRow) => {
       removeItemFull(item.id);
@@ -353,6 +420,16 @@ export function MenuProvider({
 
   // Another manager's toggle has to land here without a refresh, or two
   // people during a rush will fight over the same item.
+  //
+  // THE WHOLE ROW, NOT A COLUMN LIST. `payload.new` carries every column
+  // of menu_items -- 20260807000300_realtime_publication.sql adds the
+  // table with no column filter, and nothing here narrows it -- and the
+  // handler spreads it, so a column added to the table arrives on this
+  // screen without a second place to remember. That is how pick_label
+  // gets here: both consoles now write it, so a pick the OPERATOR sets
+  // while the owner has their menu open lands on it the same way a
+  // sold-out toggle does. Replace this spread with named columns and
+  // that stops being true silently.
   useEffect(() => {
     const supabase = supabaseBrowser();
     let channel: ReturnType<typeof supabase.channel> | null = null;
@@ -412,6 +489,20 @@ export function MenuProvider({
           name: it.name,
           until: it.sold_out_until as SoldOutUntil,
         })),
+      /* Filtered on `!== null` and not on truthiness: the cap counts
+         non-null labels, and "" is neither a label nor a pick. Carries
+         `soldOut` with each one because a sold-out pick still spends a
+         slot and still reaches nobody -- lib/agent/menu.ts drops it from
+         the payload while the dish is out -- and the screen has to be
+         able to say both. */
+      picks: all
+        .filter((it) => it.pick_label !== null)
+        .map((it) => ({
+          id: it.id,
+          name: it.name,
+          label: it.pick_label as PickLabel,
+          soldOut: it.sold_out_until !== null,
+        })),
       lastChangeAt,
       error,
       toggleSoldOut: (id) => {
@@ -423,6 +514,17 @@ export function MenuProvider({
         const item = all.find((it) => it.id === id);
         if (!item) return;
         void write(id, until, item.sold_out_until);
+      },
+
+      setPick: (id, label) => {
+        const item = all.find((it) => it.id === id);
+        if (!item) return Promise.resolve({ error: "That item no longer exists." });
+        // Nothing to say to the database. Re-selecting the kind a dish
+        // already is would still be admitted -- the trigger's "already
+        // counted" branch exists for exactly that -- but a write nobody
+        // asked for is a write that can fail.
+        if (item.pick_label === label) return Promise.resolve({});
+        return setPickAndWrite(item, label);
       },
 
       createCategory: (name) => {
@@ -582,6 +684,7 @@ export function MenuProvider({
     swapCategoriesAndWrite,
     createItemAndWrite,
     updateItemAndWrite,
+    setPickAndWrite,
     deleteItemAndWrite,
     swapItemsAndWrite,
   ]);
