@@ -1,6 +1,7 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { MENU_UPLOAD_BUCKET } from "@/lib/menu-imports/file";
 import { readExtraction } from "@/lib/menu-imports/review";
+import { redactCardNumbers } from "@/lib/agent/redact";
 import type { MenuExtraction } from "@/lib/menu-imports/extraction";
 import type {
   BookingRow,
@@ -12,6 +13,7 @@ import type {
   MessageRow,
   OrderItemRow,
   OrderRow,
+  OrderStatus,
 } from "@/lib/supabase/types";
 
 export type MenuCategoryWithItems = MenuCategoryRow & { items: MenuItemRow[] };
@@ -588,4 +590,155 @@ export async function getMessagesPage(
     page: safePage,
     pageCount,
   };
+}
+
+/* ── the orders board ────────────────────────────────────────────────
+   The restaurant's own read of `orders`, for the screen a cook stands in
+   front of. Everything that read this table before belonged to somebody
+   else: the operator console's tab (lib/admin/data.ts, service role, ten
+   rows, four columns), the Today counters, and the single order hanging
+   off one call. None of them answers "what do I have to make, and by
+   when", which is the only question this one exists for.
+
+   On the signed-in user's session like every other read in this file, so
+   RLS's `orders_rw` / `order_items_rw` decide what comes back. The
+   explicit location filter picks one of the restaurants they belong to,
+   exactly as getCallsPage and getMessagesPage do. */
+
+/** How many orders the board carries.
+ *
+ *  A KITCHEN DOES NOT NEED EVERY ORDER EVER, and this is the number that
+ *  says so. Fifty is more than a whole evening of phone orders at a busy
+ *  restaurant -- MAX_ORDER_LINES is 40 lines on ONE order, and a
+ *  location taking fifty calls that all end in an order is a very good
+ *  night -- so a cook reading this board in service sees the whole of
+ *  service on it. Beyond that it is history, and history is not what a
+ *  pass is for.
+ *
+ *  Bounded by COUNT rather than by age, like every other log in this
+ *  product (see dateTimeIn in lib/format.ts, which is why every time on
+ *  this screen carries its date). Bounding by age would be the wrong
+ *  cut here for a specific reason: nothing in the product moves an order
+ *  out of 'new' yet, so "today's orders" and "the orders still to make"
+ *  are not the same set, and the second one is the kitchen's question.
+ *
+ *  It is also a cap on the page's weight: fifty orders with their lines
+ *  is one round trip and a few hundred rows, and it cannot grow with a
+ *  restaurant's age. */
+export const ORDERS_ON_THE_BOARD = 50;
+
+/** One line of a ticket: what to make, how many, what it costs, and what
+ *  the caller asked to be done differently to it. */
+export type BoardLine = {
+  id: string;
+  name: string;
+  quantity: number;
+  /** The whole line -- the snapshot price times the quantity -- in
+   *  integer cents, never a float and never formatted here. */
+  totalCents: number;
+  note: string | null;
+};
+
+/** One order, shaped for the people who have to cook it. */
+export type BoardOrder = {
+  id: string;
+  orderNumber: number;
+  /** The call it was taken on, when there still is one. `orders.call_id`
+   *  is ON DELETE SET NULL, so an order outlives its call. */
+  callId: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  type: "pickup" | "delivery";
+  status: OrderStatus;
+  totalCents: number;
+  placedAt: string;
+  promisedAt: string | null;
+  /** Where a delivery is going, scrubbed. Null on a pickup. */
+  address: string | null;
+  lines: BoardLine[];
+};
+
+/** What the caller asked for on one line, as a cook would read it.
+ *
+ *  `order_items.modifiers` is a jsonb array. `place_order` writes either
+ *  `[]` or a one-element array holding the spoken note
+ *  (20260812000650_place_order_item_notes.sql), and that migration
+ *  deliberately left room for priced modifier OBJECTS to arrive in the
+ *  same column later. So: strings are the note, anything else is not
+ *  rendered as one -- an object printed at a pass is noise on a ticket,
+ *  and guessing at its shape here would be inventing a sentence the
+ *  caller never said.
+ *
+ *  Scrubbed through lib/agent/redact.ts on the way out. The write path
+ *  already does this, and that is not enough: RLS's `order_items_rw`
+ *  lets any member of the organization write this column directly, so
+ *  the tool call is not the only way text gets in. Nothing this product
+ *  renders may contain a card number, and the last read before the
+ *  screen is the last place that promise can be kept. */
+function itemNote(modifiers: unknown): string | null {
+  if (!Array.isArray(modifiers)) return null;
+
+  const said = modifiers
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+
+  if (said.length === 0) return null;
+  return redactCardNumbers(said.join(" · "));
+}
+
+/** The newest orders for one restaurant, with their lines.
+ *
+ *  Newest first, because the ticket that just landed is the one nobody
+ *  has read yet. One round trip: the lines come back embedded rather
+ *  than as a query per order.
+ *
+ *  Every status comes back, including the two the board has no column
+ *  for -- the SCREEN decides what to do about a completed or cancelled
+ *  order, and it can only be honest about them if the read does not
+ *  quietly drop them first. */
+export async function getOrdersBoard(locationId: string): Promise<BoardOrder[]> {
+  const supabase = await supabaseServer();
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("*, order_items(*)")
+    .eq("location_id", locationId)
+    .order("placed_at", { ascending: false })
+    .limit(ORDERS_ON_THE_BOARD);
+
+  // Thrown, not swallowed: an empty board and a failed read look
+  // identical on screen, and one of them means "you have no orders"
+  // while the other means "we cannot tell you".
+  if (error) throw error;
+
+  const rows = (data ?? []) as (OrderRow & { order_items: OrderItemRow[] })[];
+
+  return rows.map((row) => ({
+    id: row.id,
+    orderNumber: row.order_number,
+    callId: row.call_id,
+    customerName: row.customer_name,
+    customerPhone: row.customer_phone,
+    type: row.type,
+    status: row.status,
+    totalCents: row.total_cents,
+    placedAt: row.placed_at,
+    promisedAt: row.promised_at,
+    // `orders.notes` IS the delivery address (see OrderRow). Scrubbed
+    // for the same reason an item note is, and with more cause: this is
+    // the one caller-spoken string `place_order` stores exactly as it
+    // arrives, with no redactCardNumbers anywhere on the write path.
+    address: row.notes === null ? null : redactCardNumbers(row.notes),
+    // The order the lines come back in is the order they were inserted
+    // in, which `place_order` takes care to make the order the caller
+    // said them in. There is no sort column on order_items to ask for.
+    lines: (row.order_items ?? []).map((item) => ({
+      id: item.id,
+      name: item.name_snapshot,
+      quantity: item.quantity,
+      totalCents: item.price_cents_snapshot * item.quantity,
+      note: itemNote(item.modifiers),
+    })),
+  }));
 }

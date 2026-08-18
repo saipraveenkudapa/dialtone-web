@@ -162,6 +162,19 @@ export type OrderRow = {
   status: OrderStatus;
   total_cents: number;
   placed_at: string;
+  /** When the caller was told the food would be ready. `place_order`
+   *  writes `now() + the location's pickup or delivery promise minutes`
+   *  on every order it places, so this is null only for a row written by
+   *  something else. It is the whole of "by when" for a kitchen. */
+  promised_at: string | null;
+  /** THE DELIVERY ADDRESS. Not a free note, despite the column name:
+   *  `place_order` writes `btrim(p_address)` here for a delivery and
+   *  NULL for a pickup, and refuses a delivery that has no address at
+   *  all (20260812000400_place_order.sql). Anything that renders it is
+   *  rendering a street address, and 20260812000650's own comment says
+   *  as much -- an item note had to go somewhere else precisely because
+   *  this field was already spoken for. */
+  notes: string | null;
 };
 
 export type BookingRow = {
