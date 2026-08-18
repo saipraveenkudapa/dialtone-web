@@ -80,6 +80,21 @@ const client = {
           },
         };
       },
+      /* Not a pick write, and here for one reason: Remove is a writer
+         that DOES use the store-wide `error` channel, which is what
+         lets a test arm a stale banner and then watch a pick that lands
+         clear it. Recorded like any other write so the assertion that a
+         pick sends pick_label alone still sees everything sent. */
+      delete() {
+        return {
+          eq(_column: string, id: string) {
+            writes.push({ table, values: { __delete: true }, id });
+            const error = refusal;
+            refusal = null;
+            return Promise.resolve({ error });
+          },
+        };
+      },
     };
   },
   channel: () => channel,
@@ -93,8 +108,26 @@ vi.mock("@/lib/supabase/realtime", () => ({
   primeRealtimeAuth: () => Promise.resolve(null),
 }));
 
-const { MenuProvider } = await import("@/components/MenuStore");
+const { MenuProvider, useMenu } = await import("@/components/MenuStore");
 const { MenuEditor } = await import("@/components/MenuEditor");
+
+/* ManagerScreen's SyncNote, to the line (ManagerScreen.tsx:31-32): the
+ * store-wide `error` is rendered INSTEAD of the sync status, and nothing
+ * clears it until the next write. Reproduced rather than imported
+ * because the real one wants the AgentStatus context and a timezone,
+ * and neither is what is under test here -- what is under test is which
+ * channel a refused pick lands in. MenuProvider is mounted in
+ * app/dashboard/layout.tsx, so this really is the same store instance
+ * the mid-service screen reads. */
+function SyncNoteStandIn() {
+  const { lastChangeAt, error } = useMenu();
+  if (error) return <b data-sync-note="">{error}</b>;
+  return (
+    <b data-sync-note="">
+      {lastChangeAt ? "Saved · live on the next call" : "In sync. Every call reads this list fresh."}
+    </b>
+  );
+}
 
 /* ── the restaurant ────────────────────────────────────────────────── */
 
@@ -173,6 +206,22 @@ async function mount(categories: MenuCategoryWithItems[]) {
     );
   });
 }
+
+/** The same store, with the mid-service screen's sync line beside the
+ *  editor -- which is the real arrangement, one route apart under a
+ *  provider that outlives both. */
+async function mountWithSyncNote(categories: MenuCategoryWithItems[]) {
+  await act(async () => {
+    root.render(
+      <MenuProvider locationId={LOCATION} initialCategories={categories}>
+        <MenuEditor />
+        <SyncNoteStandIn />
+      </MenuProvider>,
+    );
+  });
+}
+
+const syncNote = () => container.querySelector("[data-sync-note]")?.textContent ?? "";
 
 /** The pick control on one dish's row, by the name a screen reader
  *  announces it with. */
@@ -277,6 +326,7 @@ describe("the picks a restaurant can see on its own menu", () => {
     await mount(menu(dish("Carbonara", null)));
     expect(said()).toMatch(/next call/i);
   });
+
 });
 
 /* ── what crosses the wire ─────────────────────────────────────────── */
@@ -369,6 +419,57 @@ describe("a pick the database refuses", () => {
     expect(said()).not.toContain("row-level security");
     expect(said()).not.toContain("Failing row");
     expect(control("Tiramisu").value).toBe("");
+  });
+});
+
+/* ── whose screen the refusal belongs on ───────────────────────────── */
+
+describe("a refused pick and the screen with no pick control", () => {
+  it("never puts the cap refusal on the mid-service sync status", async () => {
+    /* MenuProvider lives in app/dashboard/layout.tsx, so /dashboard/menu
+       and /dashboard/menu/live share one store and the editor links
+       straight between them. ManagerScreen's SyncNote renders the
+       store-wide `error` INSTEAD of "In sync" / "Saved …", so a pick
+       refusal routed through it would tell a manager mid-service to
+       "set one of them back to 'not a pick' on its row" -- on the one
+       screen that deliberately carries no pick control -- over the only
+       line that says their sold-out toggles are landing, until some
+       later write cleared it. */
+    await mountWithSyncNote(menu(dish("Tiramisu", null)));
+    refusal = { code: "23514", message: "A restaurant can mark at most three picks." };
+    await choose(control("Tiramisu"), "best_seller");
+
+    expect(syncNote()).not.toContain(PICK_CAP_REFUSAL);
+    expect(syncNote()).toContain("live on the next call");
+    // Not lost, just addressed to the right screen: the sentence is on
+    // the row, under the dish it is about.
+    expect(said()).toContain(PICK_CAP_REFUSAL);
+    expect(control("Tiramisu").value).toBe("");
+  });
+
+  it("keeps a plain write failure off it as well", async () => {
+    // The same leak by the same route -- "and choose again" on a screen
+    // with nothing to choose.
+    await mountWithSyncNote(menu(dish("Tiramisu", null)));
+    refusal = { code: "08006", message: "connection failure" };
+    await choose(control("Tiramisu"), "best_seller");
+
+    expect(syncNote()).not.toContain(PICK_WRITE_FAILED);
+    expect(said()).toContain(PICK_WRITE_FAILED);
+  });
+
+  it("still clears a banner an earlier failure left there", async () => {
+    /* setError(null) at the top of the writer stays: routing the pick's
+       own refusal elsewhere must not turn the store's error into
+       something no write can clear. Remove, which does use the shared
+       channel, then a pick that lands. */
+    await mountWithSyncNote(menu(dish("Tiramisu", null)));
+    refusal = { code: "08006", message: "connection failure" };
+    await press("Remove");
+    expect(syncNote()).toContain("Could not remove that item.");
+
+    await choose(control("Tiramisu"), "best_seller");
+    expect(syncNote()).not.toContain("Could not remove that item.");
   });
 });
 

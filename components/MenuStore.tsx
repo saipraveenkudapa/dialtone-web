@@ -351,7 +351,23 @@ export function MenuProvider({
    *
    * Optimistic, like every other write in this file: the row shows the
    * new kind at once and goes back to what it was if the write is
-   * refused, with the sentence that names the rule that refused it. */
+   * refused, with the sentence that names the rule that refused it.
+   *
+   * THE REFUSAL IS RETURNED AND NOT PUT IN `error`, and this is the one
+   * writer here that differs. `error` is the store-wide channel, and
+   * ManagerScreen's SyncNote renders it INSTEAD of "In sync" / "Saved
+   * 7:14:02 · live on the next call" -- the one thing that screen uses
+   * to say a sold-out toggle landed. MenuProvider is mounted in
+   * app/dashboard/layout.tsx, so it is the same instance across
+   * /dashboard/menu and /dashboard/menu/live and the editor links
+   * straight between them. A pick refused here would therefore sit on
+   * the mid-service screen telling a manager to "set one of them back
+   * to 'not a pick' on its row" -- on the one screen that deliberately
+   * carries no pick control at all, over the status they actually need,
+   * until some later write cleared it. So the sentence goes back to the
+   * caller alone; ItemRow already renders it in its own full-width row
+   * under the dish it is about. `setError(null)` above stays: a stale
+   * banner from an earlier failure is still worth clearing. */
   const setPickAndWrite = useCallback(
     async (previous: MenuItemRow, next: PickLabel | null) => {
       applyItemFull({ ...previous, pick_label: next });
@@ -367,9 +383,7 @@ export function MenuProvider({
         applyItemFull(previous);
         // The code alone. A PostgrestError's message, details and hint
         // name columns, constraints and sometimes row values.
-        const message = pickRefusal(writeError.code);
-        setError(message);
-        return { error: message };
+        return { error: pickRefusal(writeError.code) };
       }
       return {};
     },
