@@ -26,6 +26,10 @@ import type { MenuItemRow } from "@/lib/supabase/types";
  *  at their own speed. */
 export function MenuEditor() {
   const { categories, itemCount, picks, createCategory } = useMenu();
+  // `picks` already carries the kind, so the holder needs no new store
+  // field. At most one of these exists -- menu_items_one_chefs_special_idx
+  // is what makes `find` rather than `filter` the right verb here.
+  const special = picks.find((p) => p.label === "chefs_special") ?? null;
   const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,14 +73,22 @@ export function MenuEditor() {
 
       {/* Not on a menu with no dishes: a rule about rows that do not
           exist is furniture on the emptiest version of this screen, and
-          furniture is not read. Same reasoning, and the same three
-          sentences, as the operator's Menu card -- rewritten for the
-          person whose restaurant it is. */}
+          furniture is not read. Same reasoning, and all four of the same
+          pieces, as the operator's Menu card -- the standing rule, the
+          named cap when it binds, and the named chef's special when
+          there is one -- rewritten for the person whose restaurant it
+          is. */}
       {itemCount > 0 ? (
         <p className="text-muted">
-          Three of your dishes at a time can be picks. The agent may say once on a call that a
-          picked dish is one of your best sellers, or that it is the chef&rsquo;s special -- in
-          the caller&rsquo;s own language, and at most twice in a whole call. Choose one on any
+          {/* "once", not "once on a call": the rule is once per PICKED
+              DISH, at most twice in the whole call. Bound to the call
+              instead, the same sentence said both once and twice, and an
+              owner who caught that stopped believing the two rules after
+              it -- the two they have to act on. This is the operator's
+              already-reviewed wording. */}
+          Three of your dishes at a time can be picks. The agent may say once that a picked dish
+          is one of your best sellers, or that it is the chef&rsquo;s special -- in the
+          caller&rsquo;s own language, and at most twice in a whole call. Choose one on any
           row. Any number of your dishes can be a best seller; only one can be the chef&rsquo;s
           special. Like a price, a pick is read live on the very next call, with nothing to
           re-push.
@@ -85,6 +97,23 @@ export function MenuEditor() {
               {" "}
               All three are taken -- {picks.map((p) => p.name).join(", ")}. Set one of those
               back to &ldquo;not a pick&rdquo; on its row to choose another.
+            </>
+          ) : null}
+          {/* NAMED, for the same reason the three above are, and it is
+              the harder of the two to find by eye: one dish among forty
+              rather than three. Without it the greyed "Chef's special"
+              option on every other row has nothing on screen explaining
+              itself -- and because that option is shut, the owner can
+              never raise the refusal that WOULD name the holder either,
+              so this clause is the only way this screen ever says which
+              dish has it. It stands on its own condition and not on the
+              cap's: with one special and two picks used, `picks.length
+              >= 3` is false and every other row is still greyed. */}
+          {special ? (
+            <>
+              {" "}
+              &ldquo;{special.name}&rdquo; is already your chef&rsquo;s special, so that choice
+              is offered on that dish alone.
             </>
           ) : null}
         </p>

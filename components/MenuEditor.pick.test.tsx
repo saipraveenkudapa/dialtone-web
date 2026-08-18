@@ -327,6 +327,50 @@ describe("the picks a restaurant can see on its own menu", () => {
     expect(said()).toMatch(/next call/i);
   });
 
+  it("binds “once” to the dish and not to the call", async () => {
+    /* lib/agent/prompt.ts's rule is once per PICKED DISH, at most twice
+       in a whole call. "once on a call ... and at most twice in a whole
+       call" said both of those in one sentence, and an owner who catches
+       a screen contradicting itself stops believing the two rules after
+       it -- the cap and the one-special rule, which are the two they
+       have to act on. This is the operator's wording, word for word. */
+    await mount(menu(dish("Carbonara", "best_seller")));
+    expect(said()).toContain(
+      "The agent may say once that a picked dish is one of your best sellers",
+    );
+    expect(said()).toContain("at most twice in a whole call");
+    expect(said()).not.toMatch(/once on a call/i);
+  });
+
+  it("names the dish that already holds the chef’s special", async () => {
+    /* The one dish among forty, and the harder of the two to find by
+       eye. Two picks used, so the cap clause is silent -- this clause
+       stands on its own condition, which is the whole point: with the
+       cap not binding, "Chef's special" is still greyed on every other
+       row and this is the only thing on screen that explains it. The
+       refusal that would name the holder is unreachable from here
+       precisely because the option is shut. */
+    await mount(
+      menu(
+        dish("Carbonara", "best_seller"),
+        dish("Osso Buco", "chefs_special"),
+        dish("Tiramisu", null),
+      ),
+    );
+
+    expect(said()).toContain(
+      "“Osso Buco” is already your chef’s special, so that choice is offered on that dish alone.",
+    );
+    expect(said()).not.toContain("All three are taken");
+    // The greyed control that sentence is there to account for.
+    expect(option(control("Tiramisu"), "chefs_special").disabled).toBe(true);
+  });
+
+  it("says nothing about a chef’s special when no dish holds it", async () => {
+    await mount(menu(dish("Carbonara", "best_seller"), dish("Tiramisu", null)));
+    expect(said()).not.toContain("is already your chef’s special");
+    expect(option(control("Tiramisu"), "chefs_special").disabled).toBe(false);
+  });
 });
 
 /* ── what crosses the wire ─────────────────────────────────────────── */
