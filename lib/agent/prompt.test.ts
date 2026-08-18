@@ -438,6 +438,42 @@ describe("system prompt", () => {
     // None of that loosens the instruction above: this is still a latency
     // guard, not a budget to spend, and the next person to need more room
     // should still cut something first.
+    //
+    // Seventh -- AND THIS ONE IS NOT A RAISE. The ceiling stays 9150 and
+    // the prompt got shorter, which is what the six entries above have
+    // been asking someone to do since the second of them.
+    //
+    // The product owner wanted the restaurant to choose WHICH KIND of
+    // pick a dish is, from two, and the agent to say the right one. The
+    // expensive way to do that is a prompt that names both phrases and
+    // branches between them, and grows again for the third. What
+    // happened instead: the rule stopped naming a phrase at all and now
+    // speaks whatever get_menu sends, so the wording lives in the
+    // payload (lib/agent/menu.ts's PICK_PHRASE) and a third kind of pick
+    // later costs this number nothing whatsoever.
+    //
+    //     -When get_menu marks an item as a staff pick, you may say once
+    //      that it is the one people come back for. At most twice in a
+    //      whole call, and only about an item get_menu marked - never
+    //      about anything else on the menu. ...
+    //     +When get_menu gives an item a pick, you may say once that it
+    //      is that pick - a phrase, not a name, so say it in the
+    //      caller's language. At most twice in a whole call, never about
+    //      anything else on the menu. ...
+    //
+    // 398 characters became 388, and the shorter line does MORE than the
+    // longer one: it also settles which of the two kinds of string a
+    // pick is. That mattered enough to be the reason this rule was
+    // rewritten rather than extended -- an item NAME is never
+    // translated, because a translated name puts the wrong food on the
+    // ticket, and the never-translate rule sits close enough to capture
+    // a pick by proximity and have the agent say an English phrase in
+    // the middle of a Spanish sentence.
+    //
+    // Measured, the same three zones as the Fifth entry: the template is
+    // 9042 (was 9052), the Los_Angeles fixture renders to 9084 (was
+    // 9094), and the longest zones render to 9095 (was 9105). Headroom
+    // under this unchanged ceiling goes from 45 characters to 55.
     expect(prompt.length).toBeLessThan(9150);
   });
 
@@ -467,11 +503,71 @@ describe("system prompt", () => {
     expect(whitespace).toContain("Address: not on file");
   });
 
-  describe("warmth is earned, not generic", () => {
-    it("ties the reaction to a staff pick and caps it", () => {
-      expect(SYSTEM_PROMPT_TEMPLATE).toContain("staff pick");
-      expect(SYSTEM_PROMPT_TEMPLATE).toContain("the one people come back for");
+  describe("warmth is earned, and the restaurant chooses the words", () => {
+    it("speaks the pick get_menu sent instead of a phrase written in here", () => {
+      // THE CHANGE THIS BLOCK WAS REWRITTEN FOR. The prompt used to name
+      // the compliment itself -- "the one people come back for" -- so a
+      // restaurant that wanted a different one needed a prompt edit, a
+      // re-bless and a re-push. The wording is payload now
+      // (lib/agent/menu.ts's PICK_PHRASE), and this is the assertion
+      // that keeps it there: neither label may appear in this file, which
+      // is what makes a third kind of pick cost the prompt nothing at
+      // all.
+      expect(SYSTEM_PROMPT_TEMPLATE).toContain("When get_menu gives an item a pick");
+      expect(SYSTEM_PROMPT_TEMPLATE).toContain("you may say once that it is that pick");
+      expect(SYSTEM_PROMPT_TEMPLATE).not.toContain("the one people come back for");
+      expect(SYSTEM_PROMPT_TEMPLATE).not.toMatch(/staff pick/i);
+      expect(SYSTEM_PROMPT_TEMPLATE).not.toMatch(/best seller/i);
+      expect(SYSTEM_PROMPT_TEMPLATE).not.toMatch(/chef/i);
+    });
+
+    it("keeps it to the item get_menu marked, and caps it at twice", () => {
       expect(SYSTEM_PROMPT_TEMPLATE).toMatch(/at most twice/i);
+      expect(SYSTEM_PROMPT_TEMPLATE).toContain("in a whole call");
+      expect(SYSTEM_PROMPT_TEMPLATE).toContain("never about anything else on the menu");
+    });
+
+    // The half of this that is easy to get wrong, and expensive: a pick
+    // is the OPPOSITE kind of string from an item name. A name is a thing
+    // on a ticket and is repeated exactly as get_menu gave it, because a
+    // translated one puts the wrong food in front of somebody. A pick is
+    // a concept, and a Spanish caller should hear the Spanish for it said
+    // the way a native speaker would -- not an English phrase dropped
+    // into the middle of a Spanish sentence. Two rules that point in
+    // opposite directions sit four paragraphs apart in the same prompt,
+    // so the pick rule has to say which of the two kinds it is in as many
+    // words, or the never-translate rule captures it by proximity.
+    it("says a pick is translated, where an item name never is", () => {
+      const orderSection = prompt.slice(
+        prompt.indexOf("## Taking an order"),
+        prompt.indexOf("## Taking a reservation"),
+      );
+      expect(orderSection).toContain(
+        "a phrase, not a name, so say it in the caller's language",
+      );
+      // ...and the rule it is deliberately distinguishing itself from is
+      // untouched, in both the places that carry a half of it.
+      expect(prompt).toContain(
+        "Menu item names are never translated - say and confirm them exactly as get_menu gave them.",
+      );
+      expect(orderSection).toContain(
+        "place_order takes only the exact English item name get_menu gave you",
+      );
+    });
+
+    // Moving the wording into the payload was supposed to FREE
+    // characters, not spend them: the rule stops carrying a phrase and
+    // carries the shape of one instead. It replaced a 398-character line
+    // with a 388-character one, and this is the ceiling that keeps the
+    // 10 from being quietly re-spent by the next edit. The prompt-length
+    // test below guards the whole; this guards the line that has grown
+    // twice already.
+    it("stays shorter than the rule that named a phrase", () => {
+      const rule = SYSTEM_PROMPT_TEMPLATE.split("\n").find((line) =>
+        line.startsWith("When get_menu gives an item a pick"),
+      );
+      expect(rule).toBeDefined();
+      expect(rule!.length).toBeLessThanOrEqual(388);
     });
 
     it("never claims a preference it cannot have", () => {
@@ -562,13 +658,38 @@ describe("template", () => {
   //     +Confirm each item ... (plus the staff-pick paragraph)
   // The allergy rule and its "There are no exceptions to this." are
   // untouched, and a test above asserts that independently of this hash.
+  //
+  // Re-blessed a third time, for the pick labels, and this is that
+  // reviewed record of it. The previous hash was
+  // 28d98cd0639686fd130c4efd6cedf408c006cd410874ef3bd8a3f8c0dfb71701.
+  // Exactly one line of the template changed, and only its first two
+  // sentences within that line:
+  //     -When get_menu marks an item as a staff pick, you may say once
+  //      that it is the one people come back for. At most twice in a
+  //      whole call, and only about an item get_menu marked - never
+  //      about anything else on the menu.
+  //     +When get_menu gives an item a pick, you may say once that it is
+  //      that pick - a phrase, not a name, so say it in the caller's
+  //      language. At most twice in a whole call, never about anything
+  //      else on the menu.
+  // The rest of that line -- "Never say a dish is your favourite, that
+  // you love it, or that you have tried it. You do not eat. Say nothing
+  // of the kind once an allergy has come up; that call is already
+  // transferring." -- is unchanged, byte for byte, and every clause in
+  // it is asserted above independently of this hash.
+  //
+  // What moved OUT of the template is the compliment itself: the prompt
+  // no longer contains a phrase for the agent to say about a dish, only
+  // the instruction to say the one get_menu sent. A restaurant changing
+  // its mind between the two kinds is now a column value, not an edit to
+  // this file, a re-bless of this hash and a re-push of the assistant.
   it("matches the blessed hash of the prompt text", () => {
     const hash = crypto
       .createHash("sha256")
       .update(SYSTEM_PROMPT_TEMPLATE, "utf-8")
       .digest("hex");
     expect(hash).toBe(
-      "28d98cd0639686fd130c4efd6cedf408c006cd410874ef3bd8a3f8c0dfb71701",
+      "bd396c9be630aa1051a4526a983bb2def3449df9c5a9a818f063406ea1cd1560",
     );
   });
 
