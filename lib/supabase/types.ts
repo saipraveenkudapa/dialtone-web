@@ -7,6 +7,14 @@
 
 export type SoldOutUntil = "reopen" | "close";
 
+/** Which kind of pick a nominated dish is. The stored value is a code,
+ *  never the words the agent says: lib/agent/menu.ts holds the one map
+ *  from these to the spoken phrase, and the agent says that phrase in the
+ *  caller's own language. Null is "not a pick" -- there is no third
+ *  member for it, so the column is nullable rather than carrying a
+ *  'none'. */
+export type PickLabel = "best_seller" | "chefs_special";
+
 export type CallStatus =
   | "ringing"
   | "in_progress"
@@ -79,9 +87,10 @@ export type MenuItemRow = {
   description: string | null;
   price_cents: number;
   sold_out_until: SoldOutUntil | null;
-  /** The restaurant nominated this dish. Capped at three per location by
-   *  a database trigger, not by the form. */
-  is_staff_pick: boolean;
+  /** The restaurant nominated this dish, and which kind of pick it is.
+   *  Null is not a pick. Capped at three non-null per location by a
+   *  database trigger, not by the form. */
+  pick_label: PickLabel | null;
   allergen_note: string | null;
   sort_order: number;
   updated_at: string;

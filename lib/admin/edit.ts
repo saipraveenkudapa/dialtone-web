@@ -19,7 +19,7 @@ import {
 } from "@/lib/vapi/provision";
 import type { DraftHours } from "@/lib/provisioning/draft";
 import type { HoursRow } from "@/lib/agent/hours";
-import type { LocationRow } from "@/lib/supabase/types";
+import type { LocationRow, PickLabel } from "@/lib/supabase/types";
 
 /* Editing a restaurant that already exists, from the operator console.
  *
@@ -748,9 +748,10 @@ export type MenuItemInput = {
   sortOrder: string;
   /** "" | "reopen" | "close". */
   soldOutUntil: string;
-  /** The restaurant nominated this dish. At most three per location,
+  /** "" | "best_seller" | "chefs_special" -- which kind of pick this dish
+   *  is, "" being not a pick. At most three non-null per location,
    *  refused by a database trigger rather than by this form. */
-  staffPick: boolean;
+  pickLabel: string;
 };
 
 export type MenuItemPatch = {
@@ -761,7 +762,7 @@ export type MenuItemPatch = {
   allergen_note: string | null;
   sort_order: number;
   sold_out_until: "reopen" | "close" | null;
-  is_staff_pick: boolean;
+  pick_label: PickLabel | null;
 };
 
 export function validateSoldOut(raw: string): Checked<"reopen" | "close" | null> {
@@ -769,6 +770,23 @@ export function validateSoldOut(raw: string): Checked<"reopen" | "close" | null>
   if (value === "") return { ok: true, value: null };
   if (value === "reopen" || value === "close") return { ok: true, value };
   return bad("Sold out until must be “when we restock” or “end of service”.");
+}
+
+/** Same shape as validateSoldOut above, for the same reason: a
+ *  constrained set the client hands over as a string, checked here before
+ *  it can reach a column that only knows how to refuse it as a Postgres
+ *  error.
+ *
+ *  And that refusal would be the WRONG error. menu_items.pick_label's
+ *  check constraint raises 23514, which is the same SQLSTATE the
+ *  three-per-restaurant trigger raises and which both writers below map
+ *  to "already has three picks" -- so an unknown kind, left to the
+ *  database, is reported to the operator as a cap they have not hit. */
+export function validatePickLabel(raw: string): Checked<PickLabel | null> {
+  const value = raw.trim();
+  if (value === "") return { ok: true, value: null };
+  if (value === "best_seller" || value === "chefs_special") return { ok: true, value };
+  return bad("A pick must be “best seller” or “chef’s special”.");
 }
 
 export function validateMenuItem(input: MenuItemInput): Checked<MenuItemPatch> {
@@ -809,6 +827,9 @@ export function validateMenuItem(input: MenuItemInput): Checked<MenuItemPatch> {
   const soldOut = validateSoldOut(input.soldOutUntil);
   if (!soldOut.ok) return bad(soldOut.error);
 
+  const pick = validatePickLabel(input.pickLabel);
+  if (!pick.ok) return bad(pick.error);
+
   return {
     ok: true,
     value: {
@@ -819,10 +840,12 @@ export function validateMenuItem(input: MenuItemInput): Checked<MenuItemPatch> {
       allergen_note,
       sort_order,
       sold_out_until: soldOut.value,
-      // Already a boolean -- nothing to coerce. The cap itself is
-      // enforced by menu_items_staff_pick_cap (SQLSTATE 23514), not
-      // here: this form only carries the operator's intent.
-      is_staff_pick: input.staffPick,
+      // Null, never "": the cap counts non-null labels, so an empty
+      // string would spend one of the restaurant's three slots on a dish
+      // the agent then says nothing about. WHICH kind is the operator's
+      // intent and is carried as typed; the cap itself is enforced by
+      // menu_items_staff_pick_cap (SQLSTATE 23514), not here.
+      pick_label: pick.value,
     },
   };
 }
@@ -1566,9 +1589,9 @@ export type EditableItem = {
   allergen_note: string | null;
   sort_order: number;
   sold_out_until: "reopen" | "close" | null;
-  /** The restaurant nominated this dish. At most three true per
-   *  location, held by menu_items_staff_pick_cap. */
-  is_staff_pick: boolean;
+  /** Which kind of pick this dish is, null being not a pick. At most
+   *  three non-null per location, held by menu_items_staff_pick_cap. */
+  pick_label: PickLabel | null;
 };
 
 export type EditableRecord = {
@@ -1629,7 +1652,7 @@ export async function getEditableRecord(locationId: string): Promise<EditableRec
     supabase
       .from("menu_items")
       .select(
-        "id, category_id, name, description, price_cents, allergen_note, sort_order, sold_out_until, is_staff_pick",
+        "id, category_id, name, description, price_cents, allergen_note, sort_order, sold_out_until, pick_label",
       )
       .eq("location_id", locationId)
       .order("sort_order"),
@@ -2264,6 +2287,13 @@ async function duplicateName(
   };
 }
 
+/** One sentence, two writers. createMenuItem and saveMenuItem were made
+ *  symmetric on this refusal deliberately -- the cap belongs to the
+ *  table, not to whichever form happens to carry the control -- so the
+ *  text lives here rather than being typed out twice and drifting. */
+const PICK_CAP_REACHED =
+  "This restaurant already has three picks. Set one of them back to “not a pick” first.";
+
 const DUPLICATE_ITEM =
   "This restaurant already has an item by that name. Two items with the same name make the " +
   "assistant ask which one the caller meant and then read back two identical names, which is a " +
@@ -2317,16 +2347,17 @@ export async function createMenuItem({
 
   if (error) {
     console.error("[admin-edit] item insert failed", { locationId, code: error.code });
-    // 23514 here is the staff-pick cap, the same constraint
-    // saveMenuItem's own 23514 branch below maps. AddItemForm hardcodes
-    // staffPick: false today, so a real caller cannot reach this yet --
-    // but createItemAction takes the flag from the client regardless,
-    // and the two writers of this table must stay symmetric rather than
-    // depend on which form happens to expose the checkbox.
+    // 23514 here is the pick cap, the same constraint saveMenuItem's own
+    // 23514 branch below maps. AddItemForm hardcodes pickLabel: "" today,
+    // so a real caller cannot reach this yet -- but createItemAction
+    // takes the label from the client regardless, and the two writers of
+    // this table must stay symmetric rather than depend on which form
+    // happens to expose the control. The column's own check constraint
+    // raises 23514 too, which is why validateMenuItem refuses an unknown
+    // label above rather than letting it arrive here wearing the cap's
+    // sentence.
     if (error.code === "23514") {
-      return refuse(
-        "This restaurant already has three staff picks. Unmark one first.",
-      );
+      return refuse(PICK_CAP_REACHED);
     }
     return { ok: false, error: WRITE_FAILED };
   }
@@ -2407,12 +2438,12 @@ export async function saveMenuItem({
 
   if (error) {
     console.error("[admin-edit] item update failed", { locationId, code: error.code });
-    // 23514 here is the staff-pick cap, the only check constraint this
-    // write can violate. Anything else keeps the generic refusal.
+    // 23514 here is the pick cap -- the only check constraint this write
+    // can still violate, since validateMenuItem has already refused a
+    // label the column would reject. Anything else keeps the generic
+    // refusal.
     if (error.code === "23514") {
-      return refuse(
-        "This restaurant already has three staff picks. Unmark one first.",
-      );
+      return refuse(PICK_CAP_REACHED);
     }
     return { ok: false, error: WRITE_FAILED };
   }

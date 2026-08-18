@@ -94,6 +94,7 @@ const {
   validateHours,
   validateMenuItem,
   validateOrderRouting,
+  validatePickLabel,
   validateRecording,
   validateService,
   validateSoldOut,
@@ -461,7 +462,7 @@ describe("the menu, validated", () => {
       allergenNote: "contains egg",
       sortOrder: "3",
       soldOutUntil: "",
-      staffPick: false,
+      pickLabel: "",
       ...over,
     };
   }
@@ -566,7 +567,7 @@ type Store = Record<Table, Row[]> & {
     op: "update" | "insert" | "upsert" | "delete";
     applied: number;
     /** The exact payload passed to `.update()`, present on update writes
-     *  only -- staff-pick tests need to see is_staff_pick on the wire,
+     *  only -- pick tests need to see pick_label on the wire,
      *  not just that a row landed. */
     patch?: Row;
   }[];
@@ -840,7 +841,7 @@ beforeEach(() => {
         allergen_note: null,
         sort_order: 0,
         sold_out_until: null,
-        is_staff_pick: false,
+        pick_label: null,
       },
       {
         id: NONNA_ITEM,
@@ -852,7 +853,7 @@ beforeEach(() => {
         allergen_note: null,
         sort_order: 0,
         sold_out_until: null,
-        is_staff_pick: false,
+        pick_label: null,
       },
     ],
     writes: [],
@@ -961,7 +962,7 @@ describe("the gate, which is the first statement of every export", () => {
             allergenNote: "",
             sortOrder: "1",
             soldOutUntil: "",
-            staffPick: false,
+            pickLabel: "",
           },
         }),
     ],
@@ -979,7 +980,7 @@ describe("the gate, which is the first statement of every export", () => {
             allergenNote: "",
             sortOrder: "0",
             soldOutUntil: "",
-            staffPick: false,
+            pickLabel: "",
           },
         }),
     ],
@@ -1106,7 +1107,7 @@ describe("a child row id is a selector and proves nothing", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
-        staffPick: false,
+        pickLabel: "",
       },
     });
 
@@ -1145,7 +1146,7 @@ describe("a child row id is a selector and proves nothing", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
-        staffPick: false,
+        pickLabel: "",
       },
     });
 
@@ -1165,7 +1166,7 @@ describe("a child row id is a selector and proves nothing", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
-        staffPick: false,
+        pickLabel: "",
       },
     });
 
@@ -1319,7 +1320,7 @@ describe("the edits that take effect on the next call", () => {
         allergenNote: "contains egg and pork",
         sortOrder: "0",
         soldOutUntil: "",
-        staffPick: false,
+        pickLabel: "",
       },
     });
     expect(priced).toMatchObject({ ok: true, phone: { state: "not-needed" } });
@@ -1355,7 +1356,7 @@ describe("the edits that take effect on the next call", () => {
         allergenNote: "",
         sortOrder: "1",
         soldOutUntil: "",
-        staffPick: false,
+        pickLabel: "",
       },
     });
 
@@ -1378,7 +1379,7 @@ describe("the edits that take effect on the next call", () => {
           allergenNote: "",
           sortOrder: "0",
           soldOutUntil: "",
-          staffPick: false,
+          pickLabel: "",
         },
       }),
     ).resolves.toMatchObject({ ok: true });
@@ -1415,7 +1416,7 @@ describe("the edits that take effect on the next call", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
-        staffPick: false,
+        pickLabel: "",
       },
     });
 
@@ -1447,7 +1448,7 @@ describe("the edits that take effect on the next call", () => {
         allergenNote: "",
         sortOrder: "0",
         soldOutUntil: "",
-        staffPick: false,
+        pickLabel: "",
       },
     });
 
@@ -1480,7 +1481,7 @@ describe("the edits that take effect on the next call", () => {
         sortOrder: "0",
         // What a page rendered before the dish sold out would send.
         soldOutUntil: "",
-        staffPick: false,
+        pickLabel: "",
       },
     });
 
@@ -1511,7 +1512,7 @@ describe("the edits that take effect on the next call", () => {
           allergenNote: "",
           sortOrder: "1",
           soldOutUntil: "",
-          staffPick: false,
+          pickLabel: "",
         },
       }),
     ).resolves.toMatchObject({ ok: true });
@@ -2149,7 +2150,7 @@ async function runSaveMenuItem(
       allergenNote: "",
       sortOrder: "0",
       soldOutUntil: "",
-      staffPick: false,
+      pickLabel: "",
       ...over,
     },
   });
@@ -2176,33 +2177,60 @@ async function runCreateMenuItem(opts: { failWith?: string } = {}) {
       allergenNote: "",
       sortOrder: "0",
       soldOutUntil: "",
-      staffPick: true,
+      pickLabel: "chefs_special",
     },
   });
   return { ...result, writes: store.writes };
 }
 
-describe("staff picks", () => {
-  it("carries the flag through to the write", async () => {
-    const { writes } = await runSaveMenuItem({ staffPick: true });
-    expect(writes.at(-1)?.patch?.is_staff_pick).toBe(true);
+describe("picks", () => {
+  it("holds pick_label to the two kinds, plus not-a-pick", () => {
+    expect(validatePickLabel("")).toEqual({ ok: true, value: null });
+    expect(validatePickLabel("  ")).toEqual({ ok: true, value: null });
+    expect(validatePickLabel("best_seller")).toEqual({ ok: true, value: "best_seller" });
+    expect(validatePickLabel("chefs_special")).toEqual({ ok: true, value: "chefs_special" });
+  });
+
+  it("refuses a kind the agent has no words for, rather than storing it", () => {
+    // lib/agent/menu.ts's PICK_PHRASE is the only place a code becomes
+    // something spoken; a code that is not in it reaches a caller as
+    // silence, and the column's check constraint would refuse it anyway
+    // as a 23514 -- which this screen reports as "already has three
+    // picks", the wrong sentence entirely. It is refused here, where the
+    // operator can be told what is actually wrong.
+    const bad = validatePickLabel("house_favourite");
+    expect(bad.ok).toBe(false);
+    expect(bad.ok === false && bad.error).toMatch(/best seller|chef/i);
+  });
+
+  it("carries the chosen kind through to the write", async () => {
+    const { writes } = await runSaveMenuItem({ pickLabel: "best_seller" });
+    expect(writes.at(-1)?.patch?.pick_label).toBe("best_seller");
+  });
+
+  it("writes null, not a string, when the dish is not a pick", async () => {
+    // The column is nullable and the cap counts non-null. An empty
+    // string would be a fourth pick as far as the trigger is concerned,
+    // and a code PICK_PHRASE has no phrase for as far as the agent is.
+    const { writes } = await runSaveMenuItem({ pickLabel: "" });
+    expect(writes.at(-1)?.patch?.pick_label).toBeNull();
   });
 
   it("turns the trigger's refusal into a sentence an operator can act on", async () => {
     // The trigger raises 23514. An operator must not be shown a Postgres
     // error, and must be told the actual rule.
-    const result = await runSaveMenuItem({ staffPick: true }, { failWith: "23514" });
+    const result = await runSaveMenuItem({ pickLabel: "best_seller" }, { failWith: "23514" });
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toMatch(/three/i);
     expect(result.ok === false && result.error).not.toMatch(/23514|violates|constraint/i);
   });
 
   it("maps the same cap refusal on create as on save", async () => {
-    // AddItemForm hardcodes staffPick: false today, so this path is not
+    // AddItemForm hardcodes pickLabel: "" today, so this path is not
     // reachable through the shipped UI -- but createItemAction accepts
-    // the flag from the client regardless, and the two writers of this
+    // the label from the client regardless, and the two writers of this
     // table have to stay symmetric rather than depend on which form
-    // happens to expose the checkbox. Before this fix, createMenuItem
+    // happens to expose the control. Before this fix, createMenuItem
     // returned the generic WRITE_FAILED for the identical 23514 here.
     const result = await runCreateMenuItem({ failWith: "23514" });
     expect(result.ok).toBe(false);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { shapeMenu, suggestAlternative } from "./menu";
 
 import type { MenuCategoryWithItems } from "@/lib/data";
+import type { PickLabel } from "@/lib/supabase/types";
 
 const category = (items: MenuCategoryWithItems["items"]) =>
   [
@@ -20,7 +21,11 @@ const item = (
   name: string,
   price_cents: number,
   sold_out_until: "close" | "reopen" | null,
-  extra: { description?: string | null; allergen_note?: string | null; is_staff_pick?: boolean } = {},
+  extra: {
+    description?: string | null;
+    allergen_note?: string | null;
+    pick_label?: PickLabel | null;
+  } = {},
 ) =>
   ({
     id,
@@ -31,7 +36,7 @@ const item = (
     price_cents,
     sold_out_until,
     allergen_note: null,
-    is_staff_pick: false,
+    pick_label: null,
     sort_order: 1,
     updated_at: "2026-08-12T00:00:00Z",
     ...extra,
@@ -189,34 +194,76 @@ describe("suggesting an alternative for a word a caller actually said", () => {
   });
 });
 
-describe("staff picks in the agent payload", () => {
-  it("marks a pick that is on offer", () => {
-    const menu = shapeMenu(category([item("i1", "Bucatini", 1800, null, { is_staff_pick: true })]));
-    expect(menu.categories[0].items[0].staff_pick).toBe(true);
+describe("picks in the agent payload", () => {
+  // The whole point of the change this file was rewritten for: the
+  // payload carries the WORDS, and the prompt no longer names a phrase.
+  // A third kind of pick later is one entry in PICK_PHRASE and costs the
+  // prompt nothing.
+  it("carries the spoken phrase for a pick that is on offer", () => {
+    const menu = shapeMenu(
+      category([item("i1", "Bucatini", 1800, null, { pick_label: "best_seller" })]),
+    );
+    expect(menu.categories[0].items[0].pick).toBe("a best seller");
+  });
+
+  it("carries the other kind, worded so it can be spoken as it stands", () => {
+    const menu = shapeMenu(
+      category([item("i1", "Bucatini", 1800, null, { pick_label: "chefs_special" })]),
+    );
+    expect(menu.categories[0].items[0].pick).toBe("the chef's special");
+  });
+
+  // The sentence the prompt builds is "it is <pick>", so each phrase
+  // carries its own article: "it is a best seller", "it is the chef's
+  // special". A phrase without one would leave the agent to invent the
+  // determiner, and the obvious invention -- "the restaurant's chef's
+  // special" -- is a double possessive no host would say out loud.
+  it("reads naturally after the words the prompt puts in front of it", () => {
+    for (const label of ["best_seller", "chefs_special"] as const) {
+      const menu = shapeMenu(category([item("i1", "Bucatini", 1800, null, { pick_label: label })]));
+      const spoken = `it is ${menu.categories[0].items[0].pick}`;
+      expect(spoken).toMatch(/^it is (a|the) /);
+      expect(spoken).not.toContain("'s chef's");
+    }
   });
 
   it("leaves the key off an ordinary item entirely", () => {
-    const menu = shapeMenu(category([item("i1", "Cacio e Pepe", 1800, null, { is_staff_pick: false })]));
-    // Absent, not false: this payload is fetched on every call that
-    // mentions food and sits in the latency budget.
-    expect("staff_pick" in menu.categories[0].items[0]).toBe(false);
+    const menu = shapeMenu(category([item("i1", "Cacio e Pepe", 1800, null, { pick_label: null })]));
+    // Absent, not null and not "": this payload is fetched on every call
+    // that mentions food and sits in the latency budget.
+    expect("pick" in menu.categories[0].items[0]).toBe(false);
   });
 
   it("suppresses a pick that is sold out until reopen", () => {
     const menu = shapeMenu(category([
-      item("i1", "Bucatini", 1800, "reopen", { is_staff_pick: true }),
+      item("i1", "Bucatini", 1800, "reopen", { pick_label: "best_seller" }),
     ]));
     // Praising a dish and refusing it in the same breath is worse than
-    // saying nothing. The flag was set weeks ago; sold-out was set this
+    // saying nothing. The label was set weeks ago; sold-out was set this
     // afternoon, and the fresher fact wins.
-    expect("staff_pick" in menu.categories[0].items[0]).toBe(false);
+    expect("pick" in menu.categories[0].items[0]).toBe(false);
     expect(menu.categories[0].items[0].sold_out).toBe(true);
   });
 
   it("suppresses a pick that is sold out until close", () => {
     const menu = shapeMenu(category([
-      item("i1", "Bucatini", 1800, "close", { is_staff_pick: true }),
+      item("i1", "Bucatini", 1800, "close", { pick_label: "chefs_special" }),
     ]));
-    expect("staff_pick" in menu.categories[0].items[0]).toBe(false);
+    expect("pick" in menu.categories[0].items[0]).toBe(false);
+  });
+
+  // A value the map has no phrase for is not a value the agent can say.
+  // The column's own check constraint refuses one, and validateMenuItem
+  // refuses one before that -- but a payload built from a row that got
+  // past both would otherwise put `undefined` on the wire.
+  it("says nothing at all about a label it has no words for", () => {
+    const menu = shapeMenu(
+      category([
+        item("i1", "Bucatini", 1800, null, {
+          pick_label: "house_favourite" as unknown as PickLabel,
+        }),
+      ]),
+    );
+    expect("pick" in menu.categories[0].items[0]).toBe(false);
   });
 });

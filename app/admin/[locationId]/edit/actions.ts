@@ -524,7 +524,7 @@ function menuItemInput(input: {
   allergenNote: string;
   sortOrder: string;
   soldOutUntil: string;
-  staffPick: boolean;
+  pickLabel: string;
 }) {
   return {
     categoryId: str(input?.categoryId),
@@ -534,7 +534,11 @@ function menuItemInput(input: {
     allergenNote: str(input?.allergenNote),
     sortOrder: str(input?.sortOrder),
     soldOutUntil: str(input?.soldOutUntil),
-    staffPick: bool(input?.staffPick),
+    // A string now, not a boolean, and still rebuilt rather than spread:
+    // `str` makes anything that is not a string an empty one, and
+    // validatePickLabel holds that to the two kinds plus not-a-pick
+    // before it can reach the column.
+    pickLabel: str(input?.pickLabel),
   };
 }
 
@@ -548,7 +552,7 @@ export async function createMenuItemAction(
     allergenNote: string;
     sortOrder: string;
     soldOutUntil: string;
-    staffPick: boolean;
+    pickLabel: string;
   },
 ): Promise<EditResult> {
   const denied = await gate(locationId);
@@ -568,7 +572,7 @@ export async function saveMenuItemAction(
     allergenNote: string;
     sortOrder: string;
     soldOutUntil: string;
-    staffPick: boolean;
+    pickLabel: string;
   },
 ): Promise<EditResult> {
   const denied = await gate(locationId);

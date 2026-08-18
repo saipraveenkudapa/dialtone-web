@@ -1,5 +1,6 @@
 import { matchesSpokenName } from "@/lib/agent/orders";
 import type { MenuCategoryWithItems } from "@/lib/data";
+import type { PickLabel } from "@/lib/supabase/types";
 
 export type AgentMenuItem = {
   name: string;
@@ -33,17 +34,47 @@ export type AgentMenuItem = {
    *  and the same reasoning on menu_imports.raw_extraction. */
   ingredients?: string;
 
-  /** The restaurant nominated this dish, and the agent may say once that
-   *  it is the one people come back for -- see the rule in
-   *  lib/agent/prompt.ts, which caps it at twice a call.
+  /** WHAT THE AGENT SAYS about a dish the restaurant nominated -- the
+   *  words, not a flag. The prompt's rule is now one line that speaks
+   *  whatever arrives here, so a third kind of pick is one entry in
+   *  PICK_PHRASE below and costs the prompt nothing at all.
    *
-   *  Absent rather than `false` on ordinary items, for the same latency
+   *  Absent rather than empty on ordinary items, for the same latency
    *  reason `ingredients` is, and absent on a pick that is SOLD OUT:
    *  praising a dish and then refusing it in the same breath is worse
    *  than saying nothing. Suppressing it here rather than in the prompt
    *  means the agent is never holding a contradiction it has to reason
    *  its way out of mid-call. */
-  staff_pick?: true;
+  pick?: string;
+};
+
+/** The two kinds of pick, in the words a caller hears.
+ *
+ *  ARTICLES INCLUDED, and that is the whole design of these strings. The
+ *  prompt says the agent may say once that a dish "is that pick", so the
+ *  sentence it builds is `it is ` + this value: "it is a best seller",
+ *  "it is the chef's special". Indefinite for one, definite for the
+ *  other, because a kitchen has several best sellers and exactly one
+ *  chef's special -- and a bare "best seller" would leave the agent to
+ *  supply the determiner itself, whose most obvious form is the double
+ *  possessive "the restaurant's chef's special". No host says that out
+ *  loud.
+ *
+ *  English, and the agent does NOT repeat it in English. This is the
+ *  opposite kind of string from an item name: a name is a thing on a
+ *  ticket and is spoken exactly as it arrives, while this is a concept a
+ *  Spanish caller should hear in Spanish, said the way a native speaker
+ *  would say it. The prompt rule says which of the two kinds this is, in
+ *  as many words, because the never-translate rule for names would
+ *  otherwise capture it by proximity.
+ *
+ *  Not read from the database and not built from the column value: a
+ *  code that has no phrase here is a code the agent cannot say, so the
+ *  lookup below simply omits the key rather than putting `undefined` on
+ *  the wire. */
+export const PICK_PHRASE: Record<PickLabel, string> = {
+  best_seller: "a best seller",
+  chefs_special: "the chef's special",
 };
 
 export type AgentMenu = {
@@ -67,7 +98,7 @@ export function shapeMenu(categories: MenuCategoryWithItems[]): AgentMenu {
       const isOut = item.sold_out_until !== null;
       if (isOut) soldOut.push(item.name);
       const ingredients = item.description?.trim();
-      const isPick = item.is_staff_pick === true && !isOut;
+      const pick = isOut || !item.pick_label ? undefined : PICK_PHRASE[item.pick_label];
       return {
         name: item.name,
         price: dollars(item.price_cents),
@@ -76,7 +107,7 @@ export function shapeMenu(categories: MenuCategoryWithItems[]): AgentMenu {
         // `undefined` property is a key in the object, and this shape is
         // JSON.stringify'd onto the wire on every call.
         ...(ingredients ? { ingredients } : {}),
-        ...(isPick ? { staff_pick: true as const } : {}),
+        ...(pick ? { pick } : {}),
       };
     }),
   }));

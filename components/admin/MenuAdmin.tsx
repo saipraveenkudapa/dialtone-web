@@ -8,7 +8,7 @@ import {
   useSectionReplaced,
 } from "@/components/admin/ConsoleTabs";
 import { money } from "@/lib/format";
-import { UNTIL_LABEL } from "@/lib/menu";
+import { PICK_LABEL, UNTIL_LABEL } from "@/lib/menu";
 import { parseDollarsToCents } from "@/lib/money";
 import type {
   CategoryInput,
@@ -792,7 +792,10 @@ function ItemRow({
   const [allergenNote, setAllergenNote] = useState(item.allergen_note ?? "");
   const [categoryId, setCategoryId] = useState(item.category_id);
   const [sortOrder, setSortOrder] = useState(String(item.sort_order));
-  const [staffPick, setStaffPick] = useState(item.is_staff_pick);
+  /* A string, and "" is not-a-pick: the same shape the sold-out select
+     on this row uses, and the same shape MenuItemInput carries, so
+     nothing has to be translated on the way to the action. */
+  const [pickLabel, setPickLabel] = useState<string>(item.pick_label ?? "");
   const [confirmPriceCents, setConfirmPriceCents] = useState<number | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
 
@@ -810,7 +813,7 @@ function ItemRow({
     item.allergen_note ?? "",
     item.category_id,
     item.sort_order,
-    item.is_staff_pick,
+    item.pick_label ?? "",
   ].join("|");
   const [seen, setSeen] = useState(seedItem);
   const [replaced, setReplaced] = useState(false);
@@ -824,7 +827,7 @@ function ItemRow({
     allergenNote,
     categoryId,
     sortOrder,
-    staffPick,
+    pickLabel,
   ].join("|");
   if (seen !== seedItem) {
     // ...and it no longer takes the typing in silence. Two conditions,
@@ -838,7 +841,7 @@ function ItemRow({
     setAllergenNote(item.allergen_note ?? "");
     setCategoryId(item.category_id);
     setSortOrder(String(item.sort_order));
-    setStaffPick(item.is_staff_pick);
+    setPickLabel(item.pick_label ?? "");
     // The message from the write that CAUSED this re-seed is deliberately
     // left standing: revalidatePath lands these props in the same commit
     // as the result, so clearing here would wipe "Saved." the instant it
@@ -865,8 +868,12 @@ function ItemRow({
      the guarantee -- this only stops an operator wasting a round trip
      and tells them the rule before they hit it. Read from allItems,
      which this card already has, so no extra query is made to draw it. */
-  const picksUsed = allItems.filter((other) => other.is_staff_pick).length;
-  const capReached = picksUsed >= 3 && !item.is_staff_pick;
+  const picksUsed = allItems.filter((other) => other.pick_label !== null).length;
+  /* Not `!item.pick_label`: the cap counts non-null labels, and a row
+     that already holds a slot may always be re-worded or cleared -- the
+     trigger's "already counted" branch allows exactly that, so the
+     control must not be shut on the one dish it still works for. */
+  const capReached = picksUsed >= 3 && item.pick_label === null;
   const dirty =
     name !== item.name ||
     price !== (item.price_cents / 100).toFixed(2) ||
@@ -874,7 +881,7 @@ function ItemRow({
     allergenNote !== (item.allergen_note ?? "") ||
     categoryId !== item.category_id ||
     sortOrder !== String(item.sort_order) ||
-    staffPick !== item.is_staff_pick;
+    pickLabel !== (item.pick_label ?? "");
 
   // The account of a loss stands until there is something new to lose.
   if (replaced && dirty) setReplaced(false);
@@ -895,7 +902,7 @@ function ItemRow({
       priceDollars: price,
       allergenNote,
       sortOrder,
-      staffPick,
+      pickLabel,
       /* Deliberately EMPTY, and lib/admin/edit.ts's saveMenuItem
          deliberately ignores it: an update writes the seven columns this
          row actually shows and never touches sold_out_until.
@@ -951,19 +958,21 @@ function ItemRow({
                 a scan down the card shows what the agent is refusing
                 without reading every dropdown. */}
             {out ? <span className="tag tag-out edit-flag">Not offered</span> : null}
-            {/* The pick itself, not just that the dish sells. A sold-out
-                pick still holds one of the three slots -- the trigger and
-                picksUsed below agree on that -- but lib/agent/menu.ts's
-                isPick is `is_staff_pick && !isOut`, so a sold-out pick
-                never reaches the agent's payload and produces no warmth.
-                Three ticked boxes can add up to zero warmth with nothing
-                on the card to say why, so the chip carries which of the
-                two states a pick is in rather than just that it is one --
-                the same reasoning the "Not offered" chip above and the
+            {/* WHICH pick, and whether it reaches anyone. A sold-out pick
+                still holds one of the three slots -- the trigger and
+                picksUsed below agree on that -- but lib/agent/menu.ts
+                drops `pick` from the payload while the dish is out, so it
+                produces no warmth. Three spent slots can add up to zero
+                warmth with nothing on the card to say why, and now that
+                there are two kinds of pick the chip has to name the kind
+                as well: they are different sentences out of the agent's
+                mouth. Same reasoning the "Not offered" chip above and the
                 sort column below are already kept for. */}
-            {item.is_staff_pick ? (
+            {item.pick_label ? (
               <span className={out ? "tag tag-neutral edit-flag" : "tag tag-outline edit-flag"}>
-                {out ? "Silent pick" : "Staff pick"}
+                {out
+                  ? `Silent ${PICK_LABEL[item.pick_label].toLowerCase()}`
+                  : PICK_LABEL[item.pick_label]}
               </span>
             ) : null}
             {item.description ? (
@@ -1163,21 +1172,29 @@ function ItemRow({
           />
         </div>
         <div className="field">
-          {/* Label-wrapped, like .hours-closed's "Closed" -- see
-              .menu-edit-pick in app.css for why a bare htmlFor pairing
-              does not pick up the coarse-pointer touch target. */}
-          <label className="menu-edit-pick">
-            <input
-              type="checkbox"
-              checked={staffPick}
-              disabled={pending || capReached}
-              onChange={(e) => setStaffPick(e.target.checked)}
-            />
-            Staff pick
-          </label>
+          {/* The same shape as the sold-out control further up this row:
+              a select over a constrained set with an explicit "none of
+              them" option. Not a checkbox any more -- there are two kinds
+              of pick and a third would cost nothing -- and not a new
+              control family either: .field + .input is what every other
+              choice on this screen already wears, including the touch
+              target, which `.input, select` gives it under a coarse
+              pointer with no class of its own. */}
+          <label htmlFor={`ma-item-pick-${item.id}`}>Pick</label>
+          <select
+            id={`ma-item-pick-${item.id}`}
+            className="input"
+            value={pickLabel}
+            disabled={pending || capReached}
+            onChange={(e) => setPickLabel(e.target.value)}
+          >
+            <option value="">Not a pick</option>
+            <option value="best_seller">{PICK_LABEL.best_seller}</option>
+            <option value="chefs_special">{PICK_LABEL.chefs_special}</option>
+          </select>
           {capReached ? (
             <p className="setup-note">
-              Three dishes are already marked. Unmark one to choose another.
+              Three dishes are already picked. Clear one to choose another.
             </p>
           ) : null}
         </div>
@@ -1203,7 +1220,7 @@ function ItemRow({
             setAllergenNote(item.allergen_note ?? "");
             setCategoryId(item.category_id);
             setSortOrder(String(item.sort_order));
-            setStaffPick(item.is_staff_pick);
+            setPickLabel(item.pick_label ?? "");
             setEditing(false);
             setConfirmPriceCents(null);
             setResult(null);
@@ -1217,8 +1234,9 @@ function ItemRow({
         The description is read aloud to callers as what the dish comes with. The staff note is
         not: lib/agent/menu.ts leaves it out of the assistant&rsquo;s payload on purpose,
         because an allergy question is transferred to a person rather than answered from a
-        column. A staff pick lets the assistant say once that it is the one people come back
-        for.
+        column. A pick lets the assistant say once that the dish is a best seller or the
+        chef&rsquo;s special &mdash; in the caller&rsquo;s own language, since that is a
+        phrase and not a name.
       </p>
 
       {duplicate ? (
@@ -1345,10 +1363,10 @@ function AddItemForm({
               allergenNote: "",
               sortOrder: String(nextSort),
               soldOutUntil: "",
-              // No control on this form -- a new dish is marked a staff
-              // pick from the edit form, once it exists and picksUsed can
-              // be checked against it.
-              staffPick: false,
+              // No control on this form -- a new dish is picked from the
+              // edit form, once it exists and picksUsed can be checked
+              // against it.
+              pickLabel: "",
             }),
           () => {
             setName("");

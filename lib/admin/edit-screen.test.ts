@@ -182,7 +182,7 @@ function menu(over: Partial<Parameters<typeof MenuAdmin>[0]> = {}): string {
           allergen_note: null,
           sort_order: 0,
           sold_out_until: null,
-          is_staff_pick: false,
+          pick_label: null,
         },
       ],
       createCategoryAction: noop,
@@ -823,7 +823,7 @@ describe("the two sort orders on a category card", () => {
           allergen_note: null,
           sort_order: 7,
           sold_out_until: null,
-          is_staff_pick: false,
+          pick_label: null,
         },
       ],
     });
@@ -837,14 +837,14 @@ describe("the two sort orders on a category card", () => {
 
 /* ── the pick has to be visible without opening the row ─────────────── */
 
-describe("a dish marked a staff pick", () => {
+describe("a dish the restaurant nominated", () => {
   // The collapsed row -- editing=false, MenuAdmin's default render, the
   // same branch "Not offered" and "sort N" already render in -- because
-  // the checkbox that sets is_staff_pick lives one level deeper, inside
-  // a row's own edit form, and an operator hits the three-pick cap
-  // before they have any reason to expand all of them looking for which
-  // dishes are already marked.
-  function pick(sold: boolean): string {
+  // the control that sets pick_label lives one level deeper, inside a
+  // row's own edit form, and an operator hits the three-pick cap before
+  // they have any reason to expand all of them looking for which dishes
+  // are already marked.
+  function pick(label: "best_seller" | "chefs_special", sold: boolean): string {
     return menu({
       items: [
         {
@@ -856,61 +856,98 @@ describe("a dish marked a staff pick", () => {
           allergen_note: null,
           sort_order: 0,
           sold_out_until: sold ? "close" : null,
-          is_staff_pick: true,
+          pick_label: label,
         },
       ],
     });
   }
 
-  it("is on the collapsed row, not only inside the edit form", () => {
-    const html = pick(false);
-    expect(html).toContain("tag tag-outline edit-flag");
-    expect(prose(html)).toContain("Staff pick");
+  // The chip has to name WHICH kind now, not just that there is one:
+  // there are two, they are different sentences out of the agent's
+  // mouth, and "pick" on its own no longer tells an operator which one
+  // this restaurant chose for this dish.
+  it("says which kind of pick it is, on the collapsed row", () => {
+    expect(prose(pick("best_seller", false))).toContain("Best seller");
+    // The curly apostrophe is the rendered one: the option labels come
+    // from lib/menu.ts's PICK_LABEL, and JSX text may not carry a bare
+    // ' anyway (react/no-unescaped-entities).
+    expect(prose(pick("chefs_special", false))).toContain("Chef\u2019s special");
+    expect(pick("best_seller", false)).toContain("tag tag-outline edit-flag");
   });
 
   it("is silent, and says so, once the pick is also sold out", () => {
-    // lib/agent/menu.ts's isPick is `is_staff_pick && !isOut` -- a
-    // sold-out pick still fills one of the trigger's three slots (the
-    // trigger and this form's own picksUsed agree on that) but is
-    // dropped from the agent's payload before is_staff_pick is ever
-    // read, so it produces no warmth. Three ticked boxes can add up to
-    // zero warmth with nothing on the card saying why; the one marker
-    // has to carry which of the two states a pick is in, not just that
-    // it is one.
-    const html = pick(true);
+    // lib/agent/menu.ts drops `pick` from the payload while the item is
+    // sold out -- a sold-out pick still fills one of the trigger's three
+    // slots (the trigger and this form's own picksUsed agree on that)
+    // but reaches no caller, so it produces no warmth. Three spent slots
+    // can add up to zero warmth with nothing on the card saying why; the
+    // one marker has to carry which of the two states a pick is in as
+    // well as which kind it is.
+    const html = pick("best_seller", true);
     expect(html).toContain("tag tag-out edit-flag");
     expect(prose(html)).toContain("Not offered");
     expect(html).toContain("tag tag-neutral edit-flag");
-    expect(prose(html)).toContain("Silent pick");
-    expect(prose(html)).not.toContain("Staff pick");
+    expect(prose(html)).toContain("Silent best seller");
+
+    expect(prose(pick("chefs_special", true))).toContain("Silent chef\u2019s special");
   });
 
   it("is absent from a dish that was never nominated", () => {
     const html = menu();
-    expect(prose(html)).not.toContain("Staff pick");
-    expect(prose(html)).not.toContain("Silent pick");
+    expect(prose(html)).not.toContain("Best seller");
+    expect(prose(html)).not.toContain("Chef\u2019s special");
+    expect(prose(html)).not.toContain("Silent");
   });
 });
 
-describe("the staff-pick checkbox's touch target", () => {
-  it("wraps the input in the label, like the two hours checkboxes do", () => {
-    // A checkbox is 13px of chrome CSS cannot resize, so a coarse-pointer
-    // min-height only reaches the actual control if a label wraps it --
-    // see app.css's own comment over the coarse-pointer checkbox rule.
-    // A <label htmlFor> sitting beside the input, which is what this
-    // shipped with, still toggles it (the id association still works)
-    // but the 13px box itself never grows.
+describe("the pick control in an item's edit row", () => {
+  /* Asserted against the source, not the markup, for the reason the
+     block above states: the control sits inside `if (!editing)`'s other
+     branch, which renderToStaticMarkup never enters. */
+
+  it("is a select over the two kinds plus not-a-pick, like the sold-out one", () => {
+    // The neighbouring control on this same row is already a select over
+    // a constrained set with an explicit "none of them" option, and this
+    // is the same shape of choice. A second shape for the same job is
+    // how a 34-class system became a 73-class one.
     const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
-    expect(menuAdmin).toMatch(/<label className="menu-edit-pick">\s*<input\b/);
-    expect(menuAdmin).not.toContain("ma-item-staff-pick");
+    const form = menuAdmin.slice(menuAdmin.indexOf("ma-item-pick-"));
+    expect(form).toMatch(/<option value="">Not a pick<\/option>/);
+    expect(form).toMatch(/<option value="best_seller">\{PICK_LABEL\.best_seller\}<\/option>/);
+    expect(form).toMatch(/<option value="chefs_special">\{PICK_LABEL\.chefs_special\}<\/option>/);
+    // The wearing of .input is what puts it on the same rail as every
+    // other field in the row, and what the coarse-pointer rule below
+    // reaches.
+    expect(form).toMatch(/id=\{`ma-item-pick-\$\{item\.id\}`\}\s*\n\s*className="input"/);
   });
 
-  it("is covered by the same coarse-pointer rule as .hours-closed and .radio", () => {
+  it("takes its touch target from the rule every select on the page uses", () => {
+    // This replaced a checkbox, which needed a class of its own
+    // (.menu-edit-pick) and a label wrapped round it, because a checkbox
+    // is 13px of chrome CSS cannot resize. A <select> is not: `.input,
+    // select { min-height: var(--touch-target) }` already covers it, so
+    // the bespoke class went with the checkbox rather than lingering as
+    // dead CSS naming a control that no longer exists.
     const css = source("../../app/app.css");
-    const head = css.indexOf("A checkbox is 13px of chrome");
-    const rule = css.slice(head, css.indexOf("min-height: var(--touch-target); }", head) + 1);
-    expect(rule).toContain(".radio");
-    expect(rule).toContain(".hours-closed");
-    expect(rule).toContain(".menu-edit-pick");
+    const head = css.indexOf("── fields ");
+    const rule = css.slice(head, css.indexOf("}", css.indexOf("min-height", head)) + 1);
+    expect(rule).toContain(".input,");
+    expect(rule).toContain("select");
+    expect(rule).toContain("min-height: var(--touch-target);");
+
+    expect(css).not.toContain("menu-edit-pick");
+    expect(source("../../components/admin/MenuAdmin.tsx")).not.toContain("menu-edit-pick");
+  });
+
+  it("says why it is unavailable when the restaurant is at its three", () => {
+    // The trigger is the guarantee; this only stops an operator spending
+    // a round trip to be told. picksUsed counts LABELS, not `true`s --
+    // counting truthiness of a string would count "" as a pick.
+    const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+    expect(menuAdmin).toContain(
+      "allItems.filter((other) => other.pick_label !== null).length",
+    );
+    expect(menuAdmin).toContain("picksUsed >= 3 && item.pick_label === null");
+    expect(menuAdmin).toMatch(/Three dishes are already picked/);
   });
 });
