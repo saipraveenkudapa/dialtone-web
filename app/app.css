@@ -2772,9 +2772,31 @@ a {
      Destructive neighbours are the reason. In .menu-edit-row-actions,
      Remove — which destroys a dish with no undo — sat 4px from the Edit
      an operator aims at while a restaurant owner talks, on a device with
-     no hover to warn them first. */
+     no hover to warn them first.
+
+     .menu-item-row is here BECAUSE THE PICK CONTROL LEFT THAT BLOCK.
+     Every control on a dish used to live inside .menu-edit-row-actions,
+     so the row's own gap was never a gap between two targets and this
+     rule never had to reach it. It is now: four controls do not fit one
+     line of a 328.6px card row, so both selects are children of the row
+     and three adjacencies — select to select, select to the actions
+     block, and the wrapped line's select to the Remove below it — sat at
+     --space-2's 6.8, under the floor, on the coarse pointer this whole
+     block was measured for, and against controls .input and .btn had
+     just raised to 44px.
+
+     Raising the ROW's gap also widens name → price → sort from 6.8 to
+     10.2, and that is meant rather than tolerated: on a coarse pointer
+     the row is one 44px bar, those three are read while the selects and
+     buttons are aimed at, and a rhythm is not what a mis-tap costs.
+     Nothing moves off the card: measured at the 328.6px row, the pair of
+     selects grows by exactly one gap step — 266.8px to 270.2px, which
+     the comment beside .menu-item-row .input rounds to 268 — the row
+     keeps its three lines, and the overflow past the row's right edge is
+     0 both before and after. What it costs is 6.8px of row height. */
   .menu-edit-cat-controls,
   .menu-edit-row-actions,
+  .menu-item-row,
   .upload-actions,
   .dialog-actions,
   .cred-actions,

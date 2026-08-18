@@ -732,6 +732,42 @@ describe("a menu row in a 300px card", () => {
     expect(row.indexOf("${item.name} as a pick")).toBeLessThan(actions);
     expect(row.slice(actions, row.indexOf("</div>", actions))).not.toContain("<select");
   });
+
+  it("keeps the row's controls a thumb's width apart once they are 44px", () => {
+    /* The other half of moving the selects out of .menu-edit-row-actions.
+       That block is named in the coarse-pointer "separation" rule, so
+       while every control on a dish lived inside it, all of them got
+       --touch-gap. Out on the row they take .menu-item-row's own gap,
+       which is --space-2's 6.8px -- under the 8px floor that block
+       exists to enforce, and enforced against controls the SAME media
+       query has just raised to 44px: `.input, select` and the row's own
+       buttons. Three adjacencies regressed at once -- select to select,
+       select to the actions block, and, on the wrapped line, the select
+       above Remove, which destroys a dish with no undo.
+
+       So the row is in the list. It is not a new class and not a new
+       number; --touch-gap is --space-3, 10.2px, which is the next step
+       on the system's own scale. */
+    const coarse = css.slice(css.indexOf("@media (pointer: coarse)"));
+    const rule = coarse.slice(
+      coarse.indexOf("── separation "),
+      coarse.indexOf("gap: var(--touch-gap);", coarse.indexOf("── separation ")),
+    );
+    expect(rule).toContain(".menu-item-row,");
+    expect(rule).toContain(".menu-edit-row-actions,");
+
+    // The gap it is being raised FROM, still declared once, unchanged
+    // for a fine pointer -- the coarse rule is a floor, not a redesign.
+    // (no dotAll flag: the target predates es2018, and `[^}]` already
+    // spans the newlines inside the block.)
+    expect(css).toMatch(/\.menu-item-row \{[^}]*gap: var\(--space-2\);/);
+
+    // And the raise cannot push the pair of selects off the card: 130 +
+    // 10.2 + 130 = 270.2 in the 328.6px row the cap above was measured
+    // against.
+    expect(css).toContain("--touch-gap: var(--space-3);");
+    expect(source("../../app/industry.css")).toContain("--space-3: 10.2px;");
+  });
 });
 
 describe("a dish the assistant is refusing", () => {
@@ -996,11 +1032,18 @@ describe("the pick control on a dish's row", () => {
     const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
     const control = menuAdmin.slice(menuAdmin.indexOf("${item.name} as a pick"));
     expect(control).toMatch(/<option value="">Not a pick<\/option>/);
-    expect(control).toMatch(/<option value="best_seller">\{PICK_LABEL\.best_seller\}<\/option>/);
-    // Same option, wearing the one-per-restaurant courtesy the test at
-    // the bottom of this block pins.
+    /* Both kinds wear the CAP, because the cap counts both: at three
+       picks neither label can be added to a fourth dish. It is worn by
+       the options and not by the select -- see "keeps the control
+       reachable" below for why that distinction is the whole point. */
     expect(control).toMatch(
-      /<option value="chefs_special" disabled=\{specialTaken\}>\s*\n\s*\{PICK_LABEL\.chefs_special\}\s*\n\s*<\/option>/,
+      /<option value="best_seller" disabled=\{capReached\}>\s*\n\s*\{PICK_LABEL\.best_seller\}\s*\n\s*<\/option>/,
+    );
+    // And one of them wears the one-per-restaurant courtesy as well, on
+    // top of the cap -- the test at the bottom of this block pins that
+    // the OTHER one never grows it.
+    expect(control).toMatch(
+      /<option value="chefs_special" disabled=\{capReached \|\| specialTaken\}>\s*\n\s*\{PICK_LABEL\.chefs_special\}\s*\n\s*<\/option>/,
     );
     // The wearing of .input is what puts it on the same rail as every
     // other field on the row, and what the coarse-pointer rule below
@@ -1073,26 +1116,93 @@ describe("the pick control on a dish's row", () => {
     expect(menuAdmin).toContain("picksUsed >= 3 && item.pick_label === null");
     expect(menuAdmin).toMatch(/Three dishes are already picked/);
 
-    /* Rendered: at three picks the control on a dish that is NOT one of
-       them is shut, because every option it could offer is one the
-       trigger will refuse -- and the sentence saying why is on the Menu
-       card, once, rather than repeated under each of the eleven rows it
-       would apply to. */
+    /* Rendered: at three picks the two labels are shut on a dish that is
+       NOT one of them, because either one is a write the trigger will
+       refuse. */
     const full = rows(
       dish(ITEM, "Carbonara", "best_seller"),
       dish(OTHER, "Amatriciana", "best_seller"),
       dish(THIRD, "Cacio e Pepe", "chefs_special"),
       dish(FOURTH, "Tiramisu", null),
     );
-    expect(full).toContain('aria-label="Tiramisu as a pick" disabled=""');
-    expect(prose(full)).toContain("Three dishes are already picked");
+    const shut = full.slice(full.indexOf('aria-label="Tiramisu as a pick"'));
+    expect(shut.slice(0, 300)).toContain('<option value="best_seller" disabled=""');
+    expect(shut.slice(0, 300)).toContain('<option value="chefs_special" disabled=""');
 
-    // The three that hold a slot keep their control: the trigger's
+    // The three that hold a slot keep their labels open: the trigger's
     // "already counted" branch lets a pick be re-worded or cleared, and
     // clearing one is the only way back under the cap. The whole opening
     // tag is compared, so a `disabled` on it would fail this.
     expect(full).toContain('<select class="input" aria-label="Carbonara as a pick">');
     expect(full).toContain('<select class="input" aria-label="Cacio e Pepe as a pick">');
+    const holder = full.slice(full.indexOf('aria-label="Carbonara as a pick"'));
+    expect(holder.slice(0, 300)).toContain('<option value="best_seller"');
+    expect(holder.slice(0, 300)).not.toContain('<option value="best_seller" disabled');
+  });
+
+  it("keeps the control reachable at the cap instead of shutting it", () => {
+    /* THE CAP CLOSES THE OPTIONS, NEVER THE SELECT. Shutting the select
+       was the first shape of this and it re-made the reported bug on the
+       far side: `disabled` takes an element out of the tab order, so on
+       the fourteen-item restaurant that had used its three picks, the
+       eleven other rows carried a faded box that no keyboard and no
+       screen reader could reach at all -- "i see no option in the menu to
+       label them" all over again, for the operator with the fewest ways
+       to go looking. It also swallowed the click: nothing fired, so no
+       action ran, so not even a refusal was printed under the row.
+
+       A disabled OPTION cannot be chosen either -- the courtesy is
+       whole, nothing certain to be refused is offered -- but the control
+       is still tabbed to, still announced with its label, and still
+       reads out the kind on file. And it is the mechanism this row
+       already used for the chef's special, so there is one of them. */
+    const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+    const control = menuAdmin.slice(menuAdmin.indexOf("${item.name} as a pick"));
+    expect(control.slice(0, 1400)).toContain("disabled={pending}");
+    expect(control.slice(0, 1400)).not.toContain("disabled={pending || capReached}");
+
+    /* Rendered, on the dish the cap applies to: the opening tag carries
+       the label and nothing else. Compared whole, so a `disabled` on it
+       fails here. */
+    const full = rows(
+      dish(ITEM, "Carbonara", "best_seller"),
+      dish(OTHER, "Amatriciana", "best_seller"),
+      dish(THIRD, "Cacio e Pepe", "chefs_special"),
+      dish(FOURTH, "Tiramisu", null),
+    );
+    expect(full).toContain('<select class="input" aria-label="Tiramisu as a pick">');
+    expect(full).not.toContain('aria-label="Tiramisu as a pick" disabled');
+    // The sold-out select beside it is disabled by the same one thing
+    // and nothing else, which is the shape being matched.
+    expect(full).toContain('<select class="input" aria-label="Tiramisu on the phone">');
+  });
+
+  it("names the dishes that are holding the three slots", () => {
+    /* A rule that says three are taken without saying WHICH three sends
+       an operator hunting a grid of category cards for chips -- and the
+       note sits above SoldOutNow and the whole grid, so it is a scroll
+       away from the row it is explaining. SoldOutNow answers the sibling
+       question by naming every dish in the blocking state where it can
+       be read from the top of the page; the cap now does the same, in
+       the sentence it was already rendering. */
+    const full = rows(
+      dish(ITEM, "Carbonara", "best_seller"),
+      dish(OTHER, "Amatriciana", "best_seller"),
+      dish(THIRD, "Cacio e Pepe", "chefs_special"),
+      dish(FOURTH, "Tiramisu", null),
+    );
+    const text = prose(full);
+    expect(text).toContain(
+      "Three dishes are already picked \u2014 Carbonara, Amatriciana, Cacio e Pepe.",
+    );
+    expect(text).toContain("Set one of those back to \u201cnot a pick\u201d on its row");
+    // The dish that is NOT a pick is not in that list.
+    expect(text).not.toMatch(/already picked[^.]*Tiramisu/);
+
+    // Under the cap there is no such sentence to name anything in.
+    expect(prose(rows(dish(ITEM, "Carbonara", "best_seller")))).not.toContain(
+      "already picked",
+    );
   });
 
   it("offers the chef's special to one dish at a time, and says why", () => {
@@ -1111,13 +1221,23 @@ describe("the pick control on a dish's row", () => {
     // The sentence moved to the Menu card with the count, because it is
     // a fact about the RESTAURANT and not about the row it was written
     // under -- thirteen rows repeating it is furniture, and furniture is
-    // not read.
+    // not read. It NAMES the dish, for the reason the cap's sentence
+    // names its three: a card-width above the grid, "that dish alone" is
+    // an instruction to go and find out which.
     expect(menuAdmin).toMatch(
-      /One dish is already the chef&rsquo;s special, so that option is offered on\s+that\s+dish alone/,
+      /is already the chef&rsquo;s special, so that option is\s+offered on that dish alone/,
     );
-    // "best seller" carries no such rule and must not grow one: any
-    // number of dishes can be one of several best sellers.
-    expect(menuAdmin).not.toMatch(/<option value="best_seller" disabled/);
+    expect(menuAdmin).toContain("\u201c{special.name}\u201d is already the chef&rsquo;s special");
+    /* "best seller" carries no ONE-AT-A-TIME rule and must not grow one:
+       any number of dishes can be one of several best sellers, which is
+       what makes the phrase lib/agent/menu.ts sends partitive. The cap
+       is a different rule and applies to both kinds, so the claim is
+       pinned where it is actually made -- specialTaken must never reach
+       this option -- rather than by forbidding the word `disabled` on
+       it, which the cap now legitimately puts there. */
+    const control = menuAdmin.slice(menuAdmin.indexOf("${item.name} as a pick"));
+    const bestSeller = control.slice(control.indexOf('<option value="best_seller"'));
+    expect(bestSeller.slice(0, 120)).not.toContain("specialTaken");
 
     /* Rendered: the option is shut on every OTHER dish, and open on the
        one that holds it. */
@@ -1129,7 +1249,13 @@ describe("the pick control on a dish's row", () => {
     expect(other.slice(0, 300)).toContain('<option value="chefs_special" disabled=""');
     const holder = html.slice(html.indexOf('aria-label="Carbonara as a pick"'));
     expect(holder.slice(0, 300)).toContain('<option value="chefs_special" selected=""');
-    expect(prose(html)).toContain("One dish is already the chef\u2019s special");
+    /* And rendered: "best seller" stays open on the dish that is not the
+       special. One pick is in use here, so the cap is nowhere near and
+       the only rule in play is the one that must not touch this option. */
+    expect(other.slice(0, 300)).toContain('<option value="best_seller">');
+    expect(prose(html)).toContain(
+      "\u201cCarbonara\u201d is already the chef\u2019s special, so that option is offered on that dish alone.",
+    );
   });
 });
 

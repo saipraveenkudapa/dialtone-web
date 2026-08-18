@@ -260,9 +260,17 @@ export function MenuAdmin(props: MenuAdminProps) {
      this card carries is the only thing neither of those can: that any
      of it exists at all. A restaurant with no picks yet has no chip on
      any row, which is exactly the restaurant whose operator reported
-     seeing "no option in the menu to label them". */
-  const picksUsed = items.filter((item) => item.pick_label !== null).length;
-  const specialUsed = items.some((item) => item.pick_label === "chefs_special");
+     seeing "no option in the menu to label them".
+
+     The ROWS, not just the counts. A rule that says three are taken
+     without saying WHICH three sends an operator hunting a grid of
+     category cards for chips; SoldOutNow, one section below, has always
+     answered the sibling question by naming every dish in the blocking
+     state, from the top of the page, where it can be read before the
+     scroll. So these keep the items and not their length. */
+  const picks = items.filter((item) => item.pick_label !== null);
+  const picksUsed = picks.length;
+  const special = items.find((item) => item.pick_label === "chefs_special") ?? null;
 
   /* Everything below is behind the Menu tab, and every reporter in it is
      OR'd into one "Unsaved" chip on that tab. This is the biggest panel
@@ -356,14 +364,15 @@ export function MenuAdmin(props: MenuAdminProps) {
             {picksUsed >= 3 ? (
               <>
                 {" "}
-                Three dishes are already picked. Set one back to “not a pick” to choose another.
+                Three dishes are already picked — {picks.map((p) => p.name).join(", ")}. Set
+                one of those back to “not a pick” on its row to choose another.
               </>
             ) : null}
-            {specialUsed ? (
+            {special ? (
               <>
                 {" "}
-                One dish is already the chef&rsquo;s special, so that option is offered on that
-                dish alone.
+                “{special.name}” is already the chef&rsquo;s special, so that option is
+                offered on that dish alone.
               </>
             ) : null}
           </p>
@@ -1083,26 +1092,40 @@ function ItemRow({
             className="input"
             aria-label={`${item.name} as a pick`}
             value={item.pick_label ?? ""}
-            /* Shut, not merely refused afterwards, when this dish is not
-               one of the three and there is no fourth slot: every option
-               it could offer is one the trigger will certainly refuse.
-               The dishes that HOLD the three keep their control -- the
-               trigger's "already counted" branch lets a pick be re-worded
-               or cleared, and clearing one is the only way back under the
-               cap. The sentence saying why is on the Menu card, once,
-               because it is a fact about the restaurant rather than about
-               this row. */
-            disabled={pending || capReached}
+            /* `pending` ONLY. The cap shuts the two OPTIONS below, never
+               this control, because a disabled <select> is not focusable:
+               shutting it left the eleven rows of a restaurant at its
+               three holding a faded box that no keyboard and no screen
+               reader could reach, and no click on it could even raise a
+               refusal to read. That hid the whole feature from the
+               operator who most needed to find it -- the reported bug,
+               re-made on the restaurant that had already used the
+               feature. Open, the control is tabbed to, announced, and
+               reads out the kind on file; the choices it could not save
+               are closed the same way the chef's-special courtesy already
+               closes one, so this row runs ONE mechanism and not two. */
+            disabled={pending}
             onChange={(e) => run(() => setPickAction(locationId, item.id, e.target.value))}
           >
             <option value="">Not a pick</option>
-            <option value="best_seller">{PICK_LABEL.best_seller}</option>
-            {/* Only this one. A restaurant may call any number of dishes
-                a best seller -- lib/agent/menu.ts says "one of our best
-                sellers", partitive -- and exactly one the chef's special,
-                because that phrase is definite and the agent may name two
-                picks in a single call. */}
-            <option value="chefs_special" disabled={specialTaken}>
+            {/* The courtesy, and on both kinds because the cap counts
+                both: at three picks a dish that is not one of them cannot
+                become one, so neither label is offered on it. The three
+                that HOLD the slots keep theirs open -- the trigger's
+                "already counted" branch lets a pick be re-worded or
+                cleared, and clearing one is the only way back under the
+                cap. WHICH three is on the Menu card, by name, because
+                naming them is the only form of this sentence an operator
+                can act on. */}
+            <option value="best_seller" disabled={capReached}>
+              {PICK_LABEL.best_seller}
+            </option>
+            {/* One rule further, on this one alone. A restaurant may call
+                any number of dishes a best seller -- lib/agent/menu.ts
+                says "one of our best sellers", partitive -- and exactly
+                one the chef's special, because that phrase is definite
+                and the agent may name two picks in a single call. */}
+            <option value="chefs_special" disabled={capReached || specialTaken}>
               {PICK_LABEL.chefs_special}
             </option>
           </select>
