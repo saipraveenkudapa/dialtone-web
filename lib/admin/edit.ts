@@ -1025,12 +1025,20 @@ const OWNERSHIP_UNREADABLE =
 async function ownedMenuItem(
   itemId: string,
   locationId: string,
-): Promise<{ row: { id: string; name: string } } | { refusal: EditResult }> {
+): Promise<
+  | { row: { id: string; name: string; sold_out_until: "reopen" | "close" | null } }
+  | { refusal: EditResult }
+> {
   if (!UUID.test(itemId)) return { refusal: { ok: false, error: NO_SUCH_ROW } };
 
+  /* sold_out_until is read for the sentence, not for a decision: a pick
+     set on a dish that is sold out holds one of the restaurant's three
+     slots and reaches nobody, because lib/agent/menu.ts drops `pick`
+     from the payload while the dish is out. setMenuItemPick says so.
+     saveMenuItem takes only the name from this row. */
   const { data, error } = await supabaseAdmin()
     .from("menu_items")
-    .select("id, name")
+    .select("id, name, sold_out_until")
     .eq("id", itemId)
     .eq("location_id", locationId)
     .maybeSingle();
@@ -1044,7 +1052,7 @@ async function ownedMenuItem(
     return { refusal: { ok: false, error: OWNERSHIP_UNREADABLE } };
   }
   if (!data) return { refusal: { ok: false, error: NO_SUCH_ROW } };
-  return { row: data as { id: string; name: string } };
+  return { row: data as { id: string; name: string; sold_out_until: "reopen" | "close" | null } };
 }
 
 async function requireOwned(
@@ -2439,18 +2447,27 @@ export async function saveMenuItem({
     if (dup.duplicate) return { ok: false, error: `${DUPLICATE_ITEM} Nothing was saved.` };
   }
 
-  /* sold_out_until is NOT written here, and the omission is the point.
+  /* NEITHER sold_out_until NOR pick_label is written here, and the
+   * omission is the point.
    *
-   * The edit row has no control for it -- it is its own one-click action
-   * because the kitchen runs out of a dish mid-service -- so every value
-   * this save could carry for it is a copy of whatever the page was
-   * rendered with, which may be minutes old. Writing it back puts a dish
-   * the owner marked sold out at seven back on sale at ten past, silently
-   * and live on the very next call, as a side effect of fixing a
-   * description. setMenuItemSoldOut is the only writer with a control
-   * behind it and stays the only writer. */
-  const { sold_out_until, ...columns } = value;
+   * Both are one-click controls on the collapsed row -- the kitchen runs
+   * out of a dish mid-service, and an owner names a best seller down the
+   * phone -- so the edit form has no control for either, and every value
+   * this save could carry for them is a copy of whatever the page was
+   * rendered with, which may be minutes old. Writing them back puts a
+   * dish the owner marked sold out at seven back on sale at ten past, or
+   * un-picks the dish they made the chef's special at seven -- silently,
+   * live on the very next call, as a side effect of fixing a
+   * description, with the success sentence talking about the
+   * description. setMenuItemSoldOut and setMenuItemPick are the writers
+   * with controls behind them and stay the only writers.
+   *
+   * createMenuItem is the asymmetry, and deliberately: an INSERT has no
+   * value on file to lose, so it carries both columns as the form sent
+   * them. */
+  const { sold_out_until, pick_label, ...columns } = value;
   void sold_out_until;
+  void pick_label;
 
   const { error } = await supabaseAdmin()
     .from("menu_items")
@@ -2460,18 +2477,24 @@ export async function saveMenuItem({
 
   if (error) {
     console.error("[admin-edit] item update failed", { locationId, code: error.code });
-    // 23514 here is the pick cap -- the only check constraint this write
-    // can still violate, since validateMenuItem has already refused a
-    // label the column would reject. Anything else keeps the generic
-    // refusal.
+    /* Both mappings are now a BACKSTOP rather than a live path, and are
+       kept for that reason.
+       
+       This update no longer sends pick_label, and the cap trigger takes
+       its "already counted" early return on any UPDATE of a row that was
+       already a pick and has not changed restaurant -- so neither the
+       cap (23514) nor the one-chefs-special index (23505) can be reached
+       from here as the code stands. What they guard against is the next
+       person putting a pick control back into this form and getting the
+       generic "That did not save" for a rule that has a sentence. The
+       two writers of this table were made symmetric on these sentences
+       on purpose; dropping them here would un-make that. */
     if (error.code === "23514") {
       return refuse(PICK_CAP_REACHED);
     }
-    // 23505 is the second dish being made the chef's special, which the
-    // cap allows (it counts picks, not kinds) and which the definite
-    // article in what the agent says does not. Mapped separately from
-    // 23514 on purpose: the cap's sentence sends an operator who has
-    // picked two dishes off looking for a third to clear.
+    // Mapped separately from 23514 on purpose: the cap's sentence sends
+    // an operator who has picked two dishes and called both of them the
+    // chef's special off looking for a third to clear.
     if (error.code === "23505") {
       return refuse(ONE_CHEFS_SPECIAL);
     }
@@ -2552,6 +2575,89 @@ export async function setMenuItemSoldOut({
           "on sale here when it returns."
       : "Marked sold out for the rest of service. Nothing clears this by itself — put it back on " +
           "sale here tomorrow.",
+  );
+}
+
+/** WHICH kind of pick a dish is, from the control that sits beside the
+ *  sold-out one on the collapsed row.
+ *
+ *  Its own writer for the same reason setMenuItemSoldOut is: one
+ *  control, one column, saved on the change. The pick used to be a field
+ *  in the item edit form, which meant an operator could not see -- let
+ *  alone set -- a pick without opening a dish, and meant an ordinary
+ *  description save re-sent a pick_label the page may have rendered
+ *  minutes earlier. Both of those are the same defect the sold-out
+ *  control was pulled out of that form to fix.
+ *
+ *  THE TWO RULES ARE THE DATABASE'S, NOT THIS FUNCTION'S. Three picks
+ *  per restaurant is menu_items_staff_pick_cap (23514) and one chef's
+ *  special per restaurant is menu_items_one_chefs_special_idx (23505).
+ *  Counting rows here and refusing before the write would be a check
+ *  that two operators can both pass at once; what this does instead is
+ *  turn each SQLSTATE into the sentence that names the rule that
+ *  actually stopped them. The console's own courtesy -- not offering an
+ *  option that is certain to be refused -- sits in
+ *  components/admin/MenuAdmin.tsx and is not a substitute for either. */
+export async function setMenuItemPick({
+  locationId,
+  itemId,
+  label,
+}: {
+  locationId: string;
+  itemId: string;
+  /** "" is not-a-pick. */
+  label: string;
+}): Promise<EditResult> {
+  const denied = await gate(locationId);
+  if (denied) return denied;
+
+  // Checked here rather than left to the column's own check constraint,
+  // which raises 23514 -- the cap's SQLSTATE -- and would be reported to
+  // the operator as a limit they have not reached.
+  const checked = validatePickLabel(label);
+  if (!checked.ok) return refuse(checked.error);
+
+  // The row, not just "is it ours": the sentence names the dish, and
+  // whether the dish is sold out decides whether the pick reaches
+  // anybody at all.
+  const current = await ownedMenuItem(itemId, locationId);
+  if ("refusal" in current) return current.refusal;
+
+  const { error } = await supabaseAdmin()
+    .from("menu_items")
+    .update({ pick_label: checked.value })
+    .eq("id", itemId)
+    .eq("location_id", locationId);
+
+  if (error) {
+    console.error("[admin-edit] pick update failed", { locationId, code: error.code });
+    if (error.code === "23514") return refuse(PICK_CAP_REACHED);
+    if (error.code === "23505") return refuse(ONE_CHEFS_SPECIAL);
+    return { ok: false, error: WRITE_FAILED };
+  }
+
+  const name = current.row.name;
+  if (checked.value === null) {
+    return ok(`“${name}” is not a pick any more. The assistant stops mentioning it on the next call.`);
+  }
+
+  /* A pick on a dish that is sold out spends one of the three slots and
+     reaches nobody: lib/agent/menu.ts drops `pick` from the payload
+     while the dish is out, because praising a dish and then refusing it
+     in the same breath is worse than saying nothing. The row's chip
+     calls that a "Silent" pick; this is the same fact at the moment it
+     is created. */
+  const silent =
+    current.row.sold_out_until !== null
+      ? " It is sold out, so no caller hears that until it is back on sale."
+      : "";
+
+  return ok(
+    checked.value === "best_seller"
+      ? `“${name}” is one of this restaurant’s best sellers. The assistant may say so once on a ` +
+          `call, in the caller’s own language.${silent}`
+      : `“${name}” is the chef’s special. Only one dish can be, so this is the one the assistant ` +
+          `names.${silent}`,
   );
 }
 

@@ -85,6 +85,7 @@ const {
   saveOrderRouting,
   saveRecording,
   saveService,
+  setMenuItemPick,
   setMenuItemSoldOut,
   touchesAssistant,
   validateAnswering,
@@ -989,6 +990,10 @@ describe("the gate, which is the first statement of every export", () => {
       "setMenuItemSoldOut",
       () => setMenuItemSoldOut({ locationId, itemId: MARTY_ITEM, until: "close" }),
     ],
+    [
+      "setMenuItemPick",
+      () => setMenuItemPick({ locationId, itemId: MARTY_ITEM, label: "best_seller" }),
+    ],
     ["resyncAssistant", () => resyncAssistant({ locationId, base: BASE })],
   ] as const;
 
@@ -1128,6 +1133,21 @@ describe("a child row id is a selector and proves nothing", () => {
     expect(result.ok).toBe(false);
     expect(store.writes).toEqual([]);
     expect(store.menu_items.find((i) => i.id === NONNA_ITEM)?.sold_out_until).toBeNull();
+  });
+
+  it("will not pick another restaurant's dish", async () => {
+    // The same posture as the sold-out control above it: the row id is a
+    // selector and proves nothing, so the writer proves the row is this
+    // location's before it touches the column. Without it, one restaurant
+    // could spend another restaurant's three slots.
+    const result = await setMenuItemPick({
+      locationId: MARTY,
+      itemId: NONNA_ITEM,
+      label: "best_seller",
+    });
+    expect(result.ok).toBe(false);
+    expect(store.writes).toEqual([]);
+    expect(store.menu_items.find((i) => i.id === NONNA_ITEM)?.pick_label).toBeNull();
   });
 
   it("will not move an item into another restaurant's category", async () => {
@@ -1488,6 +1508,44 @@ describe("the edits that take effect on the next call", () => {
     expect(result).toMatchObject({ ok: true });
     expect(store.menu_items.find((i) => i.id === MARTY_ITEM)?.price_cents).toBe(2400);
     expect(store.menu_items.find((i) => i.id === MARTY_ITEM)?.sold_out_until).toBe("close");
+  });
+
+  it("leaves the pick alone when a price or a description is saved", async () => {
+    /* The identical hazard the sold-out test above it describes, and the
+       identical answer. The pick has its own one-click control on the
+       row now, so every value an edit-form save could carry for it is a
+       copy of a prop that may be minutes old: the owner makes the
+       branzino the chef's special from their own screen at seven, the
+       operator fixes a description in a tab opened at ten to, and the
+       save quietly un-picks it -- spending a slot the restaurant thinks
+       it is using and taking the phrase out of the agent's mouth on the
+       next call, while the success sentence talks about the
+       description. */
+    const item = store.menu_items.find((i) => i.id === MARTY_ITEM) as Record<string, unknown>;
+    item.pick_label = "chefs_special";
+
+    const result = await saveMenuItem({
+      locationId: MARTY,
+      itemId: MARTY_ITEM,
+      input: {
+        categoryId: MARTY_CATEGORY,
+        name: "Carbonara",
+        description: "Guanciale, pecorino, egg",
+        priceDollars: "24.00",
+        allergenNote: "",
+        sortOrder: "0",
+        soldOutUntil: "",
+        // What a page rendered before the dish was picked would send.
+        pickLabel: "",
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(store.menu_items.find((i) => i.id === MARTY_ITEM)?.price_cents).toBe(2400);
+    expect(store.menu_items.find((i) => i.id === MARTY_ITEM)?.pick_label).toBe("chefs_special");
+    // Not merely unchanged in the store: the column is not in the patch
+    // at all, so no concurrent write can be lost to it either.
+    expect(store.writes.at(-1)?.patch).not.toHaveProperty("pick_label");
   });
 
   it("still puts a dish back on sale through the one control that has one", async () => {
@@ -2157,6 +2215,19 @@ async function runSaveMenuItem(
   return { ...result, writes: store.writes };
 }
 
+/** A thin wrapper over setMenuItemPick -- the writer that owns
+ *  pick_label now that the control sits on the collapsed row and saves on
+ *  change, the same shape runSaveMenuItem is above it and for the same
+ *  reason. `failWith` seeds store.writeFailures to reach the 23514 and
+ *  23505 branches without a real trigger or a real index. */
+async function runSetMenuItemPick(label: string, opts: { failWith?: string } = {}) {
+  if (opts.failWith) {
+    store.writeFailures.menu_items = { code: opts.failWith };
+  }
+  const result = await setMenuItemPick({ locationId: MARTY, itemId: MARTY_ITEM, label });
+  return { ...result, writes: store.writes };
+}
+
 /** A thin wrapper over createMenuItem, the same shape runSaveMenuItem is
  *  above it, and named for the same reason: `failWith` seeds
  *  store.writeFailures to reach the 23514 branch without a real trigger.
@@ -2204,16 +2275,73 @@ describe("picks", () => {
   });
 
   it("carries the chosen kind through to the write", async () => {
-    const { writes } = await runSaveMenuItem({ pickLabel: "best_seller" });
+    // Asserted against setMenuItemPick rather than saveMenuItem: the
+    // control moved onto the collapsed row beside the sold-out one and
+    // saves on change, so this writer is the only one that sends the
+    // column on an edit. The claim is unchanged -- the kind the operator
+    // chose is what reaches the column.
+    const { writes } = await runSetMenuItemPick("best_seller");
     expect(writes.at(-1)?.patch?.pick_label).toBe("best_seller");
+    expect(store.menu_items.find((i) => i.id === MARTY_ITEM)?.pick_label).toBe("best_seller");
   });
 
   it("writes null, not a string, when the dish is not a pick", async () => {
     // The column is nullable and the cap counts non-null. An empty
     // string would be a fourth pick as far as the trigger is concerned,
     // and a code PICK_PHRASE has no phrase for as far as the agent is.
-    const { writes } = await runSaveMenuItem({ pickLabel: "" });
+    const { writes } = await runSetMenuItemPick("");
     expect(writes.at(-1)?.patch?.pick_label).toBeNull();
+  });
+
+  it("writes that column and no other, whatever else is on the row", async () => {
+    // The mirror of setMenuItemSoldOut's own posture: one control, one
+    // column. A row control that carried the name, the price or the
+    // sold-out flag with it would re-send a prop the page may have
+    // rendered minutes ago.
+    const { writes } = await runSetMenuItemPick("chefs_special");
+    expect(Object.keys(writes.at(-1)?.patch ?? {})).toEqual(["pick_label"]);
+  });
+
+  it("refuses a kind the column has no room for, before the database sees it", async () => {
+    const result = await runSetMenuItemPick("house_favourite");
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/best seller|chef/i);
+    expect(store.writes).toEqual([]);
+  });
+
+  it("says what the agent will now do, and that a sold-out pick reaches nobody", async () => {
+    // lib/agent/menu.ts drops `pick` from the payload while the dish is
+    // out, so a pick set on a sold-out dish holds one of the three slots
+    // and produces no warmth at all. The row's chip says "Silent"; the
+    // sentence the operator gets back from the write has to say it too.
+    const item = store.menu_items.find((i) => i.id === MARTY_ITEM) as Record<string, unknown>;
+    item.sold_out_until = "close";
+
+    const result = await runSetMenuItemPick("best_seller");
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.message).toMatch(/sold out/i);
+    expect(result.ok && result.message).toMatch(/Carbonara/);
+    expect(result).toMatchObject({ phone: { state: "not-needed" } });
+  });
+
+  it("maps the cap and the one-special rule the way both other writers do", async () => {
+    // The trigger and the partial unique index are the guarantees; these
+    // two sentences are what an operator reads instead of a SQLSTATE.
+    // Different sentences on purpose: "clear one of your three" is no
+    // help to somebody who has picked two dishes and called both of them
+    // the chef's special.
+    const capped = await runSetMenuItemPick("best_seller", { failWith: "23514" });
+    expect(capped.ok).toBe(false);
+    expect(capped.ok === false && capped.error).toMatch(/three/i);
+    expect(capped.ok === false && capped.error).not.toMatch(/23514|violates|constraint/i);
+
+    store.writeFailures = {};
+    const taken = await runSetMenuItemPick("chefs_special", { failWith: "23505" });
+    expect(taken.ok).toBe(false);
+    expect(taken.ok === false && taken.error).toMatch(/chef/i);
+    expect(taken.ok === false && taken.error).toMatch(/only one/i);
+    expect(taken.ok === false && taken.error).not.toMatch(/three/i);
+    expect(taken.ok === false && taken.error).not.toMatch(/23505|violates|constraint/i);
   });
 
   it("turns the trigger's refusal into a sentence an operator can act on", async () => {

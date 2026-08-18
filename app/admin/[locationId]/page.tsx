@@ -28,6 +28,7 @@ import {
   saveHoursAction,
   saveMenuCategoryAction,
   saveMenuItemAction,
+  setMenuItemPickAction,
   setMenuItemSoldOutAction,
 } from "@/app/admin/[locationId]/edit/actions";
 import { getAdminLocation } from "@/lib/admin/data";
@@ -456,6 +457,7 @@ export default async function AdminLocationPage({
               saveItemAction={saveMenuItemAction}
               deleteItemAction={deleteMenuItemAction}
               setSoldOutAction={setMenuItemSoldOutAction}
+              setPickAction={setMenuItemPickAction}
             />
           ) : (
             <RecordUnreadable />

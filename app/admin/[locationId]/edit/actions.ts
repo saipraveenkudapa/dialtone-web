@@ -20,6 +20,7 @@ import {
   saveOrderRouting,
   saveRecording,
   saveService,
+  setMenuItemPick,
   setMenuItemSoldOut,
   type EditResult,
 } from "@/lib/admin/edit";
@@ -611,6 +612,32 @@ export async function setMenuItemSoldOutAction(
   if (badSelector(itemId)) return NO_SUCH_ROW;
 
   return settle(locationId, await setMenuItemSoldOut({ locationId, itemId, until: str(until) }));
+}
+
+/** Which kind of pick a dish is — the second one-click control on the
+ *  row, beside the sold-out one.
+ *
+ *  Nothing baked, like everything else in this block: the agent reads
+ *  the pick out of Postgres on every call (lib/agent/menu.ts turns the
+ *  code into the phrase it speaks), so a dish picked here is one the
+ *  assistant can compliment on the very next call.
+ *
+ *  The three-per-restaurant cap and the one-chef's-special rule are the
+ *  database's, and lib/admin/edit.ts turns each SQLSTATE into its own
+ *  sentence. This layer adds no rule of its own — `str` only makes an
+ *  odd body an empty string, which is "not a pick", and
+ *  validatePickLabel holds the rest. */
+export async function setMenuItemPickAction(
+  locationId: string,
+  itemId: string,
+  /** "" is not a pick. */
+  label: string,
+): Promise<EditResult> {
+  const denied = await gate(locationId);
+  if (denied) return denied;
+  if (badSelector(itemId)) return NO_SUCH_ROW;
+
+  return settle(locationId, await setMenuItemPick({ locationId, itemId, label: str(label) }));
 }
 
 /* ── pushing an edit that did not push ─────────────────────────────── */
