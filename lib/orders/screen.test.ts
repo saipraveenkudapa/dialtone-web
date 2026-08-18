@@ -1,0 +1,401 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { BoardOrder } from "@/lib/data";
+
+/** What a restaurant actually reads on /dashboard/orders.
+ *
+ *  This screen was a stub -- "Not built yet" -- while real orders were
+ *  landing in the database behind it. A caller ordered $27.00 of food on
+ *  the phone, the agent took it, the row was written, and the people who
+ *  had to cook it were shown a sentence about a design file. So the
+ *  assertions here are deliberately about the WORDS on the screen and
+ *  not about the shape of the component: what a cook can read is the
+ *  entire product at this point.
+ *
+ *  Under lib/ because vitest.config.ts's node project takes
+ *  lib/**\/*.test.ts, beside lib/calls/'s tests of the call screens.
+ *  The page is an async server component with no event handlers, so
+ *  awaiting it and putting the result through renderToStaticMarkup is
+ *  the whole of what it does.
+ */
+
+/* next/link mounts against the App Router's context, which nothing here
+   is inside. The page uses it for one thing -- a link back to the call
+   the order was taken on -- so an anchor is a faithful stand-in and the
+   assertions stay about what a reader reads. */
+vi.mock("next/link", () => ({
+  default: ({ href, children }: { href: string; children: ReactNode }) =>
+    createElement("a", { href }, children),
+}));
+
+const getCurrentLocation = vi.fn();
+const getOrdersBoard = vi.fn();
+
+vi.mock("@/lib/data", () => ({
+  getCurrentLocation,
+  getOrdersBoard,
+  ORDERS_ON_THE_BOARD: 50,
+}));
+
+const OrdersPage = (await import("@/app/dashboard/orders/page")).default;
+
+/** New York, on purpose: the fixtures below are timestamped just after
+ *  midnight UTC, so every rendered time is on the DAY BEFORE the one the
+ *  raw column holds. A screen that rendered UTC -- or the machine's own
+ *  clock, which under vitest is UTC -- would print a different date, not
+ *  merely a different hour. */
+const TZ = "America/New_York";
+
+const PLACED = "2026-08-18T01:12:00.000Z"; // Aug 17, 9:12 PM in New York
+const PROMISED = "2026-08-18T01:37:00.000Z"; // Aug 17, 9:37 PM in New York
+const NOW = Date.parse("2026-08-18T01:18:00.000Z"); // six minutes later
+
+function location(over: Record<string, unknown> = {}) {
+  return {
+    id: "loc-nonna",
+    name: "Nonna Rosa",
+    timezone: TZ,
+    is_live: true,
+    kill_switch_on: false,
+    ...over,
+  };
+}
+
+/** The order the product owner reported: #1001, Phi, $27.00, two lines,
+ *  linked to its call -- with the note the caller said out loud. */
+function order(over: Partial<BoardOrder> = {}): BoardOrder {
+  return {
+    id: "ord-1001",
+    orderNumber: 1001,
+    callId: "8f0f8c6e-0000-4000-8000-000000000000",
+    customerName: "Phi",
+    customerPhone: "(510) 555-0143",
+    type: "pickup",
+    status: "new",
+    totalCents: 2700,
+    placedAt: PLACED,
+    promisedAt: PROMISED,
+    address: null,
+    lines: [
+      { id: "l1", name: "Margherita", quantity: 1, totalCents: 1800, note: "no onions" },
+      { id: "l2", name: "Garlic bread", quantity: 2, totalCents: 900, note: null },
+    ],
+    ...over,
+  };
+}
+
+/** Tags dropped, entities put back, whitespace collapsed -- so the
+ *  assertions are about what a reader reads. Same helper, same reason,
+ *  as lib/calls/call-facts.test.ts. */
+function prose(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&middot;/g, "·")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&#x2F;/g, "/")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function markup(): Promise<string> {
+  return renderToStaticMarkup(await OrdersPage());
+}
+
+async function said(): Promise<string> {
+  return prose(await markup());
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.spyOn(Date, "now").mockReturnValue(NOW);
+  getCurrentLocation.mockResolvedValue(location());
+  getOrdersBoard.mockResolvedValue([]);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("a restaurant that has taken no orders yet", () => {
+  it("is told what will appear here and when, not that the screen is unfinished", async () => {
+    const screen = await said();
+
+    expect(screen).toContain("No orders yet");
+    // The whole point of the sentence: it says what lands here and what
+    // puts it there.
+    expect(screen).toContain("the agent takes");
+    expect(screen).not.toContain("Not built yet");
+    expect(screen).not.toContain("design/Dialtone.html");
+    // The board's per-column note is for a column that is empty while
+    // others are not. It is the wrong sentence for a restaurant that has
+    // never taken an order at all.
+    expect(screen).not.toContain("Quiet for the moment");
+  });
+
+  it("says why there can be none while the agent is not answering", async () => {
+    getCurrentLocation.mockResolvedValue(location({ kill_switch_on: true }));
+
+    const screen = await said();
+
+    expect(screen).toContain("No orders yet");
+    expect(screen).toContain("nobody can place one until this restaurant is answering");
+  });
+
+  it("still names the clock every time on this screen is in", async () => {
+    expect(await said()).toContain(TZ);
+  });
+});
+
+describe("one pickup order with a note on a line", () => {
+  beforeEach(() => {
+    getOrdersBoard.mockResolvedValue([order()]);
+  });
+
+  it("names the order, the customer, and the number to ring them back on", async () => {
+    const screen = await said();
+
+    expect(screen).toContain("#1001");
+    expect(screen).toContain("Phi");
+    expect(screen).toContain("(510) 555-0143");
+  });
+
+  it("lists what to make, with quantities", async () => {
+    const screen = await said();
+
+    expect(screen).toContain("1 × Margherita");
+    expect(screen).toContain("2 × Garlic bread");
+  });
+
+  /* A NOTE IS WHY THE PLATE IS RIGHT. It was said out loud, confirmed
+     back to the caller, and stored on the line it belongs to. A board
+     that does not show it hands the pass a ticket reading `1x
+     Margherita` and the caller gets onions. */
+  it("shows the note on the line it belongs to", async () => {
+    const html = await markup();
+
+    // Not merely present somewhere on the card: inside the same list
+    // item as the dish it changes, so a cook reading three lines knows
+    // which plate it is about.
+    const line = html.slice(html.indexOf("Margherita"));
+    expect(line.slice(0, line.indexOf("</li>"))).toContain("no onions");
+  });
+
+  it("prices the line and the order through money(), in a tabular figure", async () => {
+    const html = await markup();
+
+    expect(prose(html)).toContain("$27.00");
+    // Every figure on this screen is a .num, so columns of money line up
+    // digit under digit.
+    expect(html).toMatch(/class="[^"]*\bnum\b[^"]*">\$27\.00</);
+    expect(html).toMatch(/class="[^"]*\bnum\b[^"]*">\$18\.00</);
+  });
+
+  /* The mockup's card reads "Total · paid by SMS link". Nothing in this
+     product texts anybody a payment link -- lib/agent/prompt.ts tells
+     the agent to say payment is handled at pickup or delivery -- and a
+     ticket that tells a kitchen the food is already paid for is not a
+     cosmetic error. */
+  it("does not tell the kitchen the order has been paid for", async () => {
+    expect(await said()).not.toContain("paid by SMS link");
+  });
+
+  it("says when it was placed and when it was promised, in the restaurant's own clock", async () => {
+    const screen = await said();
+
+    expect(screen).toContain("Placed Aug 17, 2026, 9:12 PM");
+    expect(screen).toContain("Promised Aug 17, 2026, 9:37 PM");
+    // The column holds Aug 18 in UTC. Nothing on this screen may.
+    expect(screen).not.toContain("Aug 18, 2026");
+    // And how long it has been sitting there, which is the question a
+    // pass asks first.
+    expect(screen).toContain("6 min ago");
+  });
+
+  it("says it is a pickup, and offers no address for one", async () => {
+    const screen = await said();
+
+    expect(screen).toContain("Pickup");
+    expect(screen).not.toContain("Deliver to");
+  });
+
+  it("links back to the call it was taken on", async () => {
+    expect(await markup()).toContain(
+      'href="/dashboard/calls/8f0f8c6e-0000-4000-8000-000000000000"',
+    );
+  });
+
+  it("puts it under the board's first column, by name", async () => {
+    expect(await said()).toContain("New");
+  });
+});
+
+describe("a delivery", () => {
+  it("says where the food is going", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({
+        id: "ord-1002",
+        orderNumber: 1002,
+        type: "delivery",
+        address: "742 Evergreen Terrace, apt 2",
+        customerName: "Priya S.",
+      }),
+    ]);
+
+    const screen = await said();
+
+    expect(screen).toContain("Delivery");
+    expect(screen).toContain("Deliver to 742 Evergreen Terrace, apt 2");
+  });
+
+  it("says so even when the agent recorded no address, rather than showing an empty line", async () => {
+    // place_order refuses a delivery with no address, so this row could
+    // only come from somewhere else -- and a delivery whose address is
+    // missing is the one a kitchen must not silently treat as fine.
+    getOrdersBoard.mockResolvedValue([
+      order({ type: "delivery", address: null }),
+    ]);
+
+    expect(await said()).toContain("no address on this order");
+  });
+});
+
+describe("the board's columns", () => {
+  it("carries the three the approved design has, in its order", async () => {
+    const screen = await said();
+    getOrdersBoard.mockResolvedValue([order()]);
+
+    const withOrders = await said();
+    expect(withOrders.indexOf("New")).toBeLessThan(withOrders.indexOf("In the kitchen"));
+    expect(withOrders.indexOf("In the kitchen")).toBeLessThan(withOrders.indexOf("Ready"));
+    // An empty board shows the honest sentence instead of three empty
+    // columns.
+    expect(screen).not.toContain("In the kitchen");
+  });
+
+  it("puts each order in the column its status belongs to", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({ id: "a", orderNumber: 1003, status: "ready" }),
+      order({ id: "b", orderNumber: 1002, status: "preparing" }),
+      order({ id: "c", orderNumber: 1001, status: "confirmed" }),
+    ]);
+
+    const screen = await said();
+
+    // Column heading, then the order under it, then the next heading.
+    expect(screen.indexOf("#1001")).toBeGreaterThan(screen.indexOf("New"));
+    expect(screen.indexOf("#1001")).toBeLessThan(screen.indexOf("In the kitchen"));
+    expect(screen.indexOf("#1002")).toBeGreaterThan(screen.indexOf("In the kitchen"));
+    expect(screen.indexOf("#1002")).toBeLessThan(screen.indexOf("Ready"));
+    expect(screen.indexOf("#1003")).toBeGreaterThan(screen.indexOf("Ready"));
+  });
+
+  it("keeps the newest order at the top of its column", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({ id: "b", orderNumber: 1002, placedAt: "2026-08-18T01:15:00.000Z" }),
+      order({ id: "a", orderNumber: 1001, placedAt: PLACED }),
+    ]);
+
+    const screen = await said();
+
+    expect(screen.indexOf("#1002")).toBeLessThan(screen.indexOf("#1001"));
+  });
+
+  it("uses the design's own words for a column with nothing in it", async () => {
+    // One order, in the middle column, so the two either side are empty
+    // and both sentences the design wrote have to appear.
+    getOrdersBoard.mockResolvedValue([order({ status: "preparing" })]);
+
+    const screen = await said();
+
+    expect(screen).toContain("Quiet for the moment.");
+    expect(screen).toContain("Nothing here.");
+  });
+
+  /* THE ONE THING THE APPROVED BOARD CANNOT HOLD. Its three columns are
+     New, In the kitchen and Ready; `order_status` also has 'completed'
+     and 'cancelled', and there is no column for either. Dropping them
+     silently is the defect this whole screen exists to undo, one status
+     along, so the board says how many it is not showing. */
+  it("says out loud how many orders it is not showing", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({ id: "a", orderNumber: 1002, status: "completed" }),
+      order({ id: "b", orderNumber: 1001, status: "new" }),
+    ]);
+
+    const screen = await said();
+
+    expect(screen).toContain("#1001");
+    expect(screen).not.toContain("#1002");
+    expect(screen).toContain("1 completed or cancelled order is not on this board");
+  });
+
+  it("counts them properly when there is more than one", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({ id: "a", orderNumber: 1003, status: "completed" }),
+      order({ id: "b", orderNumber: 1002, status: "cancelled" }),
+      order({ id: "c", orderNumber: 1001, status: "new" }),
+    ]);
+
+    expect(await said()).toContain("2 completed or cancelled orders are not on this board");
+  });
+
+  it("says nothing about them when there are none", async () => {
+    getOrdersBoard.mockResolvedValue([order()]);
+
+    expect(await said()).not.toContain("not on this board");
+  });
+});
+
+describe("an order that is late", () => {
+  it("is marked, and one that is not is left alone", async () => {
+    getOrdersBoard.mockResolvedValue([
+      // Promised five minutes before the clock this render ran on.
+      order({ id: "a", orderNumber: 1002, promisedAt: "2026-08-18T01:13:00.000Z" }),
+    ]);
+
+    expect(await markup()).toMatch(/class="[^"]*tag-out/);
+
+    getOrdersBoard.mockResolvedValue([order()]);
+    expect(await markup()).not.toMatch(/class="[^"]*tag-out/);
+  });
+
+  it("is not marked once it is ready to be collected", async () => {
+    // Past its promise time, but cooked: the mark is for food nobody has
+    // finished, not for a bag sitting on the counter waiting for its
+    // owner.
+    getOrdersBoard.mockResolvedValue([
+      order({ status: "ready", promisedAt: "2026-08-18T01:13:00.000Z" }),
+    ]);
+
+    expect(await markup()).not.toMatch(/class="[^"]*tag-out/);
+  });
+});
+
+describe("an order the agent could not name", () => {
+  it("says so rather than printing a gap", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({ customerName: null, customerPhone: null, promisedAt: null }),
+    ]);
+
+    const screen = await said();
+
+    expect(screen).toContain("No name taken");
+    expect(screen).toContain("no number taken");
+    // A sentence, not a label with a gap after it: "Promised —" is
+    // something a reader has to interpret.
+    expect(screen).toContain("No promise time recorded");
+    expect(screen).not.toContain("Promised No promise");
+  });
+});
+
+describe("a restaurant with no location at all", () => {
+  it("renders nothing and leaves the layout to explain", async () => {
+    getCurrentLocation.mockResolvedValue(null);
+
+    expect(await markup()).toBe("");
+    expect(getOrdersBoard).not.toHaveBeenCalled();
+  });
+});

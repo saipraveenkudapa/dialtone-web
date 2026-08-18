@@ -1129,6 +1129,114 @@ a:hover { color: var(--color-accent); }
   font-size: 13px;
 }
 
+/* ── the orders board ──────────────────────────────────────────────────
+   design/Dialtone.html's Orders screen, which was drawn and never built.
+   In the mockup every one of these rules is an inline style on a
+   .card.blueprint; the classes below are those declarations, moved to
+   the one file this product's styling extends and re-cut onto tokens.
+
+   NOTHING HERE IS A NEW LOOK. The frame is .card.blueprint with
+   <Corners />, the muted ink is .text-muted, the figures are .num, and
+   the late mark is .tag.tag-out -- which already carries exactly the
+   inversion the mockup's late timer draws by hand
+   (background: --color-accent-900, colour: --color-bg).
+
+   WHY THESE CLASSES EXIST AT ALL, given the four in the sentence above.
+   What is left after the reuse is layout: a three-column board, a
+   column heading with its count, and the three rows inside one ticket.
+   Every one of those has a same-shaped class already in this file --
+   .menu-grid is this grid, .soldout-row is this line, .hours-row is
+   this heading -- and all of them are named for another screen.
+   Borrowing one is not a saving, it is the rot components/admin/
+   OrdersTab.tsx was written to undo: the operator's ten orders used to
+   render as .soldout-list / .soldout-row, the sold-out list's furniture
+   worn by orders because it happened to be the right shape, and
+   nobody reading either screen's markup could tell what it was looking
+   at. Same shape, different subject, own name. */
+
+/* Three columns at desktop, as drawn. The mockup hard-codes
+   `repeat(3, 1fr)`, which at 375px gives three 100px columns and a
+   ticket nobody can read; auto-fit over a floor lets them stack the way
+   every other grid in this file already does (.menu-grid, .stat-grid),
+   and with three children auto-fit can never make a fourth. */
+.orders-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(264px, 100%), 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+.orders-col { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.orders-col-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-divider);
+}
+/* The heading sets its own bottom margin (industry.css), which would
+   double the rule's air. */
+.orders-col-head h4 { margin: 0; }
+.orders-col-count { font-size: 12px; }
+.orders-col-empty { font-size: 13px; margin: 0; }
+
+/* One ticket. .card's own gap is var(--space-2) and that is the rhythm
+   the mockup's card has; only the padding grows, because a ticket is
+   read at arm's length across a pass. */
+.order-card { padding: var(--space-4); }
+.order-head { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
+.order-number {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 17px;
+}
+.order-type { font-size: 12px; }
+/* Pushed to the far end of the head, as in the mockup. 12px in both
+   states: worn as a .tag it would otherwise shrink to the chip's 11px
+   the moment an order went late, and a mark that appears BECAUSE
+   something is wrong must not also get smaller. */
+.order-elapsed { margin-left: auto; font-size: 12px; }
+.order-who { font-size: 13px; }
+
+.order-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.order-line { display: flex; align-items: baseline; gap: var(--space-2); font-size: 13px; }
+.order-qty { flex: none; }
+.order-item { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.order-price { flex: none; }
+
+/* THE NOTE, AND WHY IT IS NOT MUTED. Everything else on this card is a
+   fact a cook can check against the plate; the note is the one thing
+   that is invisible once the food is made, and the only marked
+   difference between the right plate and the wrong one. So it takes the
+   accent rule .edit-note uses for "read this", and it does not take
+   .text-muted -- greying the single line that changes the dish is
+   exactly the wrong place to save ink. */
+.order-note {
+  border-left: 2px solid var(--color-accent);
+  padding-left: var(--space-2);
+  font-size: 12px;
+}
+
+.order-total {
+  display: flex;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-divider);
+  font-size: 13px;
+}
+.order-total .label { flex: 1; }
+
+/* When it was placed, when it was promised, and where it is going. The
+   mockup's card has none of these three; a kitchen cannot work without
+   the second. */
+.order-when { display: flex; flex-direction: column; gap: var(--space-1); font-size: 12px; }
+
 /* ── operator: create a new restaurant ─────────────────────────────── */
 
 /* These were the /onboarding wizard's classes. That wizard is gone --

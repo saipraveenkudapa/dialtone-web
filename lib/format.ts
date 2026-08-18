@@ -38,6 +38,51 @@ export const ORDER_TAG: Record<OrderStatus, string> = {
   cancelled: "tag tag-out",
 };
 
+/** The columns of the Orders board, in the approved design's own order
+ *  and with its own words -- design/Dialtone.html's Orders screen is
+ *  three columns headed New, In the kitchen and Ready, each with a count
+ *  beside the heading and a sentence for when it is empty.
+ *
+ *  Here rather than in the page for the same reason ORDER_TAG is: it is
+ *  the vocabulary a status is READ in, and a second copy of it is how a
+ *  status ends up meaning two things on two screens. */
+export type OrderBoardColumn = "new" | "kitchen" | "ready";
+
+export const ORDER_BOARD_COLUMNS: {
+  key: OrderBoardColumn;
+  name: string;
+  emptyNote: string;
+}[] = [
+  { key: "new", name: "New", emptyNote: "Quiet for the moment." },
+  { key: "kitchen", name: "In the kitchen", emptyNote: "Nothing here." },
+  { key: "ready", name: "Ready", emptyNote: "Nothing here." },
+];
+
+/** Which column a status belongs in, and NULL for the two the approved
+ *  board has no column for.
+ *
+ *  Six statuses onto three columns and a hole. 'new' and 'confirmed'
+ *  share the first: both mean a ticket nobody has started cooking, and
+ *  the board's first column is for exactly that. 'preparing' is the
+ *  kitchen, 'ready' is the pass.
+ *
+ *  'completed' and 'cancelled' map to null ON PURPOSE, and the null is
+ *  the point: it is a value the screen has to handle rather than a row
+ *  that quietly evaporates. A board that silently dropped them would be
+ *  this product's original sin -- an order taken and then hidden from
+ *  the restaurant -- committed one status further along.
+ *
+ *  Closed union, like ORDER_TAG above: a seventh status added to the
+ *  schema fails to compile here instead of rendering nowhere. */
+export const ORDER_BOARD_COLUMN: Record<OrderStatus, OrderBoardColumn | null> = {
+  new: "new",
+  confirmed: "new",
+  preparing: "kitchen",
+  ready: "ready",
+  completed: null,
+  cancelled: null,
+};
+
 /** Clock time in the location's timezone, and NOTHING ELSE.
  *
  *  ONLY for a moment whose date the thing around it has already
@@ -97,6 +142,20 @@ export function dateIn(timezone: string, date = new Date()) {
     day: "numeric",
     timeZone: timezone,
   }).format(date);
+}
+
+/** Whether an instant has already gone by.
+ *
+ *  Beside `relative` and defaulted the same way, for the same two
+ *  reasons: it is the same question about the same clock, and a caller
+ *  that wants a fixed instant (a test, or a render that must measure
+ *  every row against one moment) passes one. It lives here rather than
+ *  in the one screen that asks it because `Date.now()` inside a
+ *  component body is an impure call in a render -- react-hooks/purity
+ *  rejects it -- and because "is this order past the time we promised
+ *  it" is a question a second screen will ask. */
+export function isPast(iso: string, now = Date.now()) {
+  return new Date(iso).getTime() < now;
 }
 
 export function relative(iso: string, now = Date.now()) {
