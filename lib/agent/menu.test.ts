@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shapeMenu, suggestAlternative } from "./menu";
+import { PICK_PHRASE, shapeMenu, suggestAlternative } from "./menu";
 
 import type { MenuCategoryWithItems } from "@/lib/data";
 import type { PickLabel } from "@/lib/supabase/types";
@@ -203,7 +203,7 @@ describe("picks in the agent payload", () => {
     const menu = shapeMenu(
       category([item("i1", "Bucatini", 1800, null, { pick_label: "best_seller" })]),
     );
-    expect(menu.categories[0].items[0].pick).toBe("a best seller");
+    expect(menu.categories[0].items[0].pick).toBe("one of our best sellers");
   });
 
   it("carries the other kind, worded so it can be spoken as it stands", () => {
@@ -214,17 +214,48 @@ describe("picks in the agent payload", () => {
   });
 
   // The sentence the prompt builds is "it is <pick>", so each phrase
-  // carries its own article: "it is a best seller", "it is the chef's
-  // special". A phrase without one would leave the agent to invent the
-  // determiner, and the obvious invention -- "the restaurant's chef's
-  // special" -- is a double possessive no host would say out loud.
+  // carries its own determiner: "it is one of our best sellers", "it is
+  // the chef's special". A phrase without one would leave the agent to
+  // invent it, and the obvious invention for the second -- "the
+  // restaurant's chef's special" -- is a double possessive no host would
+  // say out loud.
   it("reads naturally after the words the prompt puts in front of it", () => {
     for (const label of ["best_seller", "chefs_special"] as const) {
       const menu = shapeMenu(category([item("i1", "Bucatini", 1800, null, { pick_label: label })]));
       const spoken = `it is ${menu.categories[0].items[0].pick}`;
-      expect(spoken).toMatch(/^it is (a|the) /);
+      expect(spoken).toMatch(/^it is (a|the|one of) /);
       expect(spoken).not.toContain("'s chef's");
     }
+  });
+
+  // The claim about sales has to LIMIT ITSELF, because the prompt orders
+  // a paraphrase of it: "a phrase, not a name, so say it in the caller's
+  // language". The restaurant asserted that a dish sells well, one of
+  // several -- it did not assert the single top seller, and no rule in
+  // the prompt catches that inflation (it forbids inventing a special, a
+  // deal, an item, a price, a time or a policy; a popularity claim is
+  // none of those).
+  //
+  // An indefinite article does not survive the paraphrase. Few languages
+  // have a natural indefinite "a best seller", so the fluent form a model
+  // reaches for is a definite superlative -- "es el plato mas vendido" --
+  // and the modest claim is spoken as an absolute one. "one of" is
+  // partitive by construction and has nowhere else to go. It matters
+  // twice over because two dishes may both be best sellers, and the
+  // prompt lets one caller hear about both.
+  it("keeps the sales claim partitive, in the string rather than in an article", () => {
+    expect(PICK_PHRASE.best_seller).toMatch(/^one of /);
+    expect(PICK_PHRASE.best_seller).not.toMatch(/^(a|an|the) /);
+    expect(`it is ${PICK_PHRASE.best_seller}`).toBe("it is one of our best sellers");
+  });
+
+  // Its opposite: this one IS definite, and is only allowed to be
+  // because menu_items_one_chefs_special_idx admits one per location
+  // (supabase/migrations/20260818000100_pick_labels.sql). The prompt lets
+  // the agent name two picks in a call, so without that index one caller
+  // could be told two different dishes are each "the chef's special".
+  it("keeps the chef's special definite, which the database is what makes safe", () => {
+    expect(PICK_PHRASE.chefs_special).toMatch(/^the /);
   });
 
   it("leaves the key off an ordinary item entirely", () => {

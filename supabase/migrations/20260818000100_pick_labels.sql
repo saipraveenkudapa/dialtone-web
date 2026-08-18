@@ -27,6 +27,35 @@ alter table menu_items
   add column pick_label text
     check (pick_label in ('best_seller', 'chefs_special'));
 
+-- Exactly ONE chef's special per restaurant. Nothing else says so, and
+-- the spoken phrase depends on it being true.
+--
+-- The two kinds are not symmetric. lib/agent/menu.ts sends "one of our
+-- best sellers" -- partitive, so three dishes may each be one and a
+-- caller told about two of them has heard nothing contradictory. It
+-- sends "the chef's special" DEFINITE, because a kitchen has one. The
+-- cap above counts only the total, so all three of a restaurant's picks
+-- could be chefs_special, and the prompt lets the agent name two picks
+-- in a single call: exactly enough to tell one caller that the osso buco
+-- is the chef's special and then that the branzino is too. That is the
+-- phone line contradicting itself out loud about a matter of fact.
+--
+-- Partial and on location_id alone. A unique index is checked after the
+-- BEFORE ROW triggers have run, so menu_items_sync_location has already
+-- overwritten location_id from the category by then -- the spoofed
+-- location_id route that 20260817000200 had to close for the cap cannot
+-- walk round this. Nulls and best_seller rows are not in the index at
+-- all, so they are never compared, and a collision is only ever between
+-- two rows of the SAME restaurant: this leaks nothing across tenants.
+--
+-- 23505, deliberately NOT the cap's 23514. lib/admin/edit.ts maps the
+-- two to different sentences, because "clear one of your three picks" is
+-- no help at all to an operator who has picked two dishes and called
+-- both of them the chef's special.
+create unique index menu_items_one_chefs_special_idx
+  on menu_items (location_id)
+  where pick_label = 'chefs_special';
+
 -- The cap counts LABELS now, not `true`s. Everything else about this
 -- function is carried forward unchanged from
 -- 20260817000200_staff_pick_cap_bypass_fix.sql, and the derivation below
@@ -118,5 +147,8 @@ comment on column menu_items.pick_label is
   'for not a pick. get_menu carries the SPOKEN phrase for it (see '
   'lib/agent/menu.ts), which the agent says in the caller''s own '
   'language -- unlike an item name, which is never translated. Capped at '
-  'three non-null per location by menu_items_staff_pick_cap. Suppressed '
-  'in the agent payload while the item is sold out.';
+  'three non-null per location by menu_items_staff_pick_cap, and at ONE '
+  'chefs_special per location by menu_items_one_chefs_special_idx, '
+  'because the phrase for that one is definite and two dishes cannot '
+  'both be it. Suppressed in the agent payload while the item is sold '
+  'out.';

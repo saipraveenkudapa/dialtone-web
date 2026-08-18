@@ -874,6 +874,15 @@ function ItemRow({
      trigger's "already counted" branch allows exactly that, so the
      control must not be shut on the one dish it still works for. */
   const capReached = picksUsed >= 3 && item.pick_label === null;
+  /* The other courtesy count, with the same standing:
+     menu_items_one_chefs_special_idx (SQLSTATE 23505) is the guarantee.
+     A restaurant has one chef's special, and the phrase the agent speaks
+     for it is definite -- two dishes each called "the chef's special" is
+     the assistant contradicting itself inside one call. Excludes this
+     row, so the dish that already holds it can keep it. */
+  const specialTaken = allItems.some(
+    (other) => other.id !== item.id && other.pick_label === "chefs_special",
+  );
   const dirty =
     name !== item.name ||
     price !== (item.price_cents / 100).toFixed(2) ||
@@ -1190,11 +1199,17 @@ function ItemRow({
           >
             <option value="">Not a pick</option>
             <option value="best_seller">{PICK_LABEL.best_seller}</option>
-            <option value="chefs_special">{PICK_LABEL.chefs_special}</option>
+            <option value="chefs_special" disabled={specialTaken}>
+              {PICK_LABEL.chefs_special}
+            </option>
           </select>
           {capReached ? (
             <p className="setup-note">
               Three dishes are already picked. Clear one to choose another.
+            </p>
+          ) : specialTaken ? (
+            <p className="setup-note">
+              Another dish is already the chef&rsquo;s special. There can only be one.
             </p>
           ) : null}
         </div>
@@ -1234,9 +1249,10 @@ function ItemRow({
         The description is read aloud to callers as what the dish comes with. The staff note is
         not: lib/agent/menu.ts leaves it out of the assistant&rsquo;s payload on purpose,
         because an allergy question is transferred to a person rather than answered from a
-        column. A pick lets the assistant say once that the dish is a best seller or the
-        chef&rsquo;s special &mdash; in the caller&rsquo;s own language, since that is a
-        phrase and not a name.
+        column. A pick lets the assistant say once that the dish is one of your best sellers,
+        or that it is the chef&rsquo;s special &mdash; in the caller&rsquo;s own language,
+        since that is a phrase and not a name. Any number of dishes can be a best seller;
+        only one can be the chef&rsquo;s special.
       </p>
 
       {duplicate ? (

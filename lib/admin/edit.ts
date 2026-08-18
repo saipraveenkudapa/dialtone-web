@@ -2294,6 +2294,20 @@ async function duplicateName(
 const PICK_CAP_REACHED =
   "This restaurant already has three picks. Set one of them back to “not a pick” first.";
 
+/** The OTHER pick refusal, and a different sentence on purpose. The cap
+ *  is about how many picks a restaurant has; this one is about how many
+ *  of them can be the same kind, and an operator who is told to clear one
+ *  of their three picks when they have only picked two has been sent to
+ *  look for a rule they have not hit.
+ *
+ *  Only one dish can be the chef's special because the agent says "the
+ *  chef's special" -- definite, since a kitchen has one -- and it may
+ *  name two picks in a single call. menu_items_one_chefs_special_idx
+ *  (23505) is what makes that phrase safe to say. */
+const ONE_CHEFS_SPECIAL =
+  "This restaurant already has a chef’s special, and only one dish can be it. Set that one to " +
+  "“best seller” or “not a pick” first.";
+
 const DUPLICATE_ITEM =
   "This restaurant already has an item by that name. Two items with the same name make the " +
   "assistant ask which one the caller meant and then read back two identical names, which is a " +
@@ -2358,6 +2372,14 @@ export async function createMenuItem({
     // sentence.
     if (error.code === "23514") {
       return refuse(PICK_CAP_REACHED);
+    }
+    // 23505 is menu_items_one_chefs_special_idx and nothing else this
+    // write can hit: the only other unique thing on this table is the
+    // primary key, which is a gen_random_uuid() default. The duplicate
+    // NAME check above is advisory and has no index behind it, so it
+    // cannot arrive here.
+    if (error.code === "23505") {
+      return refuse(ONE_CHEFS_SPECIAL);
     }
     return { ok: false, error: WRITE_FAILED };
   }
@@ -2444,6 +2466,14 @@ export async function saveMenuItem({
     // refusal.
     if (error.code === "23514") {
       return refuse(PICK_CAP_REACHED);
+    }
+    // 23505 is the second dish being made the chef's special, which the
+    // cap allows (it counts picks, not kinds) and which the definite
+    // article in what the agent says does not. Mapped separately from
+    // 23514 on purpose: the cap's sentence sends an operator who has
+    // picked two dishes off looking for a third to clear.
+    if (error.code === "23505") {
+      return refuse(ONE_CHEFS_SPECIAL);
     }
     return { ok: false, error: WRITE_FAILED };
   }

@@ -2237,4 +2237,29 @@ describe("picks", () => {
     expect(result.ok === false && result.error).toMatch(/three/i);
     expect(result.ok === false && result.error).not.toMatch(/23514|violates|constraint/i);
   });
+
+  // The second refusal, and a DIFFERENT sentence. menu_items_one_chefs_-
+  // special_idx raises 23505 when a second dish is made the chef's
+  // special: the cap has not been reached and may be nowhere near it, so
+  // "clear one of your three picks" sends the operator looking for a rule
+  // they have not hit. Only one dish can be it because the agent says
+  // "the chef's special" -- definite -- and may name two picks in a call.
+  it("tells the operator which rule stopped them when it was the chef's special", async () => {
+    const result = await runSaveMenuItem({ pickLabel: "chefs_special" }, { failWith: "23505" });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/chef/i);
+    expect(result.ok === false && result.error).toMatch(/only one/i);
+    // Not the cap's sentence: a restaurant can hit this holding one pick.
+    expect(result.ok === false && result.error).not.toMatch(/three/i);
+    expect(result.ok === false && result.error).not.toMatch(/23505|violates|constraint/i);
+  });
+
+  it("maps that refusal on create as well, the same way it maps the cap", async () => {
+    const result = await runCreateMenuItem({ failWith: "23505" });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/chef/i);
+    expect(result.ok === false && result.error).toMatch(/only one/i);
+    expect(result.ok === false && result.error).not.toMatch(/three/i);
+    expect(result.ok === false && result.error).not.toMatch(/23505|violates|constraint/i);
+  });
 });

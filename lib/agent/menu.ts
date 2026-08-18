@@ -50,15 +50,42 @@ export type AgentMenuItem = {
 
 /** The two kinds of pick, in the words a caller hears.
  *
- *  ARTICLES INCLUDED, and that is the whole design of these strings. The
- *  prompt says the agent may say once that a dish "is that pick", so the
- *  sentence it builds is `it is ` + this value: "it is a best seller",
- *  "it is the chef's special". Indefinite for one, definite for the
- *  other, because a kitchen has several best sellers and exactly one
- *  chef's special -- and a bare "best seller" would leave the agent to
- *  supply the determiner itself, whose most obvious form is the double
+ *  DETERMINERS INCLUDED, and that is the whole design of these strings.
+ *  The prompt says the agent may say once that a dish "is that pick", so
+ *  the sentence it builds is `it is ` + this value: "it is one of our
+ *  best sellers", "it is the chef's special". A bare "best seller" or
+ *  "chef's special" would leave the agent to supply the determiner
+ *  itself, and its most obvious form for the second is the double
  *  possessive "the restaurant's chef's special". No host says that out
  *  loud.
+ *
+ *  THE TWO ARE NOT SYMMETRIC, because the two claims are not the same
+ *  claim, and each of them is only safe for its own reason.
+ *
+ *  "one of our best sellers" is a statement of fact about sales, and it
+ *  is PARTITIVE BY CONSTRUCTION rather than by an article. What the
+ *  restaurant asserted is that a dish sells well -- one of several -- not
+ *  that it outsells everything else on the menu. The prompt orders a
+ *  paraphrase of this string ("a phrase, not a name, so say it in the
+ *  caller's language"), so whatever limit the claim carries has to be
+ *  the kind that survives being reworded. "a best seller" is not: few
+ *  languages have a natural indefinite for it, so the fluent form a model
+ *  reaches for is a definite superlative -- "es el plato mas vendido",
+ *  "our star dish" -- which upgrades a modest claim into one the
+ *  restaurant never made. "one of" translates as the partitive it is
+ *  ("uno de nuestros platos mas vendidos") because there is nothing else
+ *  it can be. Nothing in the prompt would catch the inflation either: it
+ *  forbids inventing a special, a deal, a discount, an item, a price, a
+ *  time or a policy, and a popularity claim is none of those. Two dishes
+ *  may both be best sellers, and a caller told about both has been told
+ *  nothing contradictory.
+ *
+ *  "the chef's special" is definite on purpose -- a kitchen has one --
+ *  and that is only true because the database makes it true.
+ *  menu_items_one_chefs_special_idx admits one per location, so the
+ *  agent's two-picks-per-call allowance cannot be spent naming two
+ *  different dishes "the chef's special" to the same caller. Drop that
+ *  index and this string has to lose its article.
  *
  *  English, and the agent does NOT repeat it in English. This is the
  *  opposite kind of string from an item name: a name is a thing on a
@@ -73,7 +100,7 @@ export type AgentMenuItem = {
  *  lookup below simply omits the key rather than putting `undefined` on
  *  the wire. */
 export const PICK_PHRASE: Record<PickLabel, string> = {
-  best_seller: "a best seller",
+  best_seller: "one of our best sellers",
   chefs_special: "the chef's special",
 };
 

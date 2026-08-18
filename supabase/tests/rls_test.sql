@@ -359,22 +359,58 @@ begin
     insert into results values ('picks: three allowed', 'refused', 'ok');
   end;
 
+  -- A fourth pick, as 'best_seller' so that the CAP is the only thing
+  -- that can refuse it. ids[2] already holds this restaurant's one chef's
+  -- special, and menu_items_one_chefs_special_idx raises unique_violation
+  -- rather than check_violation -- which this handler would not catch, so
+  -- asking for a fourth chefs_special would mean a cap regression aborted
+  -- the transaction and erased every row this file has produced, instead
+  -- of failing the one assertion it belongs to.
   begin
-    update menu_items set pick_label = 'chefs_special' where id = ids[4];
+    update menu_items set pick_label = 'best_seller' where id = ids[4];
     insert into results values ('picks: fourth refused', 'allowed', 'refused');
   exception when check_violation then
     insert into results values ('picks: fourth refused', 'refused', 'refused');
   end;
 
+  -- ONE chef's special per restaurant, which the cap above does not say:
+  -- it counts picks, not kinds, so all three of them could be this one.
+  -- ids[3] already holds a slot as a best seller, so the cap's "already
+  -- counted" branch waves this through and only the partial unique index
+  -- is left to refuse it. It has to, because lib/agent/menu.ts sends "the
+  -- chef's special" definite and the prompt lets the agent name two picks
+  -- in one call: two dishes holding this label is one caller being told
+  -- that each of them is THE chef's special.
+  begin
+    update menu_items set pick_label = 'chefs_special' where id = ids[3];
+    insert into results values ('picks: second chef''s special refused', 'allowed', 'refused');
+  exception when unique_violation then
+    insert into results values ('picks: second chef''s special refused', 'refused', 'refused');
+  end;
+
   -- Re-wording a pick the restaurant already holds is not a fourth pick.
   -- At the cap, this is the one UPDATE that must still pass: it swaps
   -- which phrase the agent says about a dish that already owns a slot,
-  -- and the trigger's "already counted" branch is what lets it.
+  -- and the trigger's "already counted" branch is what lets it. Moving
+  -- OFF chefs_special rather than onto it, because the assertion directly
+  -- above owns the other direction now.
   begin
-    update menu_items set pick_label = 'chefs_special' where id = ids[1];
+    update menu_items set pick_label = 'best_seller' where id = ids[2];
     insert into results values ('picks: relabelling at the cap allowed', 'ok', 'ok');
-  exception when check_violation then
+  exception when check_violation or unique_violation then
     insert into results values ('picks: relabelling at the cap allowed', 'refused', 'ok');
+  end;
+
+  -- And the slot the index guards is freed the moment the label moves off
+  -- the row that held it -- otherwise a restaurant gets one chef's
+  -- special ever, not one at a time. This also leaves location A holding
+  -- one, so the block after this one can prove the index is scoped to a
+  -- restaurant rather than to the table.
+  begin
+    update menu_items set pick_label = 'chefs_special' where id = ids[2];
+    insert into results values ('picks: the chef''s special slot is reusable', 'ok', 'ok');
+  exception when check_violation or unique_violation then
+    insert into results values ('picks: the chef''s special slot is reusable', 'refused', 'ok');
   end;
 
   -- A label the agent has no phrase for never reaches the column. The
@@ -415,6 +451,24 @@ begin
   insert into results values ('picks: counted per restaurant', 'ok', 'ok');
 exception when check_violation then
   insert into results values ('picks: counted per restaurant', 'refused', 'ok');
+end $$;
+
+-- And so is the chef's special. Nonna Rosa is holding one right now (the
+-- block above left it that way on purpose), so an index keyed on nothing
+-- but pick_label would refuse this and give every restaurant on the
+-- platform a share of one label. It is keyed on location_id, and the
+-- location_id it reads is the one menu_items_sync_location derived from
+-- the category -- a BEFORE ROW trigger, which runs before any unique
+-- index is consulted, so the spoofing route 20260817000200 had to close
+-- for the cap does not exist here.
+do $$
+begin
+  update menu_items set pick_label = 'chefs_special'
+   where location_id = 'b10c0000-0000-0000-0000-00000000000b'
+     and name = 'Margherita';
+  insert into results values ('picks: one chef''s special EACH', 'ok', 'ok');
+exception when unique_violation then
+  insert into results values ('picks: one chef''s special EACH', 'refused', 'ok');
 end $$;
 
 reset role;

@@ -914,7 +914,11 @@ describe("the pick control in an item's edit row", () => {
     const form = menuAdmin.slice(menuAdmin.indexOf("ma-item-pick-"));
     expect(form).toMatch(/<option value="">Not a pick<\/option>/);
     expect(form).toMatch(/<option value="best_seller">\{PICK_LABEL\.best_seller\}<\/option>/);
-    expect(form).toMatch(/<option value="chefs_special">\{PICK_LABEL\.chefs_special\}<\/option>/);
+    // Same option, wearing the one-per-restaurant courtesy the test at
+    // the bottom of this block pins.
+    expect(form).toMatch(
+      /<option value="chefs_special" disabled=\{specialTaken\}>\s*\n\s*\{PICK_LABEL\.chefs_special\}\s*\n\s*<\/option>/,
+    );
     // The wearing of .input is what puts it on the same rail as every
     // other field in the row, and what the coarse-pointer rule below
     // reaches.
@@ -949,5 +953,24 @@ describe("the pick control in an item's edit row", () => {
     );
     expect(menuAdmin).toContain("picksUsed >= 3 && item.pick_label === null");
     expect(menuAdmin).toMatch(/Three dishes are already picked/);
+  });
+
+  it("offers the chef's special to one dish at a time, and says why", () => {
+    // menu_items_one_chefs_special_idx (23505) is the guarantee, exactly
+    // as the cap trigger is for the count above -- this is the courtesy
+    // in front of it. The rule is not a matter of taste: lib/agent/menu.ts
+    // sends "the chef's special", definite, and the prompt lets the agent
+    // name two picks in one call, so two dishes holding the label is the
+    // assistant contradicting itself to a caller.
+    const menuAdmin = source("../../components/admin/MenuAdmin.tsx");
+    expect(menuAdmin).toContain('other.pick_label === "chefs_special"');
+    // Excludes this row: the dish that already holds the label has to be
+    // able to keep it, and to be re-worded or cleared -- the same reason
+    // capReached is not a bare `picksUsed >= 3`.
+    expect(menuAdmin).toContain("other.id !== item.id && other.pick_label ===");
+    expect(menuAdmin).toMatch(/Another dish is already the chef&rsquo;s special/);
+    // "best seller" carries no such rule and must not grow one: any
+    // number of dishes can be one of several best sellers.
+    expect(menuAdmin).not.toMatch(/<option value="best_seller" disabled/);
   });
 });
