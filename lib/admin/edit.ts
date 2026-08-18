@@ -2479,7 +2479,7 @@ export async function saveMenuItem({
     console.error("[admin-edit] item update failed", { locationId, code: error.code });
     /* Both mappings are now a BACKSTOP rather than a live path, and are
        kept for that reason.
-       
+
        This update no longer sends pick_label, and the cap trigger takes
        its "already counted" early return on any UPDATE of a row that was
        already a pick and has not changed restaurant -- so neither the
