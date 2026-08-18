@@ -308,7 +308,7 @@ exception when insufficient_privilege then
   insert into results values ('agent: read menu imports', 'denied', 'denied');
 end $$;
 
--- ── staff pick cap ───────────────────────────────────────────────────
+-- ── pick cap ─────────────────────────────────────────────────────────
 --
 -- Runs as an authenticated owner, the same way the sections above do --
 -- NOT as agent_service, which is still the role in effect from the
@@ -340,34 +340,60 @@ begin
   select array_agg(id) into ids
     from (select id from menu_items where location_id = loc order by created_at limit 4) t;
 
-  -- Guarded like the two blocks below it, and for the same reason this
-  -- block itself exists to fix: a bare UPDATE with no exception handler
-  -- that raises aborts the whole enclosing transaction, so a cap
-  -- regression here would not FAIL this assertion, it would erase every
-  -- PASS/FAIL row the file produces, including the ones above it.
+  -- Guarded like the blocks below it, and for the same reason this block
+  -- itself exists to fix: a bare UPDATE with no exception handler that
+  -- raises aborts the whole enclosing transaction, so a cap regression
+  -- here would not FAIL this assertion, it would erase every PASS/FAIL
+  -- row the file produces, including the ones above it.
+  --
+  -- Both labels are used deliberately: the cap counts non-null
+  -- pick_label, so a restaurant that spends its three slots on a mix of
+  -- kinds is at the cap exactly as one that spends them all on the same
+  -- kind.
   begin
-    update menu_items set is_staff_pick = true where id = ids[1];
-    update menu_items set is_staff_pick = true where id = ids[2];
-    update menu_items set is_staff_pick = true where id = ids[3];
-    insert into results values ('staff picks: three allowed', 'ok', 'ok');
+    update menu_items set pick_label = 'best_seller' where id = ids[1];
+    update menu_items set pick_label = 'chefs_special' where id = ids[2];
+    update menu_items set pick_label = 'best_seller' where id = ids[3];
+    insert into results values ('picks: three allowed', 'ok', 'ok');
   exception when check_violation then
-    insert into results values ('staff picks: three allowed', 'refused', 'ok');
+    insert into results values ('picks: three allowed', 'refused', 'ok');
   end;
 
   begin
-    update menu_items set is_staff_pick = true where id = ids[4];
-    insert into results values ('staff picks: fourth refused', 'allowed', 'refused');
+    update menu_items set pick_label = 'chefs_special' where id = ids[4];
+    insert into results values ('picks: fourth refused', 'allowed', 'refused');
   exception when check_violation then
-    insert into results values ('staff picks: fourth refused', 'refused', 'refused');
+    insert into results values ('picks: fourth refused', 'refused', 'refused');
   end;
 
-  -- Unmarking frees a slot.
-  update menu_items set is_staff_pick = false where id = ids[1];
+  -- Re-wording a pick the restaurant already holds is not a fourth pick.
+  -- At the cap, this is the one UPDATE that must still pass: it swaps
+  -- which phrase the agent says about a dish that already owns a slot,
+  -- and the trigger's "already counted" branch is what lets it.
   begin
-    update menu_items set is_staff_pick = true where id = ids[4];
-    insert into results values ('staff picks: unmarking frees a slot', 'ok', 'ok');
+    update menu_items set pick_label = 'chefs_special' where id = ids[1];
+    insert into results values ('picks: relabelling at the cap allowed', 'ok', 'ok');
   exception when check_violation then
-    insert into results values ('staff picks: unmarking frees a slot', 'refused', 'ok');
+    insert into results values ('picks: relabelling at the cap allowed', 'refused', 'ok');
+  end;
+
+  -- A label the agent has no phrase for never reaches the column. The
+  -- check constraint is the backstop under lib/admin/edit.ts's own
+  -- validation, not a substitute for it.
+  begin
+    update menu_items set pick_label = 'house_favourite' where id = ids[1];
+    insert into results values ('picks: unknown label refused', 'allowed', 'refused');
+  exception when check_violation then
+    insert into results values ('picks: unknown label refused', 'refused', 'refused');
+  end;
+
+  -- Clearing a label frees a slot.
+  update menu_items set pick_label = null where id = ids[1];
+  begin
+    update menu_items set pick_label = 'best_seller' where id = ids[4];
+    insert into results values ('picks: clearing one frees a slot', 'ok', 'ok');
+  exception when check_violation then
+    insert into results values ('picks: clearing one frees a slot', 'refused', 'ok');
   end;
 end $$;
 
@@ -383,12 +409,12 @@ set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","r
 
 do $$
 begin
-  update menu_items set is_staff_pick = true
+  update menu_items set pick_label = 'best_seller'
    where location_id = 'b10c0000-0000-0000-0000-00000000000b'
      and name = 'Margherita';
-  insert into results values ('staff picks: counted per restaurant', 'ok', 'ok');
+  insert into results values ('picks: counted per restaurant', 'ok', 'ok');
 exception when check_violation then
-  insert into results values ('staff picks: counted per restaurant', 'refused', 'ok');
+  insert into results values ('picks: counted per restaurant', 'refused', 'ok');
 end $$;
 
 reset role;
