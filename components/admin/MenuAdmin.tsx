@@ -348,11 +348,11 @@ export function MenuAdmin(props: MenuAdminProps) {
             and furniture is not read. */}
         {items.length > 0 ? (
           <p className="text-muted setup-note">
-            Three dishes at a time can be picks. The assistant volunteers one of them once in a
-            call, in the caller&rsquo;s own language — that the dish is one of your best
-            sellers, or that it is the chef&rsquo;s special. Set one on any row, beside the
-            sold-out control. Any number of dishes can be a best seller; only one can be the
-            chef&rsquo;s special.
+            Three dishes at a time can be picks. The assistant may say once that a picked dish
+            is one of your best sellers, or that it is the chef&rsquo;s special — in the
+            caller&rsquo;s own language, and at most twice in a whole call. Set one on any row,
+            beside the sold-out control. Any number of dishes can be a best seller; only one can
+            be the chef&rsquo;s special.
             {picksUsed >= 3 ? (
               <>
                 {" "}

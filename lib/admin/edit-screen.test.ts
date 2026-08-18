@@ -1149,6 +1149,17 @@ describe("finding out that a dish can be picked at all", () => {
     expect(text).not.toContain("Three dishes are already picked");
   });
 
+  it("does not promise more warmth than the prompt allows", () => {
+    /* The card is describing something the agent does, so the two have
+       to agree. lib/agent/prompt.ts -- hash-pinned, and not this
+       change's to edit -- allows "you may say once that it is that pick"
+       and "At most twice in a whole call". A card that reads as though
+       every pick is named on every call is a promise an operator repeats
+       to a restaurant owner down the phone. */
+    expect(source("../agent/prompt.ts")).toContain("At most twice in a whole call");
+    expect(prose(menu())).toMatch(/at most twice in a whole call/i);
+  });
+
   it("says nothing at all on a restaurant with no menu yet", () => {
     // A rule about rows that do not exist is furniture on the emptiest
     // version of this screen, where the only useful sentence is "add a
