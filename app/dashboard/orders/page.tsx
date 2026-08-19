@@ -45,11 +45,26 @@ export const metadata = { title: "Orders · Dialtone" };
  *    * THE CALL. The order was taken on the phone; when something on it
  *      reads oddly, the recording is the answer, one click away.
  *
- *  And one thing IN the mockup is deliberately not here: its total row
- *  reads "Total · paid by SMS link". Nothing in this product texts
- *  anybody a payment link -- lib/agent/prompt.ts has the agent say
- *  payment is handled at pickup or delivery -- so that line would tell a
- *  kitchen the food is paid for when it is not. The row says "Total".
+ *  And TWO things IN the mockup are deliberately not here.
+ *
+ *    * ITS TOTAL ROW READS "Total · paid by SMS link". Nothing in this
+ *      product texts anybody a payment link -- lib/agent/prompt.ts has
+ *      the agent say payment is handled at pickup or delivery -- so that
+ *      line would tell a kitchen the food is paid for when it is not.
+ *      The row says "Total".
+ *    * ITS PER-TICKET BUTTON -- "Start cooking", "Mark ready", "Picked
+ *      up" -- which moves a card one column along. This is a FINDING FOR
+ *      THE HUMAN rather than a thing quietly dropped: nothing in this
+ *      repository writes `orders.status`. place_order writes 'new', and
+ *      the only other toucher of the column is the trigger that LOGS a
+ *      change something else made. So the board's three columns are real
+ *      -- the enum has 'preparing' and 'ready', and ORDER_BOARD_COLUMN
+ *      maps them -- but until a writer exists, every genuine order sits
+ *      in New and the other two columns stand empty. A button wired to
+ *      nothing would be worse on a pass than no button: a cook who
+ *      presses "Start cooking" and watches the ticket stay put has been
+ *      told the next cook knows, and the next cook does not. Pinned by a
+ *      test, because "finish the mockup" is the tempting wrong change.
  *
  *  Read on the signed-in user's own session (lib/data.ts), so RLS
  *  decides what is on it. Nothing here is a platform-admin surface and

@@ -278,6 +278,47 @@ describe("where the food is going", () => {
   });
 });
 
+describe("who the kitchen rings back", () => {
+  /* THE THIRD FREE-TEXT FIELD A CALLER SPEAKS, and the last one on the
+     ticket that went out unscrubbed. `place_order` writes
+     `btrim(p_customer_name)` straight from the tool call, and `orders_rw`
+     lets any member of the organization write the column directly -- the
+     identical argument that already scrubs an item note and a delivery
+     address. The constraint this product states is absolute, so it holds
+     for the whole card and not for the two fields somebody remembered.
+
+     It cannot damage a real name: nothing anybody is called reaches
+     thirteen consecutive digits, which is the floor CARD_NUMBER_RUN
+     matches at. */
+  it("never hands a card number to the screen in a customer's name either", async () => {
+    db.orders = [order({ customer_name: "Phi 4111 1111 1111 1111" })];
+
+    const [placed] = await getOrdersBoard(LOCATION);
+
+    expect(placed.customerName).toBe("Phi [redacted]");
+  });
+
+  /* AND THE CALLBACK NUMBER IS DELIBERATELY NOT SCRUBBED. This is the
+     asymmetry sitting right beside the test above, and it is the one a
+     later pass will try to "make consistent" -- so it is pinned here.
+
+     lib/agent/redact.ts says it in as many words: redactCardNumbers is
+     trigger-happy on purpose and is "exactly wrong for a field whose
+     entire value is the digits -- a callback number". An overseas caller
+     who leaves "011 44 20 7946 0958" has left fifteen digits, which the
+     pattern matches; putting that field through the scrubber does not
+     clean it, it deletes the only way the restaurant can ring them back.
+     Ringing people back is half of why this screen carries the number at
+     all, so it goes out whole. */
+  it("leaves a long callback number alone, because scrubbing it would destroy it", async () => {
+    db.orders = [order({ customer_phone: "011 44 20 7946 0958" })];
+
+    const [placed] = await getOrdersBoard(LOCATION);
+
+    expect(placed.customerPhone).toBe("011 44 20 7946 0958");
+  });
+});
+
 describe("when the read itself goes wrong", () => {
   it("throws rather than showing an empty kitchen", async () => {
     // An empty board and a failed read look identical on screen, and one

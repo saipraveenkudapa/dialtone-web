@@ -391,6 +391,61 @@ describe("an order the agent could not name", () => {
   });
 });
 
+describe("the one control the approved design draws on a ticket", () => {
+  /* design/Dialtone.html ends every ticket with
+
+       <button sc-camel-on-click="{{ o.advance }}"
+               class="btn btn-secondary btn-block">{{ o.advanceLabel }}</button>
+
+     labelled "Start cooking", "Mark ready" or "Picked up" by column,
+     moving the card one column along. It is the only interactive thing
+     on the mockup's ticket and it is not on this screen.
+
+     THAT IS A GAP IN THE PRODUCT, REPORTED, NOT AN OVERSIGHT PAPERED
+     OVER. Nothing in this repository writes `orders.status`:
+     `place_order` writes 'new' and the only other toucher of the column
+     is the trigger that LOGS a change somebody else made. So the three
+     columns are real -- the enum has 'preparing' and 'ready' -- but two
+     of them cannot fill until a writer exists, and shipping the button
+     without one would be worse on a pass than shipping none: a cook who
+     presses "Start cooking" and watches the ticket stay put has been
+     told the next cook knows, and the next cook does not.
+
+     Pinned as a test rather than left to a comment because the tempting
+     "finish the mockup" change is to add the button and wire it to
+     nothing. */
+  it("is not shipped as a control that cannot move anything", async () => {
+    getOrdersBoard.mockResolvedValue([order()]);
+
+    const html = await markup();
+
+    expect(html).not.toContain("<button");
+    for (const dead of ["Start cooking", "Mark ready", "Picked up"]) {
+      expect(prose(html)).not.toContain(dead);
+    }
+  });
+});
+
+describe("what a caller said their name was", () => {
+  /* The kitchen reads this name off the ticket and says it out loud when
+     the person walks in, so it is rendered as stored. The read is what
+     guarantees a card number never gets that far (lib/orders/
+     board.test.ts); what the SCREEN owes is that it prints what it was
+     handed and does not reassemble the digits around it. */
+  it("is printed as the read handed it over, redaction and all", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({ customerName: "Phi [redacted]", customerPhone: "011 44 20 7946 0958" }),
+    ]);
+
+    const screen = await said();
+
+    expect(screen).toContain("Phi [redacted]");
+    expect(screen).not.toContain("4111");
+    // The number goes out whole -- see the board test of the same name.
+    expect(screen).toContain("011 44 20 7946 0958");
+  });
+});
+
 describe("a restaurant with no location at all", () => {
   it("renders nothing and leaves the layout to explain", async () => {
     getCurrentLocation.mockResolvedValue(null);

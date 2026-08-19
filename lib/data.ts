@@ -718,7 +718,23 @@ export async function getOrdersBoard(locationId: string): Promise<BoardOrder[]> 
     id: row.id,
     orderNumber: row.order_number,
     callId: row.call_id,
-    customerName: row.customer_name,
+    // Scrubbed like the item note and the address below, and for the
+    // same reason: `place_order` writes `btrim(p_customer_name)` straight
+    // off the tool call, `orders_rw` lets any member of the organization
+    // write the column directly, and the constraint is absolute. No name
+    // anybody is called reaches the thirteen consecutive digits
+    // CARD_NUMBER_RUN matches at, so there is no real name this damages.
+    customerName:
+      row.customer_name === null ? null : redactCardNumbers(row.customer_name),
+    // NOT SCRUBBED, deliberately, and this is the line a later pass will
+    // try to make consistent with the one above. lib/agent/redact.ts says
+    // redactCardNumbers is "exactly wrong for a field whose entire value
+    // is the digits -- a callback number": an overseas caller's number
+    // reaches the 13-digit floor easily ("011 44 20 7946 0958" is
+    // fifteen), and running this field through the scrubber would not
+    // clean it, it would delete the only way the restaurant can ring them
+    // back. Ringing people back is half of why the number is on the
+    // ticket, so it goes out whole.
     customerPhone: row.customer_phone,
     type: row.type,
     status: row.status,
