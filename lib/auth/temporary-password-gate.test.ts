@@ -21,7 +21,21 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser },
     from: (table: string) => {
       tableTouched(table);
-      return { update: () => ({ eq: async () => ({ error: null }) }) };
+      /* Chainable AND awaitable, because the three actions below narrow
+         differently: two await `.update().eq()` directly, and moveOrder
+         narrows twice and then asks for the row back so it can tell "no
+         such row" apart from "written". Nothing here asserts on the
+         values -- lib/orders/move-action.test.ts does that -- so every
+         write simply succeeds. */
+      const query = {
+        eq: () => query,
+        select: async () => ({ data: [{ id: "row" }], error: null }),
+        then: <T>(
+          onFulfilled?: (value: { data: null; error: null }) => T,
+          onRejected?: (reason: unknown) => T,
+        ) => Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected),
+      };
+      return { update: () => query };
     },
   }),
 }));
@@ -31,6 +45,8 @@ vi.mock("next/cache", () => ({ revalidatePath }));
 
 const { saveCallNotes } = await import("@/app/dashboard/calls/actions");
 const { setMessageHandled } = await import("@/app/dashboard/messages/actions");
+const { moveOrder } = await import("@/app/dashboard/orders/actions");
+const { MOVE_PASSWORD_TEMPORARY } = await import("@/lib/orders/moves");
 
 const FLAGGED = {
   id: "22222222-2222-2222-2222-222222222222",
@@ -45,6 +61,7 @@ const SETTLED = {
 };
 
 const A_MESSAGE = "8f0f8c6e-1111-4111-8111-111111111111";
+const AN_ORDER = "8f0f8c6e-2222-4222-8222-222222222222";
 
 function signedInAs(user: unknown) {
   getUser.mockResolvedValue({ data: { user }, error: null });
@@ -82,6 +99,20 @@ describe("server actions, called by an account that has not set its own password
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  /* The newest writer of tenant data, and the one with the most reason to
+     be reachable without the page: the board it renders on is a tablet at
+     a pass, and its action id is in the same client bundle as the other
+     two. */
+  it("moveOrder refuses and writes nothing", async () => {
+    signedInAs(FLAGGED);
+
+    const result = await moveOrder(AN_ORDER, "new", "preparing");
+
+    expect(result).toEqual({ error: MOVE_PASSWORD_TEMPORARY });
+    expect(tableTouched).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
   it("refuses when the session cannot be checked at all, rather than assuming the best", async () => {
     // Supabase unreachable mid-request. "I do not know whether this
     // handover is finished" has to read as "it is not".
@@ -112,6 +143,16 @@ describe("the same actions, once the password is the owner's own", () => {
     await setMessageHandled(handledForm());
 
     expect(tableTouched).toHaveBeenCalledWith("messages");
+    expect(revalidatePath).toHaveBeenCalled();
+  });
+
+  it("moveOrder writes", async () => {
+    signedInAs(SETTLED);
+
+    const result = await moveOrder(AN_ORDER, "new", "preparing");
+
+    expect(result).toEqual({ ok: true });
+    expect(tableTouched).toHaveBeenCalledWith("orders");
     expect(revalidatePath).toHaveBeenCalled();
   });
 });

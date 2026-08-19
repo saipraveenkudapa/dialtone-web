@@ -1237,6 +1237,21 @@ a:hover { color: var(--color-accent); }
    the second. */
 .order-when { display: flex; flex-direction: column; gap: var(--space-1); font-size: 12px; }
 
+/* The presses on a ticket, and what the card says when one is refused.
+   The mockup's single button is .btn.btn-secondary.btn-block; there are
+   two here -- a way on and a way back -- and .btn-block's own
+   `margin-top: var(--space-2)` on each of them, on top of .card's gap,
+   would set the pair further apart than either is from the ticket. So
+   the stack carries the width instead (a flex column stretches its
+   children) and holds them one --space-1 apart, which reads as one
+   control with a quieter second half rather than as two.
+
+   The refusal underneath is .auth-error, not a class of its own: it is
+   the sentence-shown-when-something-was-refused this product already
+   has, and CallNotes already renders it inside a .card.blueprint on the
+   page's own paper, where --color-danger-800 measures 9.37:1. */
+.order-moves { display: flex; flex-direction: column; gap: var(--space-1); }
+
 /* ── operator: create a new restaurant ─────────────────────────────── */
 
 /* These were the /onboarding wizard's classes. That wizard is gone --

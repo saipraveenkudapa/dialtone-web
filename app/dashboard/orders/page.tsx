@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Corners } from "@/components/Corners";
+import { OrderMoves } from "@/components/OrderMoves";
 import { getCurrentLocation, getOrdersBoard, type BoardOrder } from "@/lib/data";
 import {
   ORDER_BOARD_COLUMN,
@@ -45,30 +46,37 @@ export const metadata = { title: "Orders · Dialtone" };
  *    * THE CALL. The order was taken on the phone; when something on it
  *      reads oddly, the recording is the answer, one click away.
  *
- *  And TWO things IN the mockup are deliberately not here.
+ *  And ONE thing IN the mockup is deliberately not here.
  *
  *    * ITS TOTAL ROW READS "Total · paid by SMS link". Nothing in this
  *      product texts anybody a payment link -- lib/agent/prompt.ts has
  *      the agent say payment is handled at pickup or delivery -- so that
  *      line would tell a kitchen the food is paid for when it is not.
  *      The row says "Total".
- *    * ITS PER-TICKET BUTTON -- "Start cooking", "Mark ready", "Picked
- *      up" -- which moves a card one column along. This is a FINDING FOR
- *      THE HUMAN rather than a thing quietly dropped: nothing in this
- *      repository writes `orders.status`. place_order writes 'new', and
- *      the only other toucher of the column is the trigger that LOGS a
- *      change something else made. So the board's three columns are real
- *      -- the enum has 'preparing' and 'ready', and ORDER_BOARD_COLUMN
- *      maps them -- but until a writer exists, every genuine order sits
- *      in New and the other two columns stand empty. A button wired to
- *      nothing would be worse on a pass than no button: a cook who
- *      presses "Start cooking" and watches the ticket stay put has been
- *      told the next cook knows, and the next cook does not. Pinned by a
- *      test, because "finish the mockup" is the tempting wrong change.
+ *
+ *  THE MOCKUP'S PER-TICKET BUTTON -- "Start cooking", "Mark ready",
+ *  "Picked up" -- WAS THE SECOND, AND IS NOW BUILT. It was withheld while
+ *  nothing in this repository wrote `orders.status`: place_order wrote
+ *  'new' and the only other toucher of the column was the trigger that
+ *  LOGS a change something else made, so every genuine order sat in New
+ *  and the other two columns stood empty. A button wired to nothing would
+ *  have been worse on a pass than no button -- a cook who presses "Start
+ *  cooking" and watches the ticket stay put has been told the next cook
+ *  knows, and the next cook does not.
+ *
+ *  What was missing was never the button. It was in the database:
+ *  app.log_order_status(), the audit trigger, was not SECURITY DEFINER,
+ *  so an owner's UPDATE fired it as the owner, `order_status_events` has
+ *  no INSERT policy for `authenticated`, and the whole UPDATE rolled
+ *  back. 20260819000100_log_order_status_definer.sql makes that trigger a
+ *  definer -- without handing anybody a direct INSERT on the log, which
+ *  would let a restaurant author audit rows by hand. With that applied,
+ *  <OrderMoves> writes through app/dashboard/orders/actions.ts on the
+ *  signed-in user's own session, and says on the card when it could not.
  *
  *  Read on the signed-in user's own session (lib/data.ts), so RLS
- *  decides what is on it. Nothing here is a platform-admin surface and
- *  nothing here writes.
+ *  decides what is on it. Nothing here is a platform-admin surface, and
+ *  the only write on the page is the one control on each ticket.
  */
 export default async function OrdersPage() {
   const location = await getCurrentLocation();
@@ -255,6 +263,17 @@ function Ticket({
           Listen to the call
         </Link>
       ) : null}
+
+      {/* Last on the card, as in the mockup: everything above is what the
+          ticket IS, and this is the only thing anybody does to it. The
+          card knows its own status, which is what the control sends back
+          -- so a press carries the column the cook was reading and not
+          merely the one they want. */}
+      <OrderMoves
+        orderId={order.id}
+        orderNumber={order.orderNumber}
+        status={order.status}
+      />
     </article>
   );
 }

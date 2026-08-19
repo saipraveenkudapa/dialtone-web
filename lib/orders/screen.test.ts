@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BoardOrder } from "@/lib/data";
+import { ORDER_MOVES } from "@/lib/orders/moves";
 
 /** What a restaurant actually reads on /dashboard/orders.
  *
@@ -37,6 +38,13 @@ vi.mock("@/lib/data", () => ({
   getOrdersBoard,
   ORDERS_ON_THE_BOARD: 50,
 }));
+
+/* The ticket control's writer. Mocked for the same reason "@/lib/data" is
+   -- it reaches next/headers through the signed-in user's Supabase client,
+   and this file is asking what the page RENDERS. What the control does
+   when it is pressed is components/OrderMoves.test.tsx, under jsdom,
+   where a press is a real click. */
+vi.mock("@/app/dashboard/orders/actions", () => ({ moveOrder: vi.fn() }));
 
 const OrdersPage = (await import("@/app/dashboard/orders/page")).default;
 
@@ -391,38 +399,98 @@ describe("an order the agent could not name", () => {
   });
 });
 
-describe("the one control the approved design draws on a ticket", () => {
+describe("the control the approved design draws on a ticket", () => {
   /* design/Dialtone.html ends every ticket with
 
        <button sc-camel-on-click="{{ o.advance }}"
                class="btn btn-secondary btn-block">{{ o.advanceLabel }}</button>
 
      labelled "Start cooking", "Mark ready" or "Picked up" by column,
-     moving the card one column along. It is the only interactive thing
-     on the mockup's ticket and it is not on this screen.
+     moving the card one column along.
 
-     THAT IS A GAP IN THE PRODUCT, REPORTED, NOT AN OVERSIGHT PAPERED
-     OVER. Nothing in this repository writes `orders.status`:
-     `place_order` writes 'new' and the only other toucher of the column
-     is the trigger that LOGS a change somebody else made. So the three
-     columns are real -- the enum has 'preparing' and 'ready' -- but two
-     of them cannot fill until a writer exists, and shipping the button
-     without one would be worse on a pass than shipping none: a cook who
-     presses "Start cooking" and watches the ticket stay put has been
-     told the next cook knows, and the next cook does not.
+     THIS SCREEN SHIPPED WITHOUT IT, AND THE TEST THAT USED TO STAND HERE
+     PINNED THE ABSENCE. Read it in the history of this file before
+     changing anything below, because its argument is still the argument:
+     nothing in this repository wrote `orders.status` -- `place_order`
+     wrote 'new' and the only other toucher of the column was the trigger
+     that LOGS a change something else made -- and shipping the button
+     against no writer would have been worse on a pass than shipping
+     none. A cook who presses "Start cooking" and watches the ticket stay
+     put has been told the next cook knows, and the next cook does not.
 
-     Pinned as a test rather than left to a comment because the tempting
-     "finish the mockup" change is to add the button and wire it to
-     nothing. */
-  it("is not shipped as a control that cannot move anything", async () => {
-    getOrdersBoard.mockResolvedValue([order()]);
+     WHAT CHANGED IS THE PREMISE, NOT THE ARGUMENT. There is a writer now:
+     app/dashboard/orders/actions.ts moves one order to one status on the
+     signed-in user's own session, and 20260819000100 makes the audit
+     trigger SECURITY DEFINER so the write is no longer rolled back by the
+     RLS on `order_status_events`. So the old test's claim -- no control
+     that cannot move anything -- is kept, in the only form that still
+     says something: every button on a ticket names a move ORDER_MOVES
+     actually offers, which is the same table the server reads before it
+     writes. A button this page could render and the action would refuse
+     cannot exist.
+
+     The other half of the old argument -- that a press which does not
+     land must not look like one that did -- is components/
+     OrderMoves.test.tsx, where a click is a real click and a refusal is
+     a real sentence on the card. */
+  it("is on the ticket now, in the column's own words", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({ id: "a", orderNumber: 1003, status: "ready" }),
+      order({ id: "b", orderNumber: 1002, status: "preparing" }),
+      order({ id: "c", orderNumber: 1001, status: "new" }),
+    ]);
+
+    const screen = await said();
+
+    expect(screen).toContain("Start cooking");
+    expect(screen).toContain("Mark ready");
+    expect(screen).toContain("Picked up");
+  });
+
+  it("offers a way back out of the two columns that have one, and none out of New", async () => {
+    getOrdersBoard.mockResolvedValue([order({ status: "new" })]);
+    expect(await said()).not.toContain("Not started after all");
+
+    getOrdersBoard.mockResolvedValue([order({ status: "preparing" })]);
+    expect(await said()).toContain("Not started after all");
+
+    getOrdersBoard.mockResolvedValue([order({ status: "ready" })]);
+    expect(await said()).toContain("Back in the kitchen");
+  });
+
+  /* The old test's claim, in the form the writer left it: not "there is
+     no button" but "there is no button behind which nothing happens". */
+  it("renders exactly the moves the writer will accept, and nothing else", async () => {
+    for (const status of ["new", "confirmed", "preparing", "ready"] as const) {
+      getOrdersBoard.mockResolvedValue([order({ status })]);
+
+      const html = await markup();
+      const rendered = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+
+      expect(rendered).toEqual(ORDER_MOVES[status].map((move) => move.label));
+    }
+  });
+
+  /* A ticket that has left the board has no card, so it can have no
+     button -- and a form left open on a tablet cannot move an order that
+     is already finished. */
+  it("is not drawn for an order that is no longer on the board", async () => {
+    getOrdersBoard.mockResolvedValue([order({ status: "completed" })]);
 
     const html = await markup();
 
     expect(html).not.toContain("<button");
-    for (const dead of ["Start cooking", "Mark ready", "Picked up"]) {
-      expect(prose(html)).not.toContain(dead);
-    }
+    expect(prose(html)).toContain("not on this board");
+  });
+
+  /* Screen readers get a dozen of these on a busy board, and "Start
+     cooking" a dozen times is not a list anybody can navigate. */
+  it("says which order each press is about, without printing it twice on the card", async () => {
+    getOrdersBoard.mockResolvedValue([order()]);
+
+    const html = await markup();
+
+    expect(html).toContain('aria-label="Start cooking, order #1001"');
   });
 });
 
