@@ -3,6 +3,7 @@ import { MENU_UPLOAD_BUCKET } from "@/lib/menu-imports/file";
 import { readExtraction } from "@/lib/menu-imports/review";
 import { redactCardNumbers } from "@/lib/agent/redact";
 import type { MenuExtraction } from "@/lib/menu-imports/extraction";
+import type { OrderActorRole } from "@/lib/orders/history";
 import type {
   BookingRow,
   CallRow,
@@ -714,7 +715,21 @@ export async function getOrdersBoard(locationId: string): Promise<BoardOrder[]> 
 
   const rows = (data ?? []) as (OrderRow & { order_items: OrderItemRow[] })[];
 
-  return rows.map((row) => ({
+  return rows.map(toBoardOrder);
+}
+
+/** One `orders` row with its lines, as a screen reads it.
+ *
+ *  Lifted out of getOrdersBoard when getOrderRecord needed the identical
+ *  thing, and shared rather than copied for one reason above all the
+ *  others: EVERY REDACTION DECISION IN THIS PRODUCT IS IN HERE. Which of
+ *  the four caller-spoken fields is scrubbed, which one deliberately is
+ *  not, and why, is an argument that took a whole pass to settle
+ *  (lib/orders/board.test.ts pins both halves of it). A second copy of
+ *  this mapping is how one screen keeps that promise and the next one
+ *  quietly stops keeping it. */
+function toBoardOrder(row: OrderRow & { order_items: OrderItemRow[] }): BoardOrder {
+  return {
     id: row.id,
     orderNumber: row.order_number,
     callId: row.call_id,
@@ -756,5 +771,352 @@ export async function getOrdersBoard(locationId: string): Promise<BoardOrder[]> 
       totalCents: item.price_cents_snapshot * item.quantity,
       note: itemNote(item.modifiers),
     })),
-  }));
+  };
+}
+
+/* ── the orders the board is finished with ───────────────────────────
+   THE OTHER HALF OF THE SAME TABLE, and the half nobody could see.
+
+   getOrdersBoard above is a pass: fifty rows, every status, and the
+   SCREEN drops the two the approved board has no column for. So the
+   moment a cook presses "Picked up" the order leaves the restaurant's
+   world -- every line of it, the money on it, the caller who is owed
+   it -- and the board's whole trace of it is one sentence saying how
+   many it is not showing. There was no screen anywhere that listed a
+   finished order again, and none at all that read `order_status_events`,
+   which has recorded who moved what and when since the schema's first
+   migration.
+
+   Everything below reads on the SIGNED-IN USER's session like the rest
+   of this file, so RLS decides. `orders_rw` and `order_items_rw` scope
+   the order and its lines; `order_status_events_read`
+   (20260807000200_rls.sql) scopes the log through its `orders` join --
+   `using (exists (select 1 from orders o where o.id = order_id and
+   app.can_access_location(o.location_id)))` -- so an owner may read the
+   log of their own orders and of no others. `membership_read_own` is
+   what makes the roles readable. No service role, no platform-admin
+   gate, no second key. */
+
+/** How many finished orders one page carries.
+ *
+ *  Fifty, the same as CALLS_PER_PAGE and MESSAGES_PER_PAGE, because it
+ *  is the same screen furniture answering the same question and a reader
+ *  who has learned one pager has learned all three.
+ *
+ *  IT IS NOT ORDERS_ON_THE_BOARD AND MUST NOT BECOME IT. That constant
+ *  is a statement about a kitchen -- fifty is more than a whole evening
+ *  of phone orders, so a cook reading the board in service sees the
+ *  whole of service on it -- and it is a CEILING: the board never asks
+ *  for a fifty-first row. This one is a window onto something with no
+ *  ceiling at all. A restaurant taking sixty orders a night writes
+ *  roughly 420 a week, 1,800 a month and 22,000 a year, and none of them
+ *  ever leaves the table. */
+export const ORDERS_PER_HISTORY_PAGE = 50;
+
+/** The two statuses the approved board has no column for.
+ *
+ *  Stated once, read by the query and by the screen's own sentences.
+ *  History is deliberately NOT "every order": a live ticket belongs to
+ *  the pass, and a second screen that also renders it is a second answer
+ *  to "what is the kitchen doing", which is the disagreement the board
+ *  exists to end. */
+export const ORDER_HISTORY_STATUSES: readonly OrderStatus[] = ["completed", "cancelled"];
+
+/** How far back one page of history reaches.
+ *
+ *  A BOARD CAN BE BOUNDED BY COUNT AND A HISTORY CANNOT, and this is the
+ *  whole of the scale decision. Bounding by count -- "the last fifty
+ *  finished orders" -- is not a window anybody can ask a question of:
+ *  "what did we take last Tuesday" has no answer in it. Bounding by
+ *  nothing is a select that grows with the restaurant until the page
+ *  times out, and it does that first for the busiest customer on the
+ *  platform.
+ *
+ *  So: a window chosen HERE, and a page of fifty inside it. The window
+ *  is what keeps the ordinary read cheap -- the default asks Postgres
+ *  about a week of orders rather than about a decade of them -- and the
+ *  pager is what keeps even the widest one bounded, because "Everything"
+ *  removes the date filter and not the fifty-row range.
+ *
+ *  Both halves ride the index the schema already has:
+ *  `orders_location_status_idx on orders (location_id, status, placed_at
+ *  desc)` (20260807000100_schema.sql) is exactly `where location_id = ?
+ *  and status in (...) order by placed_at desc`, so no migration is
+ *  needed for this read and the page's cost does not grow with the
+ *  table. What does grow is the exact COUNT behind the pager, which is
+ *  linear in the rows the window matches -- which is the second reason
+ *  the default is a week and not everything. */
+export type OrderHistoryWindow = "today" | "week" | "month" | "all";
+
+/** The options, in the order they are drawn, with the number of LOCAL
+ *  DAYS each reaches back over. `null` is the one with no floor. */
+export const ORDER_HISTORY_WINDOWS: {
+  key: OrderHistoryWindow;
+  label: string;
+  days: number | null;
+}[] = [
+  { key: "today", label: "Today", days: 1 },
+  { key: "week", label: "Last 7 days", days: 7 },
+  { key: "month", label: "Last 30 days", days: 30 },
+  { key: "all", label: "Everything", days: null },
+];
+
+/** What the screen reads when the URL asks for nothing.
+ *
+ *  A week rather than today, because an owner opens this after service
+ *  or the morning after and "today" is thin at both of those moments;
+ *  and a week rather than everything, because the default is the read
+ *  that runs on every visit and the default should be the cheap one. */
+export const DEFAULT_ORDER_HISTORY_WINDOW: OrderHistoryWindow = "week";
+
+/** The instant a window opens, or null for the one that has no floor.
+ *
+ *  CUT ON THE RESTAURANT'S CLOCK AND NOT ON UTC, which is the only way
+ *  this can be right. A New York restaurant serving until 10pm writes
+ *  `placed_at` values that are already tomorrow in UTC; a "Today" cut at
+ *  UTC midnight drops the busiest two hours of last night out of today's
+ *  history while the staff who cooked it are still in the building.
+ *  Built on the same startOfDayUtc the Today counters use, so the two
+ *  screens cannot come to disagree about when a restaurant's day starts.
+ *
+ *  `days` counts whole local days INCLUDING today, so "Last 7 days"
+ *  opens at midnight six days ago: a week of service, not eight.
+ *
+ *  Across a daylight-saving change the arithmetic can land on the local
+ *  day before the one it aimed at, because it steps back in fixed
+ *  24-hour hops through a day that was 23 or 25 hours long. That is
+ *  bounded at one day, it happens twice a year, and it errs by showing
+ *  ONE MORE day of finished orders rather than one fewer -- the right
+ *  direction for the only failure a history screen must not have, which
+ *  is an order that is not on it. */
+export function orderHistoryWindowStart(
+  timezone: string,
+  window: OrderHistoryWindow,
+  now = new Date(),
+): string | null {
+  const days = ORDER_HISTORY_WINDOWS.find((w) => w.key === window)?.days ?? null;
+  if (days === null) return null;
+
+  return startOfDayUtc(timezone, new Date(now.getTime() - (days - 1) * 86_400_000));
+}
+
+/** One row of the history list.
+ *
+ *  Deliberately NOT a BoardOrder. A list of fifty finished orders does
+ *  not need fifty embedded line sets -- that is a few hundred rows over
+ *  the wire to render a column nobody is reading -- and the lines are
+ *  exactly what the one-order screen is for. */
+export type HistoryOrder = {
+  id: string;
+  orderNumber: number;
+  customerName: string | null;
+  type: "pickup" | "delivery";
+  status: OrderStatus;
+  totalCents: number;
+  placedAt: string;
+};
+
+/** One page of the orders this restaurant has finished with.
+ *
+ *  Counting and filtering happen in Postgres rather than in the page, so
+ *  the history stays honest -- and stays the same weight -- once a busy
+ *  restaurant has tens of thousands of orders. Same shape, and the same
+ *  reasons, as getCallsPage and getMessagesPage next door. */
+export async function getOrderHistoryPage(
+  locationId: string,
+  {
+    timezone,
+    window = DEFAULT_ORDER_HISTORY_WINDOW,
+    page = 1,
+    now = new Date(),
+  }: {
+    timezone: string;
+    window?: OrderHistoryWindow;
+    page?: number;
+    now?: Date;
+  },
+) {
+  const supabase = await supabaseServer();
+  const since = orderHistoryWindowStart(timezone, window, now);
+
+  /* The window and the statuses, applied identically to the count and to
+     the page. Written once so the pager can never end up counting a
+     different set of orders than the one it is paging through. */
+  const scoped = <T extends { eq: unknown; in: unknown; gte: unknown }>(query: T): T => {
+    let q = query as unknown as {
+      eq: (c: string, v: unknown) => unknown;
+      in: (c: string, v: unknown[]) => unknown;
+      gte: (c: string, v: unknown) => unknown;
+    };
+    q = q.eq("location_id", locationId) as typeof q;
+    q = q.in("status", [...ORDER_HISTORY_STATUSES]) as typeof q;
+    if (since !== null) q = q.gte("placed_at", since) as typeof q;
+    return q as unknown as T;
+  };
+
+  // Count first, in a head request -- no rows cross the wire. PostgREST
+  // rejects a range whose offset is past the end of the result set
+  // (PGRST103) rather than returning an empty page, so asking for page 9
+  // of a 2-page history would be a 500, and a stale bookmark or an
+  // edited URL is enough to hit it.
+  const { count, error: countError } = await scoped(
+    supabase.from("orders").select("id", { count: "exact", head: true }),
+  );
+
+  if (countError) throw countError;
+
+  const total = count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / ORDERS_PER_HISTORY_PAGE));
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const from = (safePage - 1) * ORDERS_PER_HISTORY_PAGE;
+
+  const { data, error } = await scoped(
+    supabase
+      .from("orders")
+      .select("id, order_number, customer_name, type, status, total_cents, placed_at"),
+  )
+    .order("placed_at", { ascending: false })
+    .range(from, from + ORDERS_PER_HISTORY_PAGE - 1);
+
+  // Thrown, not swallowed, for the same reason getOrdersBoard throws: an
+  // empty history and a failed read look identical on screen, and one of
+  // them means "you have taken no orders" while the other means "we
+  // cannot tell you".
+  if (error) throw error;
+
+  const rows = (data ?? []) as Pick<
+    OrderRow,
+    "id" | "order_number" | "customer_name" | "type" | "status" | "total_cents" | "placed_at"
+  >[];
+
+  return {
+    orders: rows.map((row) => ({
+      id: row.id,
+      orderNumber: row.order_number,
+      // Scrubbed here for the identical reason toBoardOrder scrubs it:
+      // the write path is not the only way text reaches this column, and
+      // the last read before a screen is the last place the promise that
+      // nothing renders a card number can be kept.
+      customerName:
+        row.customer_name === null ? null : redactCardNumbers(row.customer_name),
+      type: row.type,
+      status: row.status,
+      totalCents: row.total_cents,
+      placedAt: row.placed_at,
+    })) satisfies HistoryOrder[],
+    total,
+    page: safePage,
+    pageCount,
+    since,
+  };
+}
+
+/** One logged status change, as a screen reads it.
+ *
+ *  `from` is null on the row app.log_order_status writes AFTER INSERT --
+ *  the order arriving. `changedBy` is a uuid or null and is NEVER
+ *  rendered as either: see orderEventActor in lib/orders/history.ts. */
+export type OrderStatusEvent = {
+  id: string;
+  from: OrderStatus | null;
+  to: OrderStatus;
+  changedBy: string | null;
+  changedAt: string;
+};
+
+/** One order, everything about it, and everything that happened to it. */
+export type OrderRecord = {
+  order: BoardOrder;
+  /** Oldest first: a timeline is read forwards. */
+  events: OrderStatusEvent[];
+  /** Every uuid this organization can put a role to, which is the whole
+   *  of what the log can say about who somebody was. */
+  actors: Record<string, OrderActorRole>;
+  /** The signed-in user, so the timeline can say "you". Null when the
+   *  session could not be resolved -- never a reason to guess. */
+  viewerId: string | null;
+};
+
+/** One order in full, with its status log.
+ *
+ *  Returns null when the id is not this restaurant's or does not exist.
+ *  RLS already makes another organization's order invisible; the
+ *  explicit `location_id` filter is what picks one of the restaurants
+ *  this user belongs to, exactly as getOrdersBoard does -- and it is
+ *  what stops an order from a sister location being rendered against
+ *  THIS location's clock, which is the one thing on this page that would
+ *  be wrong rather than merely absent.
+ *
+ *  Two round trips, in that order and not in parallel: nothing else is
+ *  asked of the database until the order itself has come back visible.
+ *
+ *  `completed_at` is deliberately not read. The column exists and
+ *  app/dashboard/orders/actions.ts deliberately does not write it -- the
+ *  log is the record of when an order finished -- so putting it on this
+ *  screen would be publishing a null beside a timeline that has the
+ *  answer, and inviting somebody to "fix" it by writing a second one. */
+export async function getOrderRecord(
+  locationId: string,
+  orgId: string,
+  orderId: string,
+): Promise<OrderRecord | null> {
+  const supabase = await supabaseServer();
+
+  const { data: row, error } = await supabase
+    .from("orders")
+    .select("*, order_items(*)")
+    .eq("id", orderId)
+    .eq("location_id", locationId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!row) return null;
+
+  const [events, members, session] = await Promise.all([
+    // Only this order's log. `order_status_events` carries no
+    // location_id -- its RLS policy joins through `orders` -- so this
+    // filter is what keeps one order's page from being every order's.
+    supabase
+      .from("order_status_events")
+      .select("id, from_status, to_status, changed_by, changed_at")
+      .eq("order_id", orderId)
+      .order("changed_at", { ascending: true }),
+    // The roles, which are the whole of what this screen can say about
+    // a colleague. Readable on the owner's own session under RLS's
+    // membership_read_own; the explicit org filter is what keeps a
+    // multi-org account from mixing two restaurants' staff.
+    supabase.from("memberships").select("user_id, role").eq("org_id", orgId),
+    supabase.auth.getUser(),
+  ]);
+
+  if (events.error) throw events.error;
+  // Thrown too. A roles map that came back empty because the read failed
+  // would silently retitle every colleague on the timeline as somebody
+  // who has left the restaurant, which is a false statement about a
+  // named person rather than a missing one.
+  if (members.error) throw members.error;
+
+  const actors: Record<string, OrderActorRole> = {};
+  for (const m of (members.data ?? []) as { user_id: string; role: OrderActorRole }[]) {
+    actors[m.user_id] = m.role;
+  }
+
+  return {
+    order: toBoardOrder(row as OrderRow & { order_items: OrderItemRow[] }),
+    events: ((events.data ?? []) as {
+      id: string;
+      from_status: OrderStatus | null;
+      to_status: OrderStatus;
+      changed_by: string | null;
+      changed_at: string;
+    }[]).map((e) => ({
+      id: e.id,
+      from: e.from_status,
+      to: e.to_status,
+      changedBy: e.changed_by,
+      changedAt: e.changed_at,
+    })),
+    actors,
+    viewerId: session.data.user?.id ?? null,
+  };
 }
