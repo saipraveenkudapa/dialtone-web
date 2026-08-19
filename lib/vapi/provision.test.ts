@@ -136,6 +136,11 @@ describe("buildAssistantPayload", () => {
       voiceId: "sarah",
       model: "eleven_flash_v2_5",
       speed: 0.92,
+      // Expressiveness, pinned so a "tidy-up" cannot silently return the
+      // line to the flat delivery the owner reported. toEqual, so an added
+      // field fails here rather than reaching a caller unreviewed.
+      stability: 0.35,
+      style: 0.3,
     });
   });
 

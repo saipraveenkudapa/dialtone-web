@@ -408,6 +408,34 @@ const VOICE = {
   provider: "11labs",
   voiceId: "sarah",
   model: "eleven_flash_v2_5",
+  // Delivery, not words. At temperature 0.6 the LANGUAGE came back warm on
+  // a real call -- "Great choice", "It pairs really well with the
+  // chicories", and it volunteered the chef's special unprompted -- and
+  // the owner still heard "an automated message". So what is flat is no
+  // longer what she says but how it is spoken, which is this object.
+  //
+  // Both fields were unset, i.e. at ElevenLabs' defaults (stability 0.5,
+  // style 0).
+  //
+  // stability 0.35: "Lower values introduce broader emotional range...
+  // Higher values can result in a monotonous voice." One deliberate step
+  // below the default and NOT the floor, because the same call shows the
+  // cost: she read "Chicories, Anchovy" as "chip chicory's anchovy" and
+  // said "Fi" for "Phi" at 0.5. The setting that buys emotional range is
+  // the one that lets pronunciation wander, and a mangled dish name on a
+  // kitchen ticket costs more than a flat one. If names get worse, raise
+  // this back BEFORE trying anything else.
+  //
+  // style 0.3: amplifies the speaker's own style. ElevenLabs is explicit
+  // that anything other than 0 "might increase latency", so this stays
+  // modest -- the first complaint about this line was pace, and buying
+  // warmth with dead air trades one complaint for another.
+  //
+  // similarityBoost and useSpeakerBoost are left alone deliberately: both
+  // pull toward the ORIGINAL speaker, which is a different axis from
+  // warmth, and useSpeakerBoost also costs latency.
+  stability: 0.35,
+  style: 0.3,
   // The product owner heard a real call as "too fast ... calm and a
   // little slow, not too slow". 1.0 is the ElevenLabs default and was
   // never set here. 0.92 is a starting value to tune by ear: below about
