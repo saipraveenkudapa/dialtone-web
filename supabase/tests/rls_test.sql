@@ -50,6 +50,17 @@ insert into menu_items (category_id, name, price_cents, location_id) values
 insert into calls (id, location_id, twilio_call_sid) values
   ('cc100000-0000-0000-0000-0000000000cc', 'a10c0000-0000-0000-0000-00000000000a', 'CA_test_a');
 
+-- The RIVAL's ticket, written here rather than in the "moving an order"
+-- section at the foot of this file, because it has to exist before owner
+-- A tries to move it: under RLS a write to another org's row is filtered
+-- to zero rows rather than refused, so a missing row and a protected one
+-- look identical and the assertion would pass against nothing at all.
+-- Written by this file's own role, which owns the tables, so it does not
+-- depend on the trigger fix it is here to help test.
+insert into orders (id, location_id, customer_name, total_cents) values
+  ('0d100000-0000-0000-0000-0000000000d1', 'b10c0000-0000-0000-0000-00000000000b',
+   'A rival caller', 1800);
+
 -- One uploaded menu each, in the PRIVATE menu-uploads bucket. Objects are
 -- keyed <location_id>/<uuid>, so the first path segment is the whole
 -- tenant boundary -- the same shape call-recordings uses.
@@ -469,6 +480,114 @@ begin
   insert into results values ('picks: one chef''s special EACH', 'ok', 'ok');
 exception when unique_violation then
   insert into results values ('picks: one chef''s special EACH', 'refused', 'ok');
+end $$;
+
+-- ── moving an order ──────────────────────────────────────────────────
+--
+-- THESE ROWS READ FAIL UNTIL A HUMAN HAS APPLIED
+-- 20260819000100_log_order_status_definer.sql, AND THAT IS THE POINT OF
+-- THEM. The kitchen board's per-ticket control was blocked by the
+-- database and not by the UI: `orders_log_status` fires AFTER INSERT OR
+-- UPDATE OF status and inserts into `order_status_events`, which has RLS
+-- enabled and no INSERT policy for `authenticated` -- so while that
+-- trigger function was SECURITY INVOKER it ran as the owner, the log
+-- INSERT was refused with 42501, and the UPDATE that fired it rolled back
+-- with it. Confirmed live before the fix, inside a rolled-back
+-- transaction: an owner's `update orders set status = 'preparing'` came
+-- back REFUSED sqlstate 42501.
+--
+-- Back to owner A, who owns location A. The block above left owner B's
+-- claims in place, and under RLS a write to another org's row is filtered
+-- to zero rows rather than raising -- which would pass every assertion
+-- here without touching the trigger at all.
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}';
+
+-- Every block below is guarded, including for exceptions it does not
+-- expect: a raise with no handler aborts the whole enclosing transaction,
+-- and this file's report and its own `reset role;` are statements in it.
+do $$
+begin
+  insert into orders (id, location_id, customer_name, total_cents)
+  values ('0d000000-0000-0000-0000-00000000000d',
+          'a10c0000-0000-0000-0000-00000000000a', 'Phi', 2700);
+  insert into results values ('orders: owner records a ticket', 'allowed', 'allowed');
+exception
+  when insufficient_privilege then
+    -- The AFTER INSERT half of the same trigger, refused the same way.
+    insert into results values ('orders: owner records a ticket', 'denied', 'allowed');
+  when others then
+    insert into results values ('orders: owner records a ticket', 'error ' || sqlstate, 'allowed');
+end $$;
+
+do $$
+begin
+  update orders set status = 'preparing'
+   where id = '0d000000-0000-0000-0000-00000000000d';
+  insert into results values ('orders: owner starts cooking a ticket', 'allowed', 'allowed');
+exception
+  when insufficient_privilege then
+    insert into results values ('orders: owner starts cooking a ticket', 'denied', 'allowed');
+  when others then
+    insert into results values ('orders: owner starts cooking a ticket', 'error ' || sqlstate, 'allowed');
+end $$;
+
+insert into results
+select 'orders: the move is in the log', count(*)::text, '1'
+  from order_status_events
+ where order_id = '0d000000-0000-0000-0000-00000000000d' and to_status = 'preparing';
+
+-- THE CLAIM THAT MAKES SECURITY DEFINER SAFE HERE. The trigger now runs
+-- as its owner, and `changed_by` must still be the person who pressed the
+-- button: auth.uid() reads the request's JWT claims out of a GUC, which a
+-- definer boundary does not touch. Verified independently against the
+-- live database -- a SECURITY DEFINER function called by a statement
+-- running as `authenticated` resolved the REQUEST's user, not its own
+-- owner -- and pinned here so a later edit cannot quietly turn this log
+-- into a record of which database role wrote it.
+insert into results
+select 'orders: the log names who moved it',
+       coalesce(max(changed_by)::text, 'nobody'),
+       '11111111-1111-1111-1111-111111111111'
+  from order_status_events
+ where order_id = '0d000000-0000-0000-0000-00000000000d' and to_status = 'preparing';
+
+-- THE OTHER HALF OF THE DECISION, and the reason this was not closed with
+-- `grant insert on order_status_events to authenticated` plus a policy. A
+-- restaurant holding a direct INSERT could claim a ticket was ready at a
+-- time it was not, against a user who pressed nothing, and this table is
+-- the only record of who moved what and when. It stays a consequence of a
+-- real status change. This row must read PASS both before and after the
+-- migration.
+do $$
+begin
+  insert into order_status_events (order_id, to_status, changed_by)
+  values ('0d000000-0000-0000-0000-00000000000d', 'ready',
+          '11111111-1111-1111-1111-111111111111');
+  insert into results values ('orders: owner writes the log by hand', 'allowed', 'denied');
+exception
+  when insufficient_privilege then
+    insert into results values ('orders: owner writes the log by hand', 'denied', 'denied');
+  when others then
+    insert into results values ('orders: owner writes the log by hand', 'error ' || sqlstate, 'denied');
+end $$;
+
+-- A rival's ticket is not raised at, it is filtered to nothing -- so this
+-- counts rows changed rather than catching an exception, which is the
+-- only way to tell a refusal apart from a write that found no row. The
+-- row it aims at is a real one, inserted in the fixtures at the top: a
+-- board that could move another restaurant's order is the failure this
+-- whole file exists for, and it must not be able to pass by aiming at
+-- nothing.
+do $$
+declare touched integer;
+begin
+  update orders set status = 'preparing'
+   where id = '0d100000-0000-0000-0000-0000000000d1';
+  get diagnostics touched = row_count;
+  insert into results values ('orders: owner moves a rival ticket', touched::text, '0');
+exception when others then
+  insert into results values ('orders: owner moves a rival ticket', 'error ' || sqlstate, '0');
 end $$;
 
 reset role;
