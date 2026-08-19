@@ -858,7 +858,7 @@ export const ORDER_HISTORY_WINDOWS: {
   { key: "today", label: "Today", days: 1 },
   { key: "week", label: "Last 7 days", days: 7 },
   { key: "month", label: "Last 30 days", days: 30 },
-  { key: "all", label: "Everything", days: null },
+  { key: "all", label: "All time", days: null },
 ];
 
 /** What the screen reads when the URL asks for nothing.
