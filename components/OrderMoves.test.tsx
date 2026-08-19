@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { ORDER_BOARD_COLUMN, ORDER_BOARD_COLUMNS } from "@/lib/format";
 import {
   MOVE_ALREADY_MOVED,
   MOVE_REFUSED_BY_DATABASE,
@@ -30,7 +31,7 @@ import type { OrderStatus } from "@/lib/supabase/types";
 const moveOrder = vi.fn();
 vi.mock("@/app/dashboard/orders/actions", () => ({ moveOrder }));
 
-const { OrderMoves } = await import("@/components/OrderMoves");
+const { OrderMoves, OrderMovesRegion } = await import("@/components/OrderMoves");
 
 /* React's own switch for act(), the same declaration
    components/MenuEditor.pick.test.tsx makes and for the same reason:
@@ -59,11 +60,50 @@ afterEach(() => {
   container.remove();
 });
 
+/** One ticket, inside the region that holds what its last press was
+ *  refused with. The region is not optional -- the control throws
+ *  without it -- because a board that forgot to wrap itself would be a
+ *  control that swallows refusals on the screen and nowhere else. */
 async function mount(status: OrderStatus) {
   await act(async () => {
-    root.render(<OrderMoves orderId={AN_ORDER} orderNumber={1001} status={status} />);
+    root.render(
+      <OrderMovesRegion onBoard={[AN_ORDER]}>
+        <OrderMoves orderId={AN_ORDER} orderNumber={1001} status={status} />
+      </OrderMovesRegion>,
+    );
   });
 }
+
+/** THE BOARD AS THE PAGE ACTUALLY DRAWS IT: three columns, each its own
+ *  <section>, the ticket inside whichever one its status belongs to --
+ *  app/dashboard/orders/page.tsx, and the same ORDER_BOARD_COLUMN it maps
+ *  with rather than a second copy of that map.
+ *
+ *  Mounting the control on its own cannot ask the question these tests
+ *  need. A ticket that changes status changes PARENT, and React does not
+ *  move an instance between parents: it unmounts the card and mounts a
+ *  new one. Anything the old card was holding goes with it. So the
+ *  repaint has to be rendered, not simulated. */
+async function board(status: OrderStatus, onBoard: string[] = [AN_ORDER]) {
+  await act(async () => {
+    root.render(
+      <OrderMovesRegion onBoard={onBoard}>
+        {ORDER_BOARD_COLUMNS.map((column) => (
+          <section key={column.key} data-column={column.key}>
+            {ORDER_BOARD_COLUMN[status] === column.key ? (
+              <OrderMoves orderId={AN_ORDER} orderNumber={1001} status={status} />
+            ) : null}
+          </section>
+        ))}
+      </OrderMovesRegion>,
+    );
+  });
+}
+
+/** Which column the sentence is drawn in, or "" when it is outside the
+ *  columns altogether -- which is where the region puts it. */
+const saidIn = () =>
+  container.querySelector(".auth-error")?.closest("section")?.dataset.column ?? "";
 
 const buttons = () => [...container.querySelectorAll("button")];
 const labels = () => buttons().map((b) => b.textContent);
@@ -211,6 +251,121 @@ describe("a press the database refuses", () => {
     await mount("new");
 
     expect(container.querySelector(".auth-error")).toBeNull();
+  });
+});
+
+describe("a board that forgot to wrap itself", () => {
+  /* The region is not decoration and not optional: without it the
+     control has nowhere to keep what a press was refused with, and the
+     failure would be invisible -- a button that works right up until
+     something goes wrong. So it fails at the first render instead, where
+     the page's own test (lib/orders/screen.test.ts renders the whole
+     board) catches it, rather than on a pass. */
+  it("says so rather than quietly losing every refusal", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      act(async () => {
+        root.render(<OrderMoves orderId={AN_ORDER} orderNumber={1001} status="new" />);
+      }),
+    ).rejects.toThrow("OrderMovesRegion");
+
+    quiet.mockRestore();
+  });
+});
+
+describe("a press that never reached the action at all", () => {
+  /* NOT the same as a write the database refused, and this is the case
+     the file was missing. A server action is a POST: a tablet at a pass
+     that has wandered off the wifi, a 500, or an action id that no longer
+     resolves after a deploy while the board was left open all REJECT --
+     they do not come back as a result with an error in it. Uncaught,
+     React 19 rethrows a rejected transition into the render pass, and
+     with no error boundary over /dashboard the whole subtree is torn out:
+     the cook is not merely told nothing, the ticket disappears and takes
+     the board with it. */
+  it("says so on the ticket rather than taking the board off the screen", async () => {
+    moveOrder.mockRejectedValue(new Error("Failed to fetch"));
+
+    await mount("new");
+    await press("Start cooking");
+
+    // The card is still there, which is the first half of it.
+    expect(labels()).toEqual(["Start cooking"]);
+    // And it says the one thing that is true: press again.
+    expect(said()).toBe(MOVE_WRITE_FAILED);
+    expect(button("Start cooking").disabled).toBe(false);
+  });
+
+  it("takes the sentence away again when the next press gets through", async () => {
+    moveOrder.mockRejectedValue(new Error("Failed to fetch"));
+    await mount("new");
+    await press("Start cooking");
+    expect(said()).toBe(MOVE_WRITE_FAILED);
+
+    moveOrder.mockResolvedValue({ ok: true });
+    await press("Start cooking");
+
+    expect(said()).toBe("");
+  });
+});
+
+describe("the ticket another screen moved first", () => {
+  /* THE REFUSAL THAT OUTLIVES ITS OWN CARD. Two cooks, one ticket: the
+     loser's write matches no row, so the action repaints the board before
+     it answers -- the card must not sit in the column it was pressed in.
+     That repaint is exactly what would destroy the explanation if the
+     sentence were held on the card, and the cook who lost the race is the
+     one person who needs it. */
+  it("still says why, on the card, after the repaint has moved it", async () => {
+    moveOrder.mockResolvedValue({ error: MOVE_ALREADY_MOVED });
+
+    await board("new");
+    await press("Start cooking");
+
+    expect(said()).toBe(MOVE_ALREADY_MOVED);
+    expect(saidIn()).toBe("new");
+
+    // The repaint the action asked for: the row is 'preparing' now, so
+    // the page draws the card in another column -- a different parent,
+    // and so a different instance of the control.
+    await board("preparing");
+
+    expect(labels()).toEqual(["Mark ready", "Not started after all"]);
+    // Moved with the ticket, and still there.
+    expect(saidIn()).toBe("kitchen");
+    expect(said()).toBe(MOVE_ALREADY_MOVED);
+  });
+
+  /* Somebody else pressed "Picked up": 'completed' has no column on this
+     board, so there is no card left to carry anything. The board says it
+     instead, and names the ticket, because a press that produced neither
+     a card nor a sentence produced nothing a cook can act on. */
+  it("says it above the board, naming the ticket, when the card has gone", async () => {
+    moveOrder.mockResolvedValue({ error: MOVE_ALREADY_MOVED });
+
+    await board("ready");
+    await press("Picked up");
+    await board("completed", []);
+
+    expect(container.querySelector("button")).toBeNull();
+    expect(said()).toBe(`#1001: ${MOVE_ALREADY_MOVED}`);
+    // Outside the columns: there is no column it belongs to any more.
+    expect(saidIn()).toBe("");
+  });
+
+  /* And not twice. While the ticket still has a card, the card is the
+     only place the sentence is drawn -- a kitchen reading the same
+     refusal in two places has to work out whether it is one ticket or
+     two. */
+  it("says it once, on the card, while the card is still on the board", async () => {
+    moveOrder.mockResolvedValue({ error: MOVE_REFUSED_BY_DATABASE });
+
+    await board("new");
+    await press("Start cooking");
+
+    expect(container.querySelectorAll(".auth-error")).toHaveLength(1);
+    expect(saidIn()).toBe("new");
   });
 });
 

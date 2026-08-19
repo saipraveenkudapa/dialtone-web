@@ -1246,10 +1246,20 @@ a:hover { color: var(--color-accent); }
    children) and holds them one --space-1 apart, which reads as one
    control with a quieter second half rather than as two.
 
+   --space-1 IS THE MOUSE RENDERING ONLY. Two adjacent controls 3.4px
+   apart is exactly what the coarse-pointer block at the end of this file
+   forbids, and this is the screen that block was measured for -- so
+   .order-moves is on its gap list and opens to --touch-gap on a tablet.
+   The reasoning is there, beside the rule, with the rest of them.
+
    The refusal underneath is .auth-error, not a class of its own: it is
    the sentence-shown-when-something-was-refused this product already
    has, and CallNotes already renders it inside a .card.blueprint on the
-   page's own paper, where --color-danger-800 measures 9.37:1. */
+   page's own paper, where --color-danger-800 measures 9.37:1. The same
+   class carries the board-level sentence <OrderMovesRegion> draws when
+   the refused ticket has no card left to draw it, which lands as a child
+   of .page and so takes .page's own 22px gap rather than a margin of its
+   own. */
 .order-moves { display: flex; flex-direction: column; gap: var(--space-1); }
 
 /* ── operator: create a new restaurant ─────────────────────────────── */
@@ -2949,7 +2959,22 @@ a {
      selects grows by exactly one gap step — 266.8px to 270.2px, which
      the comment beside .menu-item-row .input rounds to 268 — the row
      keeps its three lines, and the overflow past the row's right edge is
-     0 both before and after. What it costs is 6.8px of row height. */
+     0 both before and after. What it costs is 6.8px of row height.
+
+     .order-moves IS THE SHARPEST CASE ON THIS LIST, and it is the one
+     device this rule was written for: a tablet at a pass is the whole
+     reason the kitchen board exists. Its two children are adjacent
+     controls at --space-1's 3.4 — under even the 6.8 the rule calls a
+     miss — while .btn's own min-height grows both of them to 44px here,
+     so the targets get bigger and the lane between them does not. In the
+     Ready column the pair is "Picked up" above "Back in the kitchen",
+     and 'completed' has no column on this board: a thumb that lands 3.4px
+     high takes the ticket off the screen and there is no press left to
+     bring it back. The refusal <p> below the buttons is a flex child
+     too, so it moves out by the same step on touch, which is air under a
+     sentence that only ever renders when something was refused.
+     .order-moves' own comment keeps --space-1 for the mouse rendering,
+     which is what the mockup draws. */
   .menu-edit-cat-controls,
   .menu-edit-row-actions,
   .menu-item-row,
@@ -2960,7 +2985,8 @@ a {
   .player-controls,
   .add-item-form,
   .menu-category-head,
-  .hours-times { gap: var(--touch-gap); }
+  .hours-times,
+  .order-moves { gap: var(--touch-gap); }
   /* Three entries left this list with the classes they named.
      .golive-actions and .golive-list are a .setup-row and a .table now,
      and .setup-row's own gap is already var(--space-3), which IS

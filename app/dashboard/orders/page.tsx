@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Corners } from "@/components/Corners";
-import { OrderMoves } from "@/components/OrderMoves";
+import { OrderMoves, OrderMovesRegion } from "@/components/OrderMoves";
 import { getCurrentLocation, getOrdersBoard, type BoardOrder } from "@/lib/data";
 import {
   ORDER_BOARD_COLUMN,
@@ -73,6 +73,11 @@ export const metadata = { title: "Orders · Dialtone" };
  *  would let a restaurant author audit rows by hand. With that applied,
  *  <OrderMoves> writes through app/dashboard/orders/actions.ts on the
  *  signed-in user's own session, and says on the card when it could not.
+ *  What it was refused with is kept by <OrderMovesRegion>, around the
+ *  whole board, because the answer to the press outlives the card: a
+ *  ticket somebody else moved first is repainted into another column,
+ *  and the sentence has to survive that rather than be reconciled away
+ *  with the card it was sitting on.
  *
  *  Read on the signed-in user's own session (lib/data.ts), so RLS
  *  decides what is on it. Nothing here is a platform-admin surface, and
@@ -95,11 +100,14 @@ export default async function OrdersPage() {
     orders: orders.filter((order) => ORDER_BOARD_COLUMN[order.status] === column.key),
   }));
 
-  /* Completed and cancelled orders have no column on the approved board.
-     They are counted rather than dropped: a screen that silently loses
-     rows is the exact defect this one was built to undo. */
-  const onTheBoard = columns.reduce((total, column) => total + column.orders.length, 0);
-  const withheld = orders.length - onTheBoard;
+  /* Every order that got a card, and by subtraction the ones that did
+     not. Completed and cancelled orders have no column on the approved
+     board; they are counted rather than dropped, because a screen that
+     silently loses rows is the exact defect this one was built to undo.
+     The ids are what <OrderMovesRegion> needs to tell a refused ticket
+     that is still on screen from one that has left the board. */
+  const onTheBoard = columns.flatMap((column) => column.orders.map((order) => order.id));
+  const withheld = orders.length - onTheBoard.length;
 
   return (
     <>
@@ -118,53 +126,64 @@ export default async function OrdersPage() {
         </div>
       </div>
 
-      {orders.length === 0 ? (
-        /* The honest first-run sentence. Three columns of "Nothing here."
-           would be true and useless; this says what will appear, and
-           what has to happen first. */
-        <p className="text-muted empty-note">
-          {answering
-            ? "No orders yet. Every order the agent takes on the phone appears here as it is taken — what to make, who it is for, and when it was promised."
-            : "No orders yet — nobody can place one until this restaurant is answering. Turn the agent back on and the first ticket appears here while the caller is still on the line."}
-        </p>
-      ) : (
-        <div className="orders-board">
-          {columns.map((column) => (
-            <section key={column.key} className="orders-col">
-              <div className="orders-col-head">
-                <h4>{column.name}</h4>
-                <span className="text-muted num orders-col-count">
-                  {column.orders.length}
-                </span>
-              </div>
+      {/* THE ONE PIECE OF STATE THE BOARD KEEPS FOR ITSELF: what the
+          last press was refused with. It is held out here, around both
+          branches, and not on the ticket -- because the refusal that
+          matters most is the one raised when another screen moved the
+          ticket first, and answering that repaints the board and
+          reconciles the card into a different column, which would
+          destroy a sentence living inside it. `onTheBoard` is every
+          order that got a card, so the region can tell a refusal whose
+          ticket is still on screen from one whose ticket has gone. */}
+      <OrderMovesRegion onBoard={onTheBoard}>
+        {orders.length === 0 ? (
+          /* The honest first-run sentence. Three columns of "Nothing here."
+             would be true and useless; this says what will appear, and
+             what has to happen first. */
+          <p className="text-muted empty-note">
+            {answering
+              ? "No orders yet. Every order the agent takes on the phone appears here as it is taken — what to make, who it is for, and when it was promised."
+              : "No orders yet — nobody can place one until this restaurant is answering. Turn the agent back on and the first ticket appears here while the caller is still on the line."}
+          </p>
+        ) : (
+          <div className="orders-board">
+            {columns.map((column) => (
+              <section key={column.key} className="orders-col">
+                <div className="orders-col-head">
+                  <h4>{column.name}</h4>
+                  <span className="text-muted num orders-col-count">
+                    {column.orders.length}
+                  </span>
+                </div>
 
-              {column.orders.length === 0 ? (
-                <p className="text-muted orders-col-empty">{column.emptyNote}</p>
-              ) : (
-                column.orders.map((order) => (
-                  <Ticket
-                    key={order.id}
-                    order={order}
-                    timezone={tz}
-                    /* Past the time the caller was given, and not yet
-                       cooked. The mockup marks the same thing off a
-                       guessed twenty minutes; `promised_at` is what the
-                       caller was actually told, so it is measured
-                       against that instead. Not marked in the last
-                       column: food waiting on the pass for someone to
-                       collect it is not late in the kitchen's sense. */
-                    late={
-                      column.key !== "ready" &&
-                      order.promisedAt !== null &&
-                      isPast(order.promisedAt)
-                    }
-                  />
-                ))
-              )}
-            </section>
-          ))}
-        </div>
-      )}
+                {column.orders.length === 0 ? (
+                  <p className="text-muted orders-col-empty">{column.emptyNote}</p>
+                ) : (
+                  column.orders.map((order) => (
+                    <Ticket
+                      key={order.id}
+                      order={order}
+                      timezone={tz}
+                      /* Past the time the caller was given, and not yet
+                         cooked. The mockup marks the same thing off a
+                         guessed twenty minutes; `promised_at` is what the
+                         caller was actually told, so it is measured
+                         against that instead. Not marked in the last
+                         column: food waiting on the pass for someone to
+                         collect it is not late in the kitchen's sense. */
+                      late={
+                        column.key !== "ready" &&
+                        order.promisedAt !== null &&
+                        isPast(order.promisedAt)
+                      }
+                    />
+                  ))
+                )}
+              </section>
+            ))}
+          </div>
+        )}
+      </OrderMovesRegion>
     </>
   );
 }

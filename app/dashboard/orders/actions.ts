@@ -56,8 +56,12 @@ export async function moveOrder(
   // schema's own enum first, so a value that is not one never reaches
   // Postgres to come back as a type error naming the column -- and then
   // checked as a PAIR, because this and not the rendered buttons is what
-  // decides which status changes this product makes. There is no request
-  // that skips the kitchen and none that cancels an order.
+  // decides which status changes this product makes: no request THIS
+  // ACTION accepts skips the kitchen, and none of them cancels an order.
+  // Not a database invariant -- `orders_rw` is `for all to
+  // authenticated`, so the restaurant's own session can UPDATE the column
+  // directly through PostgREST, and the header of
+  // 20260819000100_log_order_status_definer.sql records exactly that.
   if (!isOrderStatus(from) || !isOrderStatus(to)) return { error: MOVE_NOT_ALLOWED };
   if (!orderMove(from, to)) return { error: MOVE_NOT_ALLOWED };
 

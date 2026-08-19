@@ -66,6 +66,49 @@
 -- agent's path still has no `sub` in its token and so still logs null,
 -- exactly as it does today.
 --
+-- ── WHAT THIS ACTUALLY CHANGES ABOUT WHO MAY WRITE orders.status ─────
+--
+-- Stated plainly, because it is the privilege delta of this migration and
+-- nothing else in the tree records it.
+--
+-- BEFORE: `orders_rw` (20260807000200_rls.sql:323 -- `for all to
+-- authenticated`, using and with check `app.can_access_location`) already
+-- permitted the UPDATE. What stopped it was this trigger rolling the
+-- statement back, every time, for every authenticated role. So in
+-- practice NO signed-in user could change an order's status to anything
+-- at all, and none could INSERT a row into `orders` either -- the AFTER
+-- INSERT arm died the same way.
+--
+-- AFTER: that accidental prohibition is gone. A signed-in member of the
+-- restaurant can set any of the six values in the `order_status` enum
+-- directly, and insert orders, through PostgREST -- the anon key and the
+-- session are both in the browser (lib/supabase/client.ts), so this is
+-- reachable and not theoretical. RLS still confines every one of those
+-- writes to their own restaurant's rows, and every status change is now
+-- logged with the uuid that made it.
+--
+-- THE FOUR MOVES THE BOARD OFFERS ARE AN APPLICATION RULE, NOT A DATABASE
+-- ONE. lib/orders/moves.ts is read by app/dashboard/orders/actions.ts
+-- before it writes, so that action skips no column and cancels nothing.
+-- The database enforces neither. Do not build anything on "an order can
+-- never reach 'cancelled'" or "'completed' is only ever reached through
+-- the kitchen" -- those are true of that action and of no other caller.
+--
+-- Not closed with a second trigger, and this is why: the same policy that
+-- permits the UPDATE is `for all`, and 20260807000200_rls.sql:374 grants
+-- `select, insert, update, delete on all tables in schema public to
+-- authenticated`. A member of the restaurant can therefore DELETE the
+-- order row outright today, which fires no trigger and leaves no log
+-- line -- strictly more destructive than setting their own ticket to
+-- 'cancelled', and available before this migration and after it. A
+-- transition constraint on `status` alone would be a lock on the window
+-- beside an open door, and it would also have to carve out `place_order`
+-- and the agent's own inserts to avoid breaking the only writers that
+-- exist. If the transitions are ever wanted as a database invariant, the
+-- place for them is a BEFORE UPDATE OF status trigger on `orders` that
+-- rejects pairs outside the set for non-service roles -- one change,
+-- deliberately taken, and not a side effect of this one.
+--
 -- ── the posture, re-asserted and not merely restated ─────────────────
 --
 -- Everything below the function body has to be re-run on every replace:

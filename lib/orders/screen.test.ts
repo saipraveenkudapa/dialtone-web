@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BoardOrder } from "@/lib/data";
@@ -481,6 +483,33 @@ describe("the control the approved design draws on a ticket", () => {
 
     expect(html).not.toContain("<button");
     expect(prose(html)).toContain("not on this board");
+  });
+
+  /* THE DEVICE THIS SCREEN IS READ ON. A board at a pass is a tablet,
+     and app.css's coarse-pointer block raises every .btn to a 44px
+     target -- which on two stacked presses --space-1 (3.4px) apart makes
+     the targets bigger while the lane between them stays where it was.
+     In the Ready column that pair is "Picked up" over "Back in the
+     kitchen", and 'completed' has no column here: a thumb that lands
+     high takes the ticket off the board with no press left to bring it
+     back. Asserted against the stylesheet because there is no layout
+     under renderToStaticMarkup to measure -- the same idiom, and the
+     same reason, as lib/admin/edit-screen.test.ts's assertions on this
+     file. */
+  it("separates the two presses on the pointer a kitchen actually uses", () => {
+    const css = readFileSync(
+      fileURLToPath(new URL("../../app/app.css", import.meta.url)),
+      "utf8",
+    );
+    const coarse = css.slice(css.indexOf("@media (pointer: coarse)"));
+    const separation = coarse.slice(
+      coarse.indexOf("── separation"),
+      coarse.indexOf("gap: var(--touch-gap)"),
+    );
+
+    expect(separation).toContain(".order-moves");
+    // And at rest it is still the mockup's own spacing, not the touch one.
+    expect(css).toContain(".order-moves { display: flex; flex-direction: column; gap: var(--space-1); }");
   });
 
   /* Screen readers get a dozen of these on a busy board, and "Start

@@ -14,11 +14,21 @@ import type { OrderStatus } from "@/lib/supabase/types";
  *  KEYED ON THE CURRENT STATUS, not on the board column, and that is what
  *  makes it safe to drive from a browser. The client sends the status the
  *  cook was looking at and the status they want; the server looks the pair
- *  up HERE before it writes. So there is no request that can set an order
- *  to an arbitrary value, no path from 'new' straight to 'completed' that
- *  skips the kitchen, and no path to 'cancelled' at all -- cancelling
- *  somebody's dinner is not a thing that should happen because a thumb
- *  landed on a tablet at the pass, and this board does not offer it.
+ *  up HERE before it writes. So there is no request MOVEORDER ACCEPTS
+ *  that sets an order to an arbitrary value, none that goes from 'new'
+ *  straight to 'completed' skipping the kitchen, and none that reaches
+ *  'cancelled' at all -- cancelling somebody's dinner is not a thing that
+ *  should happen because a thumb landed on a tablet at the pass, and this
+ *  board does not offer it.
+ *
+ *  THAT IS A RULE ABOUT THIS ACTION AND NOT ABOUT THE DATABASE, and the
+ *  difference matters to anyone reading this table as a guarantee.
+ *  `orders_rw` is `for all to authenticated`, so a signed-in member of
+ *  the restaurant holds a direct UPDATE on its own orders through
+ *  PostgREST with the anon key that is already in their browser; since
+ *  20260819000100 made the audit trigger a definer, that write is no
+ *  longer rolled back. The header of that migration records the whole
+ *  privilege delta. What this table decides is what THIS product writes.
  *
  *  Closed union, like ORDER_BOARD_COLUMN in lib/format.ts: a seventh
  *  status added to the schema fails to compile here rather than quietly
