@@ -55,15 +55,24 @@ export type OrderMove = {
  *  another. Nothing is destroyed by it either: `order_status_events`
  *  records every step with who made it and when, so a ticket walked
  *  forward and back reads as a correction that somebody made, at a time,
- *  rather than as a status that was quietly rewritten.
+ *  rather than as a status that was quietly rewritten. That is now a
+ *  statement about a screen and not only about a table --
+ *  /dashboard/orders/<id> renders the log, and orderEventTitle in
+ *  lib/orders/history.ts is what keeps the step back from reading as the
+ *  step it undoes.
  *
  *  Not offered from New, which has nothing behind it. Not offered on a
  *  ticket that has left the board: 'completed' and 'cancelled' have no
  *  column on the approved design, so there is no card to press -- which
  *  means "Picked up" is the one press on this board that cannot be
- *  undone from it. That is stated rather than hidden: the board already
- *  says out loud how many completed or cancelled orders it is not
- *  showing, so a mis-press is at least visible as a count that went up. */
+ *  undone from it. That is stated rather than hidden, and it is no
+ *  longer only a count: the board says out loud how many completed or
+ *  cancelled orders it is not showing AND links to them, so a mis-press
+ *  is now a named order on /dashboard/orders/history whose timeline says
+ *  who pressed it and at what minute. Undoing it is still not something
+ *  this product does -- that would want a move out of 'completed', which
+ *  this table deliberately does not offer -- but finding it is no longer
+ *  guesswork. */
 export const ORDER_MOVES: Record<OrderStatus, readonly OrderMove[]> = {
   new: [{ to: "preparing", label: "Start cooking", direction: "forward" }],
   /* 'confirmed' shares the board's first column with 'new': both mean a

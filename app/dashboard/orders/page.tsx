@@ -79,6 +79,25 @@ export const metadata = { title: "Orders · Dialtone" };
  *  and the sentence has to survive that rather than be reconciled away
  *  with the card it was sitting on.
  *
+ *  AND THE ORDERS THIS BOARD CANNOT HOLD NOW HAVE SOMEWHERE TO BE. The
+ *  paragraph above -- completed and cancelled orders counted rather than
+ *  dropped -- was for a long time the whole of this product's memory of
+ *  a finished order: press "Picked up" and the ticket, its lines, its
+ *  money and the caller who is owed it left every screen there was, and
+ *  the only trace was a number in this page's head. A count of things
+ *  nobody can go and look at is half an answer, so the head now carries
+ *  the way to /dashboard/orders/history, where they are listed, and to
+ *  /dashboard/orders/<id>, where one of them is shown whole with its
+ *  status log beside it.
+ *
+ *  THAT LINK IS IN THE HEAD AND IS NOT ON A CARD, and the choice is the
+ *  same one that put the history at its own address rather than behind a
+ *  toggle on this route. A ticket at a pass has exactly the controls it
+ *  had before: one press, and a second on the two columns that have a way
+ *  back, --touch-gap apart on the tablet this screen is read on. Nothing
+ *  a cook does mid-service may navigate away from the live tickets, and
+ *  nothing may sit beside "Picked up" waiting for a thumb that missed.
+ *
  *  Read on the signed-in user's own session (lib/data.ts), so RLS
  *  decides what is on it. Nothing here is a platform-admin surface, and
  *  the only write on the page is the one control on each ticket.
@@ -123,6 +142,17 @@ export default async function OrdersPage() {
               {withheld === 1 ? "order is" : "orders are"} not on this board.
             </div>
           ) : null}
+        </div>
+        {/* The screen's own action, in the slot the system keeps for one
+            (.page-head .actions), at the far end of the head and as far
+            from the presses on a ticket as this page has room for.
+            Always drawn, including on a board with nothing withheld: a
+            restaurant that has just cleared the pass is exactly the one
+            about to go and read what it took. */}
+        <div className="actions">
+          <Link href="/dashboard/orders/history" className="btn btn-secondary">
+            Finished orders
+          </Link>
         </div>
       </div>
 

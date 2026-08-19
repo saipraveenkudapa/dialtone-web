@@ -551,3 +551,60 @@ describe("a restaurant with no location at all", () => {
     expect(getOrdersBoard).not.toHaveBeenCalled();
   });
 });
+
+describe("the orders that have left the board", () => {
+  /* THE BOARD ALREADY SAID HOW MANY IT WAS NOT SHOWING, and for a while
+     that sentence was the entire trace of a finished order anywhere in
+     this product: press "Picked up" and the ticket, its lines, its money
+     and the caller who is owed it left every screen. /dashboard/orders/
+     history is where they are now, and the board owes a reader the way
+     there -- a count of things you cannot go and look at is only half an
+     answer. */
+  it("offers a way to them from the head of the board", async () => {
+    const html = await markup();
+
+    expect(html).toContain('href="/dashboard/orders/history"');
+    expect(prose(html)).toContain("Finished orders");
+  });
+
+  it("offers it on a board that has tickets on it too", async () => {
+    getOrdersBoard.mockResolvedValue([order()]);
+
+    expect(await markup()).toContain('href="/dashboard/orders/history"');
+  });
+
+  /* AND NOT ON A TICKET. This board is read on a tablet at a pass -- the
+     device the coarse-pointer block at the end of app.css was measured
+     for -- and the one thing a card must not grow is another tap target
+     beside the presses that move the order. The link lives in the page
+     head, at the far end of it, where the system already puts a screen's
+     own action (.page-head .actions). */
+  it("puts it in the head and nowhere near the presses on a card", async () => {
+    getOrdersBoard.mockResolvedValue([order()]);
+
+    const html = await markup();
+    const card = html.slice(html.indexOf("order-card"));
+
+    expect(html.indexOf("/dashboard/orders/history")).toBeLessThan(
+      html.indexOf("order-card"),
+    );
+    expect(card).not.toContain("/dashboard/orders/history");
+  });
+
+  /* The board's own behaviour is unchanged by the link: the same three
+     columns, the same four statuses, the same presses, and the same
+     sentence about what it is not showing. */
+  it("changes nothing else about the board", async () => {
+    getOrdersBoard.mockResolvedValue([
+      order({ id: "a", orderNumber: 1002, status: "completed" }),
+      order({ id: "b", orderNumber: 1001, status: "new" }),
+    ]);
+
+    const screen = await said();
+
+    expect(screen).toContain("1 completed or cancelled order is not on this board");
+    expect(screen).toContain("#1001");
+    expect(screen).not.toContain("#1002");
+    expect(screen).toContain("Start cooking");
+  });
+});
