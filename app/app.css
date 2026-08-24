@@ -493,6 +493,12 @@ a:hover { color: var(--color-accent); }
 }
 .empty-note { font-size: 13px; padding: var(--space-3) 0; }
 
+/* A card's closing footnote -- the muted sentence under the facts that
+   says who changes what (the Settings screen's "changed by your
+   operator"). 13px like .empty-note, no margin: the card's own gap
+   already spaces it. */
+.card-foot { font-size: 13px; margin: 0; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+
 /* ── manager screen ────────────────────────────────────────────────── */
 
 /* On a desktop this renders inside a phone frame beside the rationale, as

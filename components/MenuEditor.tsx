@@ -65,12 +65,6 @@ export function MenuEditor() {
         </div>
       </div>
 
-      <p className="text-muted">
-        Prices are typed in dollars and stored as whole cents. A price you save here is what
-        the phone agent quotes on the very next call -- the new value is always shown next to
-        the old one before it commits.
-      </p>
-
       {/* Not on a menu with no dishes: a rule about rows that do not
           exist is furniture on the emptiest version of this screen, and
           furniture is not read. Same reasoning, and all four of the same

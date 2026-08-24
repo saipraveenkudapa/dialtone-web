@@ -452,9 +452,7 @@ function WeeklyHours({
           they did not need or skip one they did. The live notes in
           components/admin/EditSections.tsx carry none; these match them. */}
       <p className="edit-note is-live">
-        The assistant looks the hours up in the database every time a caller asks, so there is
-        nothing to re-push to the phone. The moment this says Saved you can tell the restaurant
-        the new hours are in effect.
+        New hours are live the moment this says Saved — nothing to re-push.
       </p>
 
       <div className="hours-grid">
@@ -566,8 +564,7 @@ function Holidays({
       </p>
 
       <p className="edit-note is-live">
-        Read from the database with the hours, on every call. Nothing to re-push, and nothing on
-        the phone that can be left on the old answer.
+        Holiday hours are live on the next call — nothing to re-push.
       </p>
 
       {holidays.length === 0 ? (

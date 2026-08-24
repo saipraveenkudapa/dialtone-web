@@ -290,9 +290,8 @@ export function MenuAdmin(props: MenuAdminProps) {
         <p className="text-muted sub">
           {items.length} item{items.length === 1 ? "" : "s"} across {categories.length}{" "}
           categor{categories.length === 1 ? "y" : "ies"}
-          {soldOut.length > 0 ? `, ${soldOut.length} not offered` : ""}. Prices are typed in
-          dollars and stored as whole cents; what will actually be stored is shown beside every
-          price box.
+          {soldOut.length > 0 ? `, ${soldOut.length} not offered` : ""}. What you save here is
+          what callers hear.
         </p>
 
         {/* No chip. .tag.tag-outline is this feature's REBUILD mark --
@@ -302,9 +301,7 @@ export function MenuAdmin(props: MenuAdminProps) {
             a rebuild they did not need or skip one they did. The live
             notes in components/admin/EditSections.tsx carry none. */}
         <p className="edit-note is-live">
-          The assistant reads the menu out of the database on every call — it is never baked into
-          the assistant, so there is nothing to re-push and nothing on the phone that can be left
-          on the old price. A price saved here is what the agent quotes on the very next call.
+          A price you save is what the agent quotes on the very next call — nothing to re-push.
         </p>
 
         <form

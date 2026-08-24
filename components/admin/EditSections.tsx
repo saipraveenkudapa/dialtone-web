@@ -987,7 +987,7 @@ export function ServiceSection({
     <SectionCard
       id="service"
       title="Money & service"
-      lede="Sales tax is typed as a percentage and stored as whole basis points — the database can only hold a whole number of them, so a rate like 6.625% is rounded to the nearest one."
+      lede="Sales tax, promise times, seat count and party size — what a caller is quoted and how long the kitchen promises."
       flags={flagsFor(dirty, phoneBehind(result, [drift.orderTypes]))}
     >
       {/* The account of a re-seed that landed on typing, first child

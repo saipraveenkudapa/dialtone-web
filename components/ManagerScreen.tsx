@@ -77,14 +77,6 @@ export function ManagerScreen() {
           One hand, mid-service, screen covered in flour. Tap once and the agent
           stops offering it on the next call. No dialog, no save button.
         </p>
-        <div className="manager-facts">
-          <div>56px minimum tap targets</div>
-          <div>Nothing depends on hover</div>
-          <div>Other staff&rsquo;s toggles arrive live</div>
-          <div>
-            Sold out <em>now</em> or <em>until close</em>
-          </div>
-        </div>
         <div className="manager-sync">
           <SyncNote timezone={location.timezone} />
         </div>
