@@ -1,9 +1,11 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { currentPlatformAdmin } from "@/lib/admin/auth";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { supabaseServer } from "@/lib/supabase/server";
+import { SET_PASSWORD_PATH, mustChangePassword } from "@/lib/auth/must-change-password";
 
 export type AuthState = { error?: string; sent?: boolean };
 
@@ -12,6 +14,21 @@ export type AuthState = { error?: string; sent?: boolean };
 function safeNext(next: FormDataEntryValue | null) {
   const value = typeof next === "string" ? next : "";
   return value.startsWith("/") && !value.startsWith("//") ? value : "/dashboard";
+}
+
+/** Where a successful sign-in should land.
+ *
+ *  Operator staff belong to no organization on purpose, so /dashboard
+ *  greets them with "no restaurant yet" -- a dead end that made the
+ *  console look missing unless you already knew to type /admin. Staff go
+ *  to the console; everyone else goes where they were headed.
+ *
+ *  An explicit `next` still wins, so a deep link a signed-out user
+ *  followed still works after they log in. */
+async function landingFor(next: FormDataEntryValue | null) {
+  const target = safeNext(next);
+  if (target !== "/dashboard") return target;
+  return (await currentPlatformAdmin()) ? "/admin" : target;
 }
 
 export async function signInWithPassword(
@@ -23,14 +40,20 @@ export async function signInWithPassword(
   if (!email || !password) return { error: "Enter your email and password." };
 
   const supabase = await supabaseServer();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
   // Deliberately vague: a precise message tells an attacker which emails
   // have accounts.
   if (error) return { error: "That email and password did not match." };
 
   revalidatePath("/", "layout");
-  redirect(safeNext(formData.get("next")));
+
+  // The middleware would bounce them there anyway on the next request.
+  // Going straight saves a redirect the owner would otherwise watch
+  // flicker past on the one screen they are most likely to distrust.
+  if (mustChangePassword(data.user)) redirect(SET_PASSWORD_PATH);
+
+  redirect(await landingFor(formData.get("next")));
 }
 
 export async function sendMagicLink(

@@ -7,7 +7,14 @@
   --color-bg: #f2f2f3;
   --color-surface: #e9e9ea;
   --color-text: #1d1f20;
-  --color-accent: #5980a6;
+  /* Corrected: was #5980a6, which measured 3.71:1 as text on --color-bg
+     and so failed WCAG AA (4.5:1 for normal text) everywhere the accent is
+     ink -- .btn-ghost, .card-kicker, .tag-outline, .row-link, the checked
+     .seg-opt label. Same hue and saturation (hsl 210 30%); lightness alone
+     drops 50% -> 40.8%. Now 5.19:1 on --color-bg, 4.79:1 on
+     --color-surface, and >=4.56:1 on every accent tint the system lays
+     under accent ink. */
+  --color-accent: #496887;
   --color-accent-2: #728fab;
   --color-divider: color-mix(in srgb, #1d1f20 16%, transparent);
 
@@ -123,11 +130,40 @@ p { margin: 0 0 var(--space-3); }
 a { color: var(--color-accent); text-underline-offset: 3px; }
 img { display: block; max-width: 100%; }
 figure { margin: 0; }
+/* Corrected: was 55%, which composites to #7d7e7f on --color-bg and
+   measures 3.64:1 -- under the 4.5:1 WCAG AA asks of text below 24px,
+   and this is the recipe EVERY muted string in the product is painted
+   with, so one number was failing in six places at once. 65% composites
+   to #68696a: 4.93:1 on --color-bg, 4.77:1 on --color-surface, 4.99:1 on
+   --color-neutral-100 and 4.98:1 on --color-accent-100 -- every ground
+   the system lays muted ink on. 63.1% is the true floor (the binding
+   ground is --color-surface, where 63% is 4.49:1 and misses); 65% is the
+   first round step clear of it and still sits under .field > label's
+   70%, so caption -> label -> body copy still reads in that order.
+
+   A named token was ruled out, not overlooked: app/app.css's
+   "industry-system corrections" block states the rule this file lives
+   by -- industry.css may carry a corrected VALUE for a declaration the
+   mockup already has and may not carry a declaration the mockup does
+   not, and nothing in industry.css may reference anything app.css
+   declares. A --color-text-muted would break one of those two whichever
+   file it went in. So the fix is one corrected value, applied at every
+   site of one recipe, exactly the shape --color-accent's correction
+   took.
+
+   NOT changed with it: the same literal on .blueprint > .corner above.
+   Those are 1px registration marks, not text; 3.64:1 already clears the
+   3:1 WCAG 1.4.11 asks of a non-text graphic, and darkening the frame
+   would change the mockup's look for no accessibility gain.
+
+   app/app.css carries four more copies of this recipe -- .table td
+   .caller-city, .soldout-row .until, .transcript h5, .edit-status --
+   and they move with it. */
 figcaption {
   font-size: 11px; margin-top: var(--space-1);
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
-.text-muted { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.text-muted { color: color-mix(in srgb, var(--color-text) 65%, transparent); }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
@@ -152,8 +188,25 @@ figcaption {
 .btn svg { display: block; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-primary { background: var(--color-accent); color: var(--color-bg); }
-.btn-primary:hover { background: var(--color-accent-600); }
-.btn-primary:active { background: var(--color-accent-700); }
+/* One ramp step per state, taken from wherever --color-accent rests. The
+   old pair was -600 and -700: -600 sat at the same lightness as the old
+   accent (49.4% vs 50.0%), so hover changed nothing you could see. The
+   corrected accent rests at 40.8%, BETWEEN -600 and -700, so leaving
+   hover on -600 would have made the button lighter under the finger and
+   then -700 would have landed a step above where hover left off. Same
+   intent, moved down one notch with the token, still monotonically
+   darker. The label is --color-bg throughout -- 5.78:1 on -700, 8.87:1
+   on -800.
+
+   These two lines change the VALUE of a declaration the mockup already
+   has, which is the only kind of edit this file takes. The border has to
+   follow the fill down or the darker button wears a lighter 1px rim --
+   .btn-primary carries `border-color: var(--color-accent)` in the
+   blueprint block below -- but that is a declaration the mockup does NOT
+   have, so it is a rule in app/app.css, under "industry-system
+   corrections", and not a third value on these two lines. */
+.btn-primary:hover { background: var(--color-accent-700); }
+.btn-primary:active { background: var(--color-accent-800); }
 .btn-secondary { border-color: var(--color-divider); }
 .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
@@ -209,7 +262,13 @@ textarea.input { min-height: 90px; resize: vertical; }
   display: flex; flex-direction: column; gap: var(--space-2);
   padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface);
 }
-.card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent); }
+/* 12px is the floor for a label a person is expected to read; this was
+   10px. Tracking goes 0.1em -> 0.08em, the figure h6 and .table th
+   already use for an uppercase label, which leaves the absolute space
+   between glyphs where it was (10px x 0.1 = 1.0px, 12px x 0.08 = 0.96px):
+   the letters grow, the kicker keeps its rhythm and still reads as a
+   kicker rather than as body copy. */
+.card-kicker { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-accent); }
 .card-title {
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
   font-size: 17px; line-height: 1.2;
@@ -249,9 +308,21 @@ textarea.input { min-height: 90px; resize: vertical; }
 
 /* — tables — */
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
+/* Corrected WITH .text-muted above, and only because of it. th was 60%
+   -- 4.22:1, its own AA miss at 11px -- and .table td .caller-city, the
+   secondary line inside a cell of the same table, is one of the four
+   app.css sites that just went to 65%. Left at 60% the column HEADER
+   would render lighter than the subtext beneath it: an inversion this
+   correction would have introduced, so it is repaired here rather than
+   shipped. 65% is 4.93:1. th is still told apart from the cells it heads
+   by 11px, uppercase and 0.08em tracking; the ink alone was never doing
+   that work, and the header-to-body separation it does carry only
+   narrows from 3.48:1 to 3.01:1 against --color-text. This is the one
+   declaration changed that the contrast audit did not name; revert this
+   rule alone and nothing else in the pass moves. */
 .table th {
   text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
   padding: var(--space-2); border-bottom: 1px solid var(--color-divider);
 }
 .table td {

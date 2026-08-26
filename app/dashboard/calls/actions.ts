@@ -1,10 +1,20 @@
 "use server";
 
 import { supabaseServer } from "@/lib/supabase/server";
+import { passwordIsStillTemporary } from "@/lib/auth/password-gate";
 
 /** Staff notes on a call. Written with the user's own session, so RLS
  *  decides whether this call is theirs to annotate. */
 export async function saveCallNotes(callId: string, notes: string) {
+  // The middleware will not let this page load while the account is still
+  // using the password its operator generated -- but this export is an
+  // HTTP endpoint of its own, reachable by anyone holding its action id
+  // without ever loading that page. That is precisely the hole /signup
+  // left open, so the refusal lives in the thing that does the writing.
+  if (await passwordIsStillTemporary()) {
+    return { error: "Set your own password before changing anything here." };
+  }
+
   const supabase = await supabaseServer();
 
   const { error } = await supabase

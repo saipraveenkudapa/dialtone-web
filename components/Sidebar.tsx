@@ -8,13 +8,17 @@ import { signOut } from "@/app/login/actions";
 const NAV = [
   { href: "/dashboard", label: "Today" },
   { href: "/dashboard/calls", label: "Calls" },
+  { href: "/dashboard/messages", label: "Messages" },
   { href: "/dashboard/orders", label: "Orders" },
   { href: "/dashboard/menu", label: "Menu" },
   { href: "/dashboard/menu/live", label: "Manager screen" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
 
-export function Sidebar() {
+// isPlatformAdmin is decided server-side in app/dashboard/layout.tsx and
+// is required, not defaulted: there is one call site, and whether an
+// owner can see that /admin exists should be forced to be a decision.
+export function Sidebar({ isPlatformAdmin }: { isPlatformAdmin: boolean }) {
   const pathname = usePathname();
   const { killOn, toggleKill, location, pending, error } = useAgentStatus();
 
@@ -23,6 +27,21 @@ export function Sidebar() {
       <div className="sidebar-head">
         <div className="sidebar-brand">Dialtone</div>
         <div className="sidebar-location">{location.name}</div>
+        {/* Staff arrive at a restaurant's dashboard from the console;
+            without this the only way back is the browser's back button.
+            It sits in the head, with the other navigation, and not in
+            the foot under a red kill switch -- an escape hatch buried
+            beneath a destructive control is one nobody finds.
+
+            Owners never see it, and that is a security property, not
+            styling: middleware.ts and app/admin/layout.tsx conspire so a
+            signed-in restaurant owner cannot learn /admin exists. Do not
+            "simplify" this conditional away. */}
+        {isPlatformAdmin ? (
+          <Link href="/admin" className="operator-back">
+            ← Operator console
+          </Link>
+        ) : null}
       </div>
 
       <nav className="side-nav">

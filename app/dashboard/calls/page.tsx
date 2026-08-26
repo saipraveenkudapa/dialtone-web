@@ -32,6 +32,7 @@ export default async function CallsPage({
     pageCount,
     orderByCall,
     bookingByCall,
+    messageByCall,
   } = await getCallsPage(location.id, { filter, page });
 
   const tz = location.timezone;
@@ -44,6 +45,27 @@ export default async function CallsPage({
     if (p > 1) q.set("page", String(p));
     const s = q.toString();
     return s ? `/dashboard/calls?${s}` : "/dashboard/calls";
+  };
+
+  /** A message taken on this call, if there was one.
+   *
+   *  Shown alongside the result rather than instead of it, and shown
+   *  even when the call also produced an order: an order is finished
+   *  business and a message is a person still waiting for the phone to
+   *  ring, so it is the one thing on the row somebody has to act on.
+   *  The whole book lives at /dashboard/messages -- including the
+   *  messages taken on a call that has no row here at all, which is why
+   *  that page and not this one is the place a message can be found. */
+  const messageTag = (callId: string) => {
+    const taken = messageByCall.get(callId);
+    if (!taken) return null;
+    return (
+      <Link href="/dashboard/messages" className="row-link">
+        <span className={taken.open ? "tag tag-accent" : "tag tag-neutral"}>
+          {taken.open ? "message · needs a callback" : "message · handled"}
+        </span>
+      </Link>
+    );
   };
 
   /** What the call produced, in one line. */
@@ -134,7 +156,10 @@ export default async function CallsPage({
                   <td className="num">
                     {c.duration_seconds ? mmss(c.duration_seconds) : "—"}
                   </td>
-                  <td className="call-result">{result(c.id, c)}</td>
+                  <td className="call-result">
+                    {messageTag(c.id)}
+                    <div>{result(c.id, c)}</div>
+                  </td>
                   <td className="num">
                     {money(c.telephony_cost_cents + c.llm_cost_cents)}
                   </td>

@@ -13,7 +13,37 @@ body {
   margin: 0;
   font-family: var(--font-body);
 }
-a { color: var(--color-accent-700); }
+/* design/Dialtone.html's own page-level <style> block carries this pair
+   verbatim -- `a { color: var(--color-accent-700) }` and
+   `a:hover { color: var(--color-accent) }` -- so it is approved design and
+   is measurable against the mockup. A link rests one ramp step below the
+   accent and BRIGHTENS to the accent under the pointer. That reading is
+   kept; only its anchor moves.
+
+   Why it had to move: --color-accent was corrected from #5980a6 to
+   #496887 because it failed AA as ink. #5980a6 sat level with
+   --color-accent-600; #496887 sits BETWEEN -700 and -600. So a rest
+   pinned to -700 and a hover on the accent became ramp neighbours and the
+   step collapsed. Mockup: #416180 -> #5980a6, relative luminance x1.81,
+   OKLCH L 48.1 -> 58.6. With the corrected accent and rest still on -700:
+   #416180 -> #496887, x1.16, L 48.1 -> 50.6 -- effectively imperceptible,
+   and .row-link sets `text-decoration: none`, so on several controls
+   colour is the only hover cue there is.
+
+   Rest therefore moves down one notch with the token, the same repair
+   .btn-primary's hover and press took for the same reason: #2c455d ->
+   #496887 is x2.34 and L 38.1 -> 50.6, the mockup's step restored, and
+   both ends clear AA on --color-bg -- 8.87:1 at rest, 5.19:1 on hover.
+   Hover may NOT climb back up the ramp instead: -600 is #597ea3 at
+   3.80:1, the exact failure this pass exists to remove.
+
+   The cost, stated because it is real: resting link ink is darker than
+   the mockup's and so stands a little less apart from --color-text
+   (OKLCH distance 0.25 -> 0.15). The alternative -- rest left on -700 and
+   hover sent DOWN to -800 -- keeps the resting ink and inverts the
+   mockup's direction, which is a design decision and not this pass's to
+   make. */
+a { color: var(--color-accent-800); }
 a:hover { color: var(--color-accent); }
 
 @keyframes pulse {
@@ -41,6 +71,19 @@ a:hover { color: var(--color-accent); }
   position: sticky;
   top: 0;
   height: 100vh;
+  /* The column is a fixed 100vh and its content is not. Under
+     `@media (pointer: coarse)` the seven .side-nav-items go 39.7px -> 44
+     and .operator-back 34 -> 44, which takes the content from 584.5px to
+     655.1px; this rule only renders as a column above 900px, so the
+     exposure is a touch device WIDER than 900 and SHORTER than ~656 of
+     usable viewport -- an iPad mini in landscape inside Safari is
+     1133x744 less toolbars, about 654. At 1024x620 the Sign out button's
+     bottom edge lands 15.1px past the fold and, sticky with visible
+     overflow, there was nothing to scroll: the page took the sidebar with
+     it. The control that leaves the screen first is the kill switch.
+     Inert whenever the content fits, which is every case that works
+     today, and no visual change at rest. */
+  overflow-y: auto;
 }
 
 .sidebar-head { padding: 0 18px; }
@@ -120,6 +163,70 @@ a:hover { color: var(--color-accent); }
   gap: 22px;
 }
 
+/* ── danger ────────────────────────────────────────────────────────── 
+   A COLOUR THE APPROVED SYSTEM DOES NOT HAVE, ADDED ON PURPOSE.
+
+   grep app/industry.css for danger, error, warn or red and it returns
+   nothing: the mockup has one hue. So .btn-danger -- the kill switch in
+   the sidebar, "Kill switch on" in the go-live panel, and Remove in both
+   of the menu editor's confirm dialogs -- was painted
+   --color-accent-900, the darkest step of the same blue ramp every other
+   control on the page is drawn from. In those two dialogs it stood next
+   to a Cancel painted --color-accent: two buttons, one hue, opposite
+   consequences, and the press that cannot be undone distinguished from
+   the press that does nothing only by being darker. That is a safety
+   defect rather than a taste one -- functional colour for destructive
+   actions is in Apple's HIG and in Material, and 1.4.1 is in WCAG for
+   the same reason -- and it survived two passes because there was no
+   token to reach for. This is the token.
+
+   IT LIVES HERE, NOT IN industry.css. The "industry-system corrections"
+   block further down this file states the rule: industry.css may carry a
+   corrected VALUE for a declaration the mockup already has, and may not
+   carry a declaration the mockup does not, or the word "verbatim" stops
+   being checkable. A whole new ramp is the second kind. AGENTS.md says
+   the way to extend the system is a class in app/app.css; this is that,
+   and the dependency still points app.css -> industry.css only.
+
+   HOW THE VALUES WERE DERIVED. industry.css says its ramps are
+   "generated in OKLCH on one shared lightness scale, so the same step of
+   any role matches the others in visual value", and measurement bears it
+   out: neutral, accent and accent-2 all sit on L = 97.0 / 93.0 / 87.1 /
+   78.0 / 68.1 / 58.0 / 48.0 / 38.0 / 29.0. This ramp sits on that same
+   scale, so --color-danger-700 carries exactly the visual weight of
+   --color-accent-700 and nothing here is louder than the system it
+   joins.
+
+   Hue is OKLCH 31 degrees -- between red ochre (measured 27.3) and iron
+   oxide (32.2), clear of pink below 20 and of rust-orange above 38.
+   Chroma is 1.9x the accent's at the same step, clamped to 90% of the
+   sRGB boundary at that lightness and hue; the clamp binds on -100..-400
+   only, because at L >= 78% sRGB cannot hold this hue at the plateau
+   chroma and no red ramp can. 1.9x rather than 1.0x because a red is not
+   a blue: the accent's OWN chroma at L 48 and hue 31 is #7d5048, a
+   taupe, which would have been a danger colour nobody could name. What
+   comes out at the step this file actually uses, --color-danger-700
+   #953f31, is L 48.0 C 0.119 H 31.2; natural red ochre pigment is L 46.4
+   C 0.122 H 27.3. Restrained by measurement rather than by adjective:
+   Material's error-700 is C 0.178, Tailwind red-700 C 0.191, #FF0000 C
+   0.258.
+
+   ONE CONSUMER TODAY, ON PURPOSE. A destructive colour earns its meaning
+   by scarcity, so only .btn-danger takes it in this pass. .tag-out keeps
+   --color-accent-900 -- the reason is written at .tag-out. ── */
+
+:root {
+  --color-danger-100: #fef2ef;
+  --color-danger-200: #fde0db;
+  --color-danger-300: #fbc6bc;
+  --color-danger-400: #f99a89;
+  --color-danger-500: #e17462;
+  --color-danger-600: #bd5746;
+  --color-danger-700: #953f31;
+  --color-danger-800: #6d2a20;
+  --color-danger-900: #481c15;
+}
+
 /* ── kill switch ───────────────────────────────────────────────────── */
 
 .kill-banner {
@@ -151,9 +258,126 @@ a:hover { color: var(--color-accent); }
   color: var(--color-bg);
   font-size: 13px;
 }
-.btn-danger { border-color: var(--color-accent-900); color: var(--color-accent-900); }
-.btn-danger:hover { background: color-mix(in srgb, var(--color-accent-900) 10%, transparent); }
+/* THE KILL SWITCH. Filled rather than outlined, and the fill is the
+   whole argument.
+
+   Both Remove confirms sit inside a plain .dialog, which industry.css's
+   blueprint block leaves `background: transparent`, over a
+   .dialog-backdrop of --color-neutral-900 at 50%. The ground under those
+   two buttons is therefore #8e8e90, not paper -- and no OUTLINED
+   destructive control clears AA on it: --color-danger-700 as ink
+   measures 2.13:1 there, and even --color-danger-900 measures 4.45:1,
+   still short of 4.5:1. (The --color-accent-900 outline this replaces
+   measures 4.32:1 on that ground, and the Cancel beside it measures
+   1.79:1, so the transparent dialog was already failing both buttons.)
+   A fill makes the label's ground the button's OWN fill, so one number
+   holds on every ground in the product: --color-bg on
+   --color-danger-700 is 6.19:1, on -800 9.37:1, on -900 12.92:1. On
+   paper the fill against --color-bg is those same three numbers, so the
+   control's boundary clears the 3:1 of WCAG 1.4.11 there as well.
+
+   Filled with a --color-bg label is the shape .btn-primary already has,
+   so this is the system's own "the button you press" with the hue
+   changed -- and .btn-danger is the only filled button in every row it
+   appears in (a .btn-secondary beside it in the go-live panel's line-
+   state row, a .btn-ghost Cancel in each confirm dialog, a .btn-ghost
+   Sign out under it in the sidebar), so fill, border and hue all differ
+   from its neighbours at once.
+
+   THE BORDER RESTS A STEP DARKER THAN THE FILL, which nothing else in
+   this system does, and it is a measurement and not a flourish: the fill
+   has to carry the hue, so it rests at -700, and -700 against that
+   #8e8e90 dialog ground is 2.13:1 -- under the 3:1 WCAG 1.4.11 asks of a
+   control's own boundary. -900 as the border is 4.45:1 on the dialog
+   ground and 12.92:1 on paper. It is never LIGHTER than the fill in any
+   state, which is the failure .btn-primary's border correction further
+   down this file exists to prevent; at :active fill and border meet at
+   -900 and the rim closes.
+
+   One ramp step per state, monotonically darker, the same pattern
+   .btn-primary's hover and press take. The 10% tint that used to be the
+   hover is gone with the transparent rest state it belonged to.
+
+   COLOUR IS NOT THE ONLY SIGNAL. Each of the four .btn-danger in the
+   product names what it destroys in its own label -- "Kill switch",
+   "Kill switch on", "Remove {item}", "Remove it and N items" -- and each
+   dialog's other button says "Cancel" and carries no fill at all. Said
+   plainly because this fill and --color-accent are near-equal in
+   luminance by construction (1.19:1; both on the L 48-51 rung of the
+   shared scale), so if a filled .btn-primary and this ever land in one
+   row they are told apart by hue, by rim and by words, and never by
+   lightness. */
+.btn-danger {
+  background: var(--color-danger-700);
+  border-color: var(--color-danger-900);
+  color: var(--color-bg);
+}
+.btn-danger:hover { background: var(--color-danger-800); }
+.btn-danger:active { background: var(--color-danger-900); }
 .btn-restore { background: var(--color-accent-900); color: var(--color-bg); border-color: var(--color-accent-900); }
+
+/* ── the ground every dialog stands on ─────────────────────────────────
+
+   THE GROUND THE BLOCK ABOVE HAD TO WORK AROUND, CORRECTED AT SOURCE.
+
+   industry.css's blueprint rule is `.card, .dialog { background:
+   transparent }` -- right for a card, which sits on paper, and wrong for
+   a dialog, which floats over .dialog-backdrop's --color-neutral-900 at
+   50%. A transparent .dialog therefore composites to rgb(142.5, 142.5,
+   144) -- #8f8f90 -- and NOTHING outlined or inked clears AA there.
+   Recomputed with the WCAG relative-luminance formula, on that ground:
+
+     .btn-ghost "Cancel"/"Stay on this page"  --color-accent   1.79:1
+     .dialog-body copy (--color-text at .85)                   4.09:1
+     :focus-visible ring                      --color-accent   1.79:1
+     .setup-error                             --color-danger-800 3.23:1
+     .btn-danger's own rim                    --color-danger-900 4.45:1
+
+   The kill-switch pass read those numbers and answered them one control
+   at a time: it FILLED .btn-danger so the destructive label would stand
+   on the button's own paint instead of the dialog's. That fixed the one
+   button and left everything beside it -- so on the console's own
+   leave-guard dialog, the press that destroys an operator's unsaved
+   typing was the only thing in the box that could be read. The safe
+   press, the sentence explaining the choice, and the keyboard's own
+   position indicator were all under 4.5:1, and the ring at 1.79:1 meant
+   a Tab user could not see which of the two buttons was armed on the
+   dialog that deletes a menu category and its items with no undo.
+
+   ONE DECLARATION, and it is the one .review-dialog (below) and
+   .handover-dialog (below) each already reached for on their own,
+   naming the same reason: the system's dialog is a wireframe frame, and
+   a wireframe frame is not a reading surface. Stating it once on
+   .dialog makes the fifth dialog somebody adds correct without anyone
+   remembering this -- the same move .dialog-backdrop's z-index at the
+   end of this file makes. Their own declarations are left in place
+   because each belongs to a width change it is written beside; they are
+   now belt-and-braces rather than load-bearing.
+
+   ON --color-bg, every one of those numbers clears:
+
+     .btn-ghost Cancel                        --color-accent    5.19:1
+     .dialog-body copy (--color-text at .85)                    9.51:1
+     :focus-visible ring                      --color-accent    5.19:1
+       (2px outline-offset, so the ring's neighbours on BOTH sides are
+        --color-bg -- 5.19:1 clears the 3:1 of WCAG 1.4.11 and 2.4.11)
+     .setup-error                             --color-danger-800 9.37:1
+     .btn-danger rim                          --color-danger-900 12.92:1
+     .btn-danger fill vs the paper it sits on --color-danger-700 6.19:1
+
+   .card IS DELIBERATELY NOT INCLUDED. A card sits on --color-bg already;
+   its transparency is the blueprint look this product is drawn in, and
+   there is nothing wrong with the contrast on it. Only .dialog moves,
+   because only .dialog is put over a 50%-ink backdrop. The kill switch
+   keeps its fill -- filled-and-rimmed is now simply the shape of the
+   destructive button rather than a workaround for a ground that no
+   longer exists, and its numbers on paper are the ones listed above.
+
+   --color-bg and not --color-surface: paper is what the reader has been
+   reading all the way to this dialog, and it is the token
+   .review-dialog and .handover-dialog already chose. (Cancel on
+   --color-surface would be 4.79:1 -- passing, but for no gain.) */
+.dialog { background: var(--color-bg); }
 
 /* ── page header ───────────────────────────────────────────────────── */
 
@@ -167,6 +391,24 @@ a:hover { color: var(--color-accent); }
 .page-head .sub { font-size: 13px; }
 .page-head .actions { margin-left: auto; display: flex; gap: 8px; }
 .page-head .actions .btn { padding: 10px 18px; }
+/* The way out of a detail page. .row-link is already the shared shape --
+   /admin/new, /admin/<id> and /dashboard/calls/<id> all render the same
+   "← somewhere" anchor above their h1 -- so it is upgraded in place
+   rather than joined by a second class that would leave the four back
+   links looking like two different things one click apart. Scoped to
+   .page-head because .row-link is also a bare tag wrapper inside tables
+   (see /dashboard/calls), where a box and an underline do not belong.
+   Its own line, a real 28px target, and underlined at rest: unadorned
+   13px jammed against a 38px heading reads as a caption belonging to the
+   title, not as navigation. */
+.page-head .row-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  margin-bottom: var(--space-2);
+  text-decoration: underline;
+}
+.page-head .row-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
 /* ── live call strip ───────────────────────────────────────────────── */
 
@@ -224,9 +466,14 @@ a:hover { color: var(--color-accent); }
 .panel { display: flex; flex-direction: column; gap: 10px; }
 .panel h4 { margin: 0; }
 .num { font-variant-numeric: tabular-nums; }
+/* 55% -> 65% here and at .soldout-row .until, .transcript h5 and
+   .edit-status below: four copies of industry.css's .text-muted recipe,
+   which measured 3.64:1 on --color-bg. The whole derivation, the four
+   grounds and why .blueprint > .corner keeps 55%, is at .text-muted in
+   app/industry.css; these move with it so one recipe keeps one value. */
 .table td .caller-city {
   font-size: 12px;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
 .row-link { text-decoration: none; font-size: 13px; }
 
@@ -242,9 +489,15 @@ a:hover { color: var(--color-accent); }
 .soldout-row .until {
   margin-left: auto;
   font-size: 11px;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
 .empty-note { font-size: 13px; padding: var(--space-3) 0; }
+
+/* A card's closing footnote -- the muted sentence under the facts that
+   says who changes what (the Settings screen's "changed by your
+   operator"). 13px like .empty-note, no margin: the card's own gap
+   already spaces it. */
+.card-foot { font-size: 13px; margin: 0; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
 
 /* ── manager screen ────────────────────────────────────────────────── */
 
@@ -299,6 +552,34 @@ a:hover { color: var(--color-accent); }
 /* 16px keeps iOS from zooming the viewport on focus. */
 .phone-search .input { min-height: 48px; font-size: 16px; }
 .phone-counts { display: flex; gap: 8px; }
+/* NOT TAKING THE DANGER COLOUR, and the reason is not that it is fine.
+   Considered because .tag-out is --color-accent-900, the same token
+   .btn-danger just left.
+
+   Sold out is a STATE, not a destructive action: an operator sets it, it
+   is one tap to unset, it costs nothing and it is expected. It is also
+   the most common chip in the product -- a restaurant with a dozen dishes
+   off renders a dozen of these down the Menu panel. Painted brick, the
+   red on the kill switch would stop meaning "this cannot be undone" and
+   start meaning "one of the many red things on this page", which is the
+   colour inflation that makes a functional palette useless. Scarcity is
+   the whole mechanism; the destructive colour has one consumer.
+
+   It is not short of emphasis either. .tag-out is already the only
+   FILLED chip in the tag family -- .tag-accent, .tag-accent-2 and
+   .tag-neutral are tints, .tag-outline is a hairline -- and its
+   --color-bg label on --color-accent-900 measures 12.56:1. Hue would add
+   alarm, not legibility.
+
+   The real defect here is one this pass cannot reach: .tag-out is
+   OVERLOADED. components/admin/GoLive.tsx maps `blocked` to it and uses
+   it for "Vapi", "Numbers", "Failed" and "Only copy" -- genuine faults --
+   while MenuAdmin, MenuEditor and ManagerScreen use it for "Not offered".
+   One chip, two meanings, and giving it the danger hue would paint "3 not
+   offered" the same red as a provisioning failure. Splitting the fault
+   chip out from the sold-out chip is a change in those .tsx files, not in
+   a token, so the token is left exactly as it was and the overload is
+   written down here. */
 .tag-out { background: var(--color-accent-900); color: var(--color-bg); }
 
 .lv-scroll {
@@ -480,10 +761,32 @@ a:hover { color: var(--color-accent); }
 .auth-seg .seg-opt { flex: 1; justify-content: center; }
 .auth-form { display: flex; flex-direction: column; gap: var(--space-3); }
 .auth-note { font-size: 13px; margin: 0; }
+/* The same correction as .setup-error further down, for the same
+   reason and with the same numbers -- these are one class with two
+   names, split only because one grew on the auth screens and one on the
+   setup form. Both render only when something has been refused. The
+   five call sites all land on the page's own paper -- .auth-card and
+   .phone set --color-bg explicitly, .sidebar inherits it, and
+   CallNotes' .card.blueprint is transparent over it -- where -800 is
+   9.37:1. */
 .auth-error {
   margin: 0;
   font-size: 13px;
-  color: var(--color-accent-900);
+  color: var(--color-danger-800);
+}
+/* Why /set-password is asking. Same frame as the operator's one-time
+   credential warning, because it is the other end of the same handover. */
+.auth-why {
+  border: 1px solid var(--color-accent-900);
+  background: color-mix(in srgb, var(--color-accent-900) 8%, transparent);
+  padding: var(--space-3);
+  font-size: 13px;
+}
+.auth-why strong {
+  font-family: var(--font-heading);
+  letter-spacing: 0.02em;
+  display: block;
+  margin-bottom: 2px;
 }
 .sidebar-signout { width: 100%; font-size: 13px; }
 
@@ -518,6 +821,157 @@ a:hover { color: var(--color-accent); }
 .table-scroll { overflow-x: auto; }
 .num-warn { color: var(--color-accent-900); font-weight: 600; }
 
+/* ── a table that stacks instead of scrolling ─────────────────────────
+   THREE CONSUMERS, all of them a log somebody reads on a phone: the
+   Accounts table on /admin (the portfolio, and the operator's first
+   screen), and the console's own Recent calls and Recent orders.
+
+   THE TWO CONSOLE LOGS ARRIVED HERE BY A SECOND ROAD, and it is worth
+   the paragraph because it is the argument for stacking rather than for
+   any amount of clever wrapping. Those two columns used to print a
+   clock, "11:09 AM", which said nothing about WHICH 11:09; they print
+   the whole instant now, "Aug 15, 2026, 10:08 PM", which is right and
+   which a 47.9px column cannot hold. Measured at 375px with (pointer:
+   coarse) on the real console: the When column resolved to 47.9px inside
+   a 300px .table-scroll and the string broke at every space -- "Aug /
+   15, / 2026, / 10:08 / PM" -- taking the row from 58.6px to 123.1px and
+   the five-row tbody from 293px to 615.4px. The log holds twenty, so
+   ~1170px of phone became ~2460px.
+
+   NEITHER NOWRAP IS AN ANSWER, and both were measured rather than
+   argued about. `white-space: nowrap` on the whole string makes the
+   column's min-content 146.2px and the table 503.5px, so 204px of 503
+   is off the right edge. Splitting it into two nowrapped lines -- the
+   shape the Caller cell in that same table already uses -- fixes the
+   height exactly (row back to 58.6px) but still costs 42.8px of column,
+   taking the table to 447.9px and the hidden part from 105px to 148px:
+   the Cost column and the whole Open button, plus most of Outcome. A
+   two-line cell with NO nowrap is worth nothing at all -- the date
+   simply breaks into three lines of its own and the row only falls from
+   123.1px to 116.9px. Every version of "make the string fit the column"
+   pays in a direction this file already ruled against one block up.
+   Stacking pays in neither: the row is a block, the whole instant sits
+   on one line inside a 145px track (it measures 135.4px), and nothing
+   is hidden.
+
+   WHAT WAS WRONG. Measured at 375px: eight columns, 572px of table in a
+   300.2px box, 272px -- 47.6% of it -- past the right edge with nothing
+   but .table-scroll's overflow-x to say so. The columns lost, in the
+   order they fell off, were Missed, Orders, Revenue, Spend and Last
+   call. The FIRST thing hidden was the count of callers nobody picked
+   up for, and the last was when the restaurant last rang: between them
+   they are the whole of "which of these needs me now", which is the only
+   question this screen answers. And an overflow scrollbar is an overlay
+   on iOS and on a trackpad -- it is not painted until something is
+   already moving -- so the affordance for the missing 47.6% was a
+   gesture nobody was told about. A scrollbar is a way to READ a wide
+   table; it is not a way to find out that one is wide.
+
+   WHAT IT DOES INSTEAD. Below 700px -- the width .setup-row and
+   .money-grid already break at, so the page changes shape once -- each
+   <tr> becomes a block: the restaurant's name and its status chip on
+   the first line, then the six figures two-up beneath, each carrying
+   the name of its own column (app/admin/page.tsx's <Figure>). Nothing
+   is hidden and nothing scrolls sideways.
+
+   IT FITS BY MEASUREMENT, NOT BY HOPE. Inside the 300.2px box the two
+   columns are 145px each. The widest label is "Answered" at 53px and
+   the widest figure "$1,234.56" at 59px, so the worst-case pair needs
+   53 + var(--space-3) + 59 = 122.2px of 145. The widest status chip,
+   "Forwarding unproven", is 127px and fits its column on one line. Only
+   the restaurant's name and the org/timezone line under it can outrun a
+   column -- "The Continental Kitchen & Bar" is 200.6px -- and they wrap,
+   which is why the name cell carries overflow-wrap and a zero min-width
+   rather than a floor.
+
+   1fr 1fr AND NOT 1fr auto, though auto would give the name 18 more
+   pixels: with two equal columns the right-hand figure starts at the
+   same x on every restaurant in the list, and six numbers being scanned
+   down a phone are worth more aligned than a name is worth unwrapped.
+
+   The equal columns are .money-grid's, the hairline-under-a-row is
+   .fact-row's and .hours-row's, and the label is .field > label's size
+   and tier -- this is the house's own list, assembled from the house's
+   own parts, not a second table vocabulary. */
+.cell-label {
+  /* Desktop: the <th> above the cell already says this. */
+  display: none;
+  font-size: 12px;
+  font-weight: 400;
+  /* Declared rather than inherited so .num-warn, which paints the
+     Missed cell accent-900 and bold, colours the FIGURE and not the
+     word "Missed" beside it. */
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+}
+
+@media (max-width: 700px) {
+  .stack-table,
+  .stack-table > tbody,
+  .stack-table > tbody > tr,
+  .stack-table > tbody > tr > td {
+    display: block;
+  }
+  /* Gone rather than clipped-but-present. The reasoning is at the call
+     site: an ARIA table announces a column header while navigating by
+     cell, which is not how a portfolio is read on a phone, so a hidden
+     <thead> would leave a linear reading as six bare numbers. The label
+     inside the cell is real text and carries it instead -- one
+     labelling mechanism live at each width, never two. */
+  .stack-table > thead { display: none; }
+
+  .stack-table > tbody > tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2) var(--space-3);
+    align-items: baseline;
+    /* The same hairline-with-air .fact-row and .hours-row use for a row
+       in a list, in place of .table td's per-cell border-bottom, which
+       border-collapse is no longer there to merge. */
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .stack-table > tbody > tr:last-child { border-bottom: 0; padding-bottom: 0; }
+  .stack-table > tbody > tr:first-child { padding-top: 0; }
+
+  .stack-table > tbody > tr > td {
+    padding: 0;
+    border-bottom: 0;
+    min-width: 0;
+  }
+  /* The name is the block's heading and the only cell that can outrun
+     its column; it wraps rather than pushing the grid wide. */
+  .stack-table > tbody > tr > td:first-child { overflow-wrap: anywhere; }
+  /* The status chip, at the end of the first line rather than the start
+     of the second. Both of these auto-place into row 1 on their own --
+     nothing here places them, so no explicit track can fall out of step
+     with the number of columns. */
+  .stack-table > tbody > tr > td:nth-child(2) { justify-self: end; }
+  /* Every figure: its column's name at the left, its value at the
+     right, on one line. */
+  .stack-table > tbody > tr > td:nth-child(n + 3) {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  /* THE ACTION CELL -- the console's call log ends each row with a
+     button, under a deliberately empty <th> (the button's own label
+     names its row, so the column has no name to print). It is the one
+     cell with nothing to put in the label half of the pair, so it
+     right-aligns its single child instead of spreading two. Auto-placed
+     like every other cell, so it takes the free half of the last row
+     rather than a track of its own -- no `grid-column` here, because a
+     spanning cell would push itself to a fresh row and leave the gap
+     beside Cost that it was spanning to avoid.
+
+     A class and not :last-child: the orders log's last cell is a Total,
+     which is an ordinary label-and-figure pair, and a positional rule
+     could not tell the two apart. */
+  .stack-table > tbody > tr > td.stack-action { justify-content: flex-end; }
+
+  .stack-table .cell-label { display: inline; }
+}
+
 .admin-facts { padding: var(--space-4); }
 .admin-facts dl { margin: 0; display: flex; flex-direction: column; }
 .fact-row {
@@ -529,6 +983,42 @@ a:hover { color: var(--color-accent); }
 }
 .fact-row dt { flex: none; width: 120px; }
 .fact-row dd { margin: 0; flex: 1; word-break: break-word; }
+
+/* A FACT ROW WHOSE VALUE IS A LINK, AND THERE IS STILL ONE.
+
+   These two rules were keyed on the /admin/<id> Account card, which the
+   console pass deleted -- seven of its twelve rows led into the editor,
+   and a 13px line is not a target when three of them render "—" for an
+   empty column. They were then removed as dead, on the claim that no
+   .fact-row in the product holds a link any more. That claim was wrong
+   by one screen: app/dashboard/messages/page.tsx draws every message as
+   a .card.blueprint.admin-facts whose last .fact-row is "Listen to the
+   call" -- a .row-link in a <dd>, on an OWNER screen the console pass
+   never touched. Without these it is accent text with no underline, no
+   box and no floor, sitting out of line with the three read-only rows
+   above it: colour alone carrying "this one you can press", which is the
+   exact defect the second rule was written to end.
+
+   Re-scoped to the row that actually holds a link rather than to every
+   row in a card that holds one. On the old Account card most rows were
+   links and levelling all twelve was right; here one row in four is,
+   and giving the other three a 51px floor would inflate a card for
+   nothing. */
+.admin-facts .fact-row:has(.row-link) {
+  align-items: center;
+  min-height: calc(34px + var(--space-2) * 2 + 1px);
+}
+/* Accent alone would leave "which of these can I press" carried by hue
+   -- .page-head .row-link already wears an underline for exactly that
+   reason. The box comes with it: the ink is a 13px phrase and the row
+   has to be pressable on the tablet this console was reported from. */
+.admin-facts .fact-row .row-link {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 
 @media (max-width: 900px) {
   .admin-bar { padding: var(--space-3) 16px; flex-wrap: wrap; }
@@ -559,7 +1049,7 @@ a:hover { color: var(--color-accent); }
   font-size: 13px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
 }
 .transcript ol {
   list-style: none;
@@ -584,6 +1074,15 @@ a:hover { color: var(--color-accent); }
 }
 .transcript .line button:hover {
   background: color-mix(in srgb, var(--color-text) 5%, transparent);
+}
+/* A transcript with no recording behind it: the words are still worth
+   reading, but there is nothing to jump to, so the line stops offering.
+   Same ink and same layout -- only the invitation is withdrawn. */
+.transcript .line button:disabled {
+  cursor: default;
+}
+.transcript .line button:disabled:hover {
+  background: transparent;
 }
 /* The line being spoken right now, so the eye can follow the audio. */
 .transcript .line.is-current button {
@@ -634,4 +1133,1894 @@ a:hover { color: var(--color-accent); }
   align-items: center;
   gap: var(--space-3);
   font-size: 13px;
+}
+
+/* ── the orders board ──────────────────────────────────────────────────
+   design/Dialtone.html's Orders screen, which was drawn and never built.
+   In the mockup every one of these rules is an inline style on a
+   .card.blueprint; the classes below are those declarations, moved to
+   the one file this product's styling extends and re-cut onto tokens.
+
+   NOTHING HERE IS A NEW LOOK. The frame is .card.blueprint with
+   <Corners />, the muted ink is .text-muted, the figures are .num, and
+   the late mark is .tag.tag-out -- which already carries exactly the
+   inversion the mockup's late timer draws by hand
+   (background: --color-accent-900, colour: --color-bg).
+
+   WHY THESE CLASSES EXIST AT ALL, given the four in the sentence above.
+   What is left after the reuse is layout: a three-column board, a
+   column heading with its count, and the three rows inside one ticket.
+   Every one of those has a same-shaped class already in this file --
+   .menu-grid is this grid, .soldout-row is this line, .hours-row is
+   this heading -- and all of them are named for another screen.
+   Borrowing one is not a saving, it is the rot components/admin/
+   OrdersTab.tsx was written to undo: the operator's ten orders used to
+   render as .soldout-list / .soldout-row, the sold-out list's furniture
+   worn by orders because it happened to be the right shape, and
+   nobody reading either screen's markup could tell what it was looking
+   at. Same shape, different subject, own name. */
+
+/* Three columns at desktop, as drawn. The mockup hard-codes
+   `repeat(3, 1fr)`, which at 375px gives three 100px columns and a
+   ticket nobody can read; auto-fit over a floor lets them stack the way
+   every other grid in this file already does (.menu-grid, .stat-grid),
+   and with three children auto-fit can never make a fourth. */
+.orders-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(264px, 100%), 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+.orders-col { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.orders-col-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-divider);
+}
+/* The heading sets its own bottom margin (industry.css), which would
+   double the rule's air. */
+.orders-col-head h4 { margin: 0; }
+.orders-col-count { font-size: 12px; }
+.orders-col-empty { font-size: 13px; margin: 0; }
+
+/* One ticket. .card's own gap is var(--space-2) and that is the rhythm
+   the mockup's card has; only the padding grows, because a ticket is
+   read at arm's length across a pass. */
+.order-card { padding: var(--space-4); }
+.order-head { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
+.order-number {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 17px;
+}
+.order-type { font-size: 12px; }
+/* Pushed to the far end of the head, as in the mockup. 12px in both
+   states: worn as a .tag it would otherwise shrink to the chip's 11px
+   the moment an order went late, and a mark that appears BECAUSE
+   something is wrong must not also get smaller. */
+.order-elapsed { margin-left: auto; font-size: 12px; }
+.order-who { font-size: 13px; }
+
+.order-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.order-line { display: flex; align-items: baseline; gap: var(--space-2); font-size: 13px; }
+.order-qty { flex: none; }
+.order-item { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.order-price { flex: none; }
+
+/* THE NOTE, AND WHY IT IS NOT MUTED. Everything else on this card is a
+   fact a cook can check against the plate; the note is the one thing
+   that is invisible once the food is made, and the only marked
+   difference between the right plate and the wrong one. So it takes the
+   accent rule .edit-note uses for "read this", and it does not take
+   .text-muted -- greying the single line that changes the dish is
+   exactly the wrong place to save ink. */
+.order-note {
+  border-left: 2px solid var(--color-accent);
+  padding-left: var(--space-2);
+  font-size: 12px;
+}
+
+.order-total {
+  display: flex;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-divider);
+  font-size: 13px;
+}
+.order-total .label { flex: 1; }
+
+/* When it was placed, when it was promised, and where it is going. The
+   mockup's card has none of these three; a kitchen cannot work without
+   the second. */
+.order-when { display: flex; flex-direction: column; gap: var(--space-1); font-size: 12px; }
+
+/* The presses on a ticket, and what the card says when one is refused.
+   The mockup's single button is .btn.btn-secondary.btn-block; there are
+   two here -- a way on and a way back -- and .btn-block's own
+   `margin-top: var(--space-2)` on each of them, on top of .card's gap,
+   would set the pair further apart than either is from the ticket. So
+   the stack carries the width instead (a flex column stretches its
+   children) and holds them one --space-1 apart, which reads as one
+   control with a quieter second half rather than as two.
+
+   --space-1 IS THE MOUSE RENDERING ONLY. Two adjacent controls 3.4px
+   apart is exactly what the coarse-pointer block at the end of this file
+   forbids, and this is the screen that block was measured for -- so
+   .order-moves is on its gap list and opens to --touch-gap on a tablet.
+   The reasoning is there, beside the rule, with the rest of them.
+
+   The refusal underneath is .auth-error, not a class of its own: it is
+   the sentence-shown-when-something-was-refused this product already
+   has, and CallNotes already renders it inside a .card.blueprint on the
+   page's own paper, where --color-danger-800 measures 9.37:1. The same
+   class carries the board-level sentence <OrderMovesRegion> draws when
+   the refused ticket has no card left to draw it, which lands as a child
+   of .page and so takes .page's own 22px gap rather than a margin of its
+   own. */
+.order-moves { display: flex; flex-direction: column; gap: var(--space-1); }
+
+/* ── operator: create a new restaurant ─────────────────────────────── */
+
+/* These were the /onboarding wizard's classes. That wizard is gone --
+   restaurants are created by the operator now (app/admin/new) -- but the
+   form furniture it grew is exactly what the operator form needs, so it
+   was renamed rather than rewritten. components/MenuEditor.tsx uses
+   .setup-row and .setup-error too. */
+
+.setup-stack {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.setup-card { padding: var(--space-6); gap: var(--space-3); background: var(--color-bg); }
+.setup-card h2 { margin: 0; }
+.setup-card .sub { font-size: 13px; margin: 0 0 var(--space-2); }
+
+/* A card's own headline state, under its <h2> and above its fields: the
+   go-live panel's "Answering calls" / "Not live" / "Kill switch on" with
+   a .status-dot in front of it and the sentence naming the number after.
+   An ELEMENT rule and not a class, because that is all it ever was --
+   .golive-state hand-set var(--font-heading), the heading weight and
+   25px, which are the three things <h3> already is. What is left is the
+   two facts industry.css cannot know: that a dot, a word and a sentence
+   want to sit on one line, and that they should wrap rather than
+   overflow a 300px phone.
+
+   `> h3` and not `h3`, so a heading deeper in a panel -- a menu
+   category's name, a sub-card's title -- is untouched. */
+.setup-card > h3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+}
+/* The sentence after the state word. A heading sets family AND weight,
+   so both have to be undone or this renders as small compressed heading
+   text -- the same fix, and the same reason, as .edit-flag's.
+
+   margin: 0 is load-bearing and not tidy-up. `.setup-card .sub` gives
+   every .sub a var(--space-2) bottom margin, which an inline span would
+   ignore -- but this one is a child of a flex container, so it is
+   blockified into a flex item and the margin becomes real, lifting the
+   sentence 6.8px off the state word it belongs beside. */
+.setup-card > h3 .sub {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 13px;
+  margin: 0;
+}
+/* A note in a card rather than a caption under a control: the Vapi
+   warning, the ownership warning, the sentence a run came back with.
+   .card-body is the system's class for prose inside a .card and is worn
+   unchanged; the measure is the one thing it has no opinion on, and 70ch
+   is the figure .golive-note and .edit-note already use. `flex: none`
+   undoes .card-body's own `flex: 1`, which is right for a card in a grid
+   of equal-height cards and wrong for the third paragraph of a panel. */
+.setup-card > .card-body { max-width: 70ch; flex: none; }
+/* A card's own facts, in the system's own 11px meta row: the go-live
+   panel's Our number / Falls back to / Forwarding. .card-meta is a
+   single-line flex row in the mockup, where it carries two short counts;
+   three facts with a phone number in each measure past a 343px phone,
+   and a row past the edge is a page that scrolls sideways. Wrapped, it
+   is two lines and nothing is off the screen. The same one declaration,
+   for the same reason, as .menu-edit-cat .card-meta above. */
+.setup-card > .card-meta { flex-wrap: wrap; }
+/* The system's own rule, used as the fence between a card's reading and
+   its controls -- which is what .golive-actions' hand-drawn border-top
+   was. .hr carries var(--space-4) of margin for a rule between
+   paragraphs in the flow; inside a flex column that margin does NOT
+   collapse and is paid on top of the card's own var(--space-3) gap, so
+   three fences would add about 70px of nothing to a panel whose whole
+   brief was that the page was too tall. The card's gap already spaces
+   its children; the rule only has to draw the line. */
+.setup-card > .hr { margin: 0; }
+
+.setup-form { display: flex; flex-direction: column; gap: var(--space-3); }
+/* A field and the buttons that act on it, bottom-aligned.
+   flex-end, not center: a 36px button beside a 58px label-plus-input
+   stack has to sit on the input's line, not float halfway up it.
+
+   IT WRAPS, and that is what let .golive-actions be deleted. That class
+   was this rule plus `flex-wrap: wrap` plus a basis on its fields --
+   .setup-row's own toolbars had simply never been long enough to need
+   either. The go-live panel's are: a field, Save, Repair assistant…, a
+   number picker, Attach and Get a new number… on one line. So the wrap
+   and the basis come here, where every consumer gets them, and the
+   duplicate goes.
+
+   1 1 220px, not 1 1 0: with a zero basis nothing ever forces a second
+   line, so six controls in a 760px column shrink the two fields to about
+   105px each instead of wrapping. min-width: 0 stays, and it is doing
+   the other half of the job -- without it the number <select>, whose
+   longest option names two restaurants and a reason, refuses to shrink
+   below its own content and pushes the row sideways. */
+.setup-row { display: flex; gap: var(--space-3); align-items: flex-end; flex-wrap: wrap; }
+.setup-row > .field { flex: 1 1 220px; min-width: 0; }
+.setup-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-divider);
+}
+/* THE SECOND CONSUMER OF --color-danger, AND THE ONE THE DANGER PASS
+   LEFT ON THE TABLE.
+
+   .btn-danger took the new ramp and every other accent-900 refusal in
+   the product was deliberately left alone, on the argument that a
+   functional colour earns its meaning by scarcity. That argument holds
+   for .tag-out (see it) and for .kill-banner, .num-warn, .auth-why,
+   .review-consequence-hard and .edit-note.is-drift, which are all
+   states rather than faults -- and it does not hold here, for two
+   reasons that only became visible once both passes were on the tree
+   together.
+
+   ONE: THE NEW FALLBACK-NUMBER ERROR WEARS THIS CLASS. GoLive.tsx now
+   renders <p class="setup-error" id="golive-fallback-error"> and points
+   the field at it with aria-describedby -- inline validation, written
+   on the assumption that .setup-error looks like an error. On
+   --color-accent-900 it did not: that ink is 1.18:1 from --color-text,
+   which is to say it is body copy with a blue cast. A refusal a sighted
+   reader cannot pick out of the paragraph it interrupts is the same
+   defect as the kill switch that looked like Cancel, one screen along.
+
+   TWO: THESE TWO CLASSES ARE NOT STATES. Every one of the ~25 call
+   sites renders only when something has been REFUSED -- a save that
+   would not normalise, a sign-in that failed, a menu row the assistant
+   will not read out. They are already scarce by construction: nothing
+   in this product paints a .setup-error until something has gone wrong,
+   so the ramp is not inflated by taking them, and the alternative is a
+   product with a destructive colour that error messages do not use.
+
+   -800 AND NOT -700, which is what --color-accent-900 was doing here
+   correctly: a refusal is read, and it should sit at the weight of the
+   copy around it rather than under it. As ink, -800 measures 9.37:1 on
+   --color-bg, which is the ground every one of the call sites has
+   (.card and .dialog are transparent in the blueprint system, so a
+   .setup-error inside a card is on the page's own paper), 8.64:1 on
+   --color-surface and 9.62:1 on --color-accent-100 -- against the 4.5:1
+   AA asks of 13px text. And 1.58:1 from --color-text, so it is told
+   apart from the sentence beside it by more than hue, where
+   --color-accent-900 was 1.18:1. (-700 would be 6.19:1 and legible too;
+   it is the fill on .btn-danger, and ink that matched the button's fill
+   would read as a disabled button.)
+
+   ONE GROUND IT MUST NOT MOVE ONTO -- AND IT NO LONGER EXISTS. This
+   read: the #8f8f90 a transparent .dialog composites to over
+   .dialog-backdrop, where -800 is 3.23:1, so a refusal put INSIDE a
+   confirm would need the opaque background .review-dialog and
+   .handover-dialog set for themselves. That caveat is retired: `.dialog
+   { background: var(--color-bg) }` near .btn-danger above now states it
+   once for every dialog in the product, so -800 is 9.37:1 wherever a
+   .setup-error lands, inside a confirm or beside one. (The survey stands
+   as a record: all twenty-five call sites are a sibling of the confirm
+   rather than a child of it, and --color-accent-900 measured 4.35:1 on
+   that old ground, itself a miss.) */
+.setup-error { font-size: 13px; margin: 0; color: var(--color-danger-800); }
+.setup-note { font-size: 12px; margin: 4px 0 0; }
+
+/* A caption for a group of controls that has no single control to point
+   at (a radio set, a read-only value). Matches .field > label exactly,
+   without claiming to be a label for something it does not label. */
+.field > .field-label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 5px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+
+.hours-grid { display: flex; flex-direction: column; }
+.hours-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+  flex-wrap: wrap;
+}
+.hours-day { width: 92px; flex: none; font-size: 13px; }
+.hours-times { display: flex; align-items: center; gap: var(--space-2); flex: 1; flex-wrap: wrap; }
+.hours-times .input { max-width: 130px; }
+.hours-closed { display: flex; align-items: center; gap: 6px; font-size: 12px; flex: none; }
+
+.tax-preview { font-size: 12px; margin: 4px 0 0; }
+
+.money-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.money-grid .field.span-2 { grid-column: 1 / -1; }
+
+.menu-category { padding: var(--space-3); gap: var(--space-2); }
+.menu-category-head { display: flex; align-items: flex-end; gap: var(--space-2); }
+.menu-category-head .field { flex: 1; }
+/* REVIVED, NOT INVENTED, AND IT NO LONGER BELONGS TO THIS SCREEN. This
+   block described /admin/new's item list and has had no consumer since
+   that form grew .add-item-form. It is now the row inside a
+   .menu-item-list in the editor's category cards -- see the menu editor
+   block below -- which is the shape it already was: a flex row, a fluid
+   name, a tabular price, a hairline under it. What is added here is
+   only what a 300px-wide card asks of that shape.
+
+   Its neighbours above (.menu-category, .menu-category-head) are still
+   NewRestaurantForm.tsx's and are untouched. */
+.menu-item-row {
+  display: flex;
+  /* Was center. The name cell is two or three lines now -- the name,
+     then the description, then the staff note -- and a price centred
+     against a three-line neighbour floats in the middle of it. */
+  align-items: flex-start;
+  /* At 375px the price, the <select> and the two buttons cannot share a
+     line with the name. They take the next one instead; nothing is ever
+     past an edge and the card never widens the page. */
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+  font-size: 13px;
+}
+/* The name takes the line and gives it back: a basis rather than a bare
+   flex:1, so on a wide card the price and controls keep the right-hand
+   third, and a min-width that stops a long dish name shrinking the
+   column to one word per line. */
+.menu-item-row .name { flex: 1 1 60%; min-width: 140px; }
+.menu-item-row .price { flex: none; font-variant-numeric: tabular-nums; }
+/* The controls leave the row's right edge -- and on a wrapped row, the
+   right edge of whatever line they land on. */
+.menu-item-row .menu-edit-row-actions { margin-left: auto; }
+/* THE ROW CARRIES TWO SELECTS NOW -- what the phone is refusing, and
+   what it is praising -- and .input is width:100%: unbound, either one
+   takes the whole line and everything after it wraps off. Capped exactly
+   as .hours-times .input is, and for the same reason -- 130px and not the
+   160px this first shipped with, because 160 did not fit. Measured on the
+   reported iPad: the card's row is 328.6px, and at 160 the sold-out
+   select plus Edit and Remove came to 261.6px against the 230px the name
+   and the price leave them, so they wrapped on every row and the row
+   stood 116-160px tall against the ~44px a card grid is worth having.
+
+   At 130 the two selects are 268px with the gap between them: one line
+   of their own, under the name. The buttons are 101.6px and take the
+   line after it. The four cannot share a line at any cap that leaves
+   "Out until close" and "Chef's special" readable in the closed box --
+   which is what the sold-out select's chosen option is FOR, since it is
+   one of the three marks that say a dish is off. */
+.menu-item-row .input { max-width: 130px; }
+/* And what does share a line stays put. A wrapped actions block puts
+   Remove -- which destroys a dish with no undo -- on the second line for
+   a dish with a description and beside Edit for one without, so the
+   destructive button moves depending on what the row happens to say.
+   .menu-item-row already wraps as a whole, so the controls still take
+   their own line on a phone; what they may not do is come apart from
+   each other.
+
+   Which is why the two selects sit OUTSIDE this block, as children of
+   the row: inside it, nowrap would hold 369.6px of controls on one line
+   in a 328.6px row and hang them past the card's edge -- the one thing a
+   card grid may never do. Out there the row's own flex-wrap breaks the
+   line between the selects and the buttons, and the pair that must not
+   come apart never does. */
+.menu-item-row .menu-edit-row-actions { flex-wrap: nowrap; }
+/* And the two buttons beside that select are given its height, so the
+   three controls of a row are one bar rather than a 36px box with two
+   32px ones leaning on it. The same 36px, for the same reason, that
+   .holiday-row's Remove and .edit-note's button already take: this is
+   the densest thing on the page, Remove destroys a dish with no undo,
+   it sits four pixels from the Edit an operator is aiming at while a
+   restaurant owner talks, and on the tablet this was reported from
+   there is no hover to warn them first. */
+.menu-item-row .btn { min-height: 36px; }
+/* The description and the staff note are their own line under the name,
+   never a fragment squeezed between the name and the price. Made an
+   atomic inline box on purpose as well as a full-width one: a
+   line-through set on a struck-out name propagates into in-flow block
+   descendants, and the sentence under the name is not what is off. */
+.menu-item-row .menu-edit-desc {
+  display: inline-block;
+  width: 100%;
+  flex-basis: 100%;
+}
+/* Not offered, said three ways and never by colour alone: the words on
+   a .tag-out chip beside the name, the sentence selected in the row's
+   own <select>, and the name struck through and dimmed -- the identical
+   treatment .lv-name .name.out gives it on the manager screen, so the
+   two screens say "off" the same way.
+
+   Dimmed with a colour where .lv-name uses opacity, because there the
+   .name is nothing but the name and here it also carries the chip:
+   opacity dims a subtree and nothing inside can undo it, so the chip --
+   the half of this that survives being printed, read aloud, or read by
+   somebody who cannot separate the two blues -- would lose its contrast
+   with it.
+
+   70% AND NOT 45%. The 45 was carried over from .lv-name .name.out,
+   which is 15px on a different screen; at this row's 13px it composited
+   to rgb(146,147,148) on the card, i.e. 2.75:1 -- under the 4.5:1 WCAG
+   1.4.3 asks of body text, and DIMMER THAN .text-muted's own 55%, so the
+   dish's name was the least readable thing on the page. 70% composites
+   to about 5.6:1 and still reads as plainly stood-down beside an
+   undimmed neighbour, which is all the dimming has to do: the chip and
+   the line-through are the other two marks and they carry it. */
+.menu-item-row.is-out .name {
+  text-decoration: line-through;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+
+/* The pick control had a class of its own here: a label wrapped round a
+   checkbox, so a coarse pointer had something bigger than the 13px of
+   browser chrome a checkbox is to hit. The checkbox is gone -- there are
+   two kinds of pick now, so it is a <select> like the sold-out control
+   beside it, wearing .input like every other field on the row -- and the
+   control itself has since moved out of the item edit form and onto the
+   collapsed row, beside sold-out, where it needs nothing this file does
+   not already give the select next to it. The class went with the
+   checkbox rather than staying as dead CSS naming a control that no
+   longer exists: `.input, select` in the coarse-pointer block below
+   already gives a select the same target. */
+.add-item-form { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: flex-end; margin-top: var(--space-2); }
+/* Put away, not thrown away. The category card discloses this form and
+   Cancel hides it; unmounting it would take the typed name, price and
+   description with it, from a button 6.8px from the one that adds the
+   dish. Same mechanism, and the same reason, as .setup-stack[hidden]
+   further down: `[hidden] { display: none }` is the user agent's rule at
+   specificity 0,0,1 and `.add-item-form { display: flex }` is 0,1,0, so
+   the attribute alone does nothing. */
+.add-item-form[hidden] { display: none; }
+.add-item-form .field { flex: 1; min-width: 130px; }
+.price-preview { font-size: 12px; flex: none; align-self: center; min-width: 160px; }
+
+/* ── the one-time credential handover ──────────────────────────────── */
+
+.cred-warn {
+  border: 1px solid var(--color-accent-900);
+  background: color-mix(in srgb, var(--color-accent-900) 8%, transparent);
+  padding: var(--space-3);
+  font-size: 13px;
+}
+.cred-warn strong { font-family: var(--font-heading); letter-spacing: 0.02em; }
+.cred-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+@media (max-width: 700px) {
+  .money-grid { grid-template-columns: 1fr; }
+  .setup-row { flex-direction: column; align-items: stretch; }
+}
+
+/* ── menu editor ──────────────────────────────────────────────────────
+   TWO CONSUMERS, AND THEY HAVE DIVERGED. Change nothing in this block
+   without opening both:
+
+     components/MenuEditor.tsx        the owner's screen, /dashboard/menu.
+                                      Writes optimistically through
+                                      MenuStore -> supabaseBrowser(), i.e.
+                                      the signed-in user's RLS session.
+     components/admin/MenuAdmin.tsx   the operator's screen,
+                                      /admin/[locationId]/edit#menu. Writes
+                                      through the gated server actions in
+                                      lib/admin/edit.ts, because the
+                                      operator is deliberately not a member
+                                      of the restaurant's organization and
+                                      every RLS-session write would be
+                                      rejected.
+
+   The fork was the transport. The furniture below is shared verbatim --
+   .menu-edit-cat, -cat-head, -cat-controls, -row-edit, -row-actions,
+   -desc, .price-compare, .add-item-form -- and the two have already
+   drifted where the transport did not require it:
+
+     * reordering. MenuEditor renders four .btn.btn-ghost.btn-icon up/down
+       controls; MenuAdmin has no .btn-icon at all and edits sort_order as
+       a number. So .btn-icon has one consumer here, not two.
+     * the frame. MenuAdmin's category card also wears .blueprint and the
+       registration marks, because it sits in /edit's .setup-stack among
+       eight other blueprint sections; MenuEditor's is the only card on
+       its page and does not.
+     * the pick control's width. Both screens now carry it -- one control
+       per dish, on the row, beside what the phone is refusing -- but
+       MenuAdmin's row is a flex line that sizes a <select> to its
+       content, while MenuEditor's is a table cell, and .input is
+       width:100%. Left alone, auto table layout hands that column a
+       third of the row and takes it off the dish's own name. So one
+       owner-scoped bound below, and nothing on the operator's side.
+
+   If this block is ever reworked, the cheaper fix is the one the design
+   called for and this did not take: an injectable write transport on
+   MenuProvider, so /admin renders MenuEditor itself. */
+
+.menu-edit { display: flex; flex-direction: column; gap: var(--space-6); }
+.menu-edit .page-head .actions { margin-left: auto; }
+.menu-edit-add { max-width: 420px; }
+/* The pick, in the owner's item table only -- MenuAdmin has no .table.
+   .input is width:100%, which is right for a field standing in a .field
+   column and wrong for a <select> in a table cell, in BOTH directions:
+   at 1280px auto table layout handed this column a third of the row and
+   took it off the dish's own name, and at 375px the same declaration
+   collapsed the control to a 37px stub, because a percentage width
+   contributes nothing to a column's min-content size. Measured, not
+   guessed.
+
+   width:auto is a select's own answer to both. It sizes to its longest
+   option ("Chef's special"), identically on every row since every row
+   offers the same three, so the column can neither run away nor be
+   crushed, and no width is written down here to go stale when the
+   wording changes. The table stays inside .table-scroll, which is what
+   takes the overflow on a phone -- at 375px the fifth column takes the
+   table from 314px to 408px and that wrapper scrolls, while the page
+   itself still does not; the 44px touch floor is the coarse-pointer
+   rule's, untouched.
+
+   `td >` AND NOT A DESCENDANT. The row's own edit form opens inside a
+   <td> of this same table and carries a Category <select class="input">
+   of its own, in a .field beside three text boxes -- that one is a
+   field in a form column and MUST keep .input's width:100%, or its
+   label renders wider than the control it labels. The pick is the only
+   select that is a table cell's own child. */
+.menu-edit .table td > select.input { width: auto; }
+
+/* The categories side by side rather than end to end (/edit only --
+   MenuEditor.tsx does not wear this). The operator's words were "can you
+   do it as a card... the section wise, if something is, like, burgers,
+   just put the whole burger section in, so that the user gonna know
+   which one that they have and which they don't have", which is a
+   glance at what sections exist and what is in each. A single column of
+   full-width cards cannot give it: twelve categories is six screens
+   before the last heading has been seen at all.
+
+   auto-fill, not auto-fit: with auto-fit a restaurant with one category
+   gets one card stretched across the full 760px, which is the stacked
+   layout this replaces with a grid drawn round it.
+
+   min(300px, 100%), not a bare 300px: a track minimum wider than the
+   column is a track wider than the column, and at 320px that is a page
+   that scrolls sideways -- the one thing a card grid may never do. So
+   two columns of ~370px in .setup-stack's 760px, one column on a phone,
+   and no edge past the screen at any width between.
+
+   align-items: start, so a three-item card does not stretch itself to
+   the height of a thirty-item neighbour. */
+.menu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+  gap: var(--space-6);
+  align-items: start;
+}
+
+.menu-edit-cat { padding: var(--space-4); gap: var(--space-3); background: var(--color-bg); }
+.menu-edit-cat-head { display: flex; align-items: center; gap: var(--space-3); min-height: 36px; }
+.menu-edit-cat-head h3 { margin: 0; flex: 1; }
+.menu-edit-cat-controls { display: flex; gap: 4px; flex-wrap: wrap; }
+/* The card's own answer to "which ones do I have and which do I not":
+   how many items, and -- only when it is not zero -- how many of them
+   the phone is currently refusing, worded exactly as the chip on the
+   row is ("2 not offered" / "Not offered") so the summary and the rows
+   are visibly the same fact. .card-meta is the house's row for a card's
+   counts and is worn unchanged; the one thing it has to do here that it
+   never had to do on a full-width card is wrap, because two chips and a
+   sort order do not fit one line of a 300px card. */
+.menu-edit-cat .card-meta { flex-wrap: wrap; }
+
+/* The items of one category. A five-column .table cannot survive a
+   342px card, so the rows are a list -- .menu-item-row above is the row
+   and this is only the column they stack in. Its own container with no
+   gap, because .menu-edit-cat is a flex column that spaces its children
+   and hairline-separated rows have to butt together. Named for the
+   menu: .hours-grid is the identical two lines and is named for hours,
+   which is not something to borrow. */
+.menu-item-list { display: flex; flex-direction: column; }
+
+.menu-edit-row-edit {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: flex-end;
+  padding: var(--space-2) 0;
+}
+.menu-edit-row-edit .field { flex: 1; min-width: 140px; }
+.menu-edit-row-actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+.menu-edit-desc { font-size: 12px; margin-top: 2px; }
+
+/* The dangerous edit -- current and next price shown side by side before
+   either one is written. */
+.price-compare {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 20px;
+  margin: 0 0 var(--space-2);
+}
+.price-compare .was { text-decoration: line-through; opacity: 0.55; font-size: 16px; }
+.price-compare .arrow { opacity: 0.5; font-size: 15px; }
+.price-compare .now {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  color: var(--color-accent-800);
+}
+
+.secret-box {
+  font-family: monospace;
+  font-size: 15px;
+  padding: var(--space-3);
+  background: var(--color-neutral-100);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  word-break: break-all;
+  user-select: all;
+  margin-bottom: var(--space-2);
+}
+.missing-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; margin: 0; padding-left: 18px; }
+
+/* ── menu uploads (/dashboard/menu, /admin/new) ───────────────────── */
+
+.menu-upload .upload-picker { max-width: 460px; }
+.menu-upload .upload-picker .input { padding: var(--space-2); }
+
+.upload-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-divider);
+}
+.upload-name { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.upload-name .name { word-break: break-word; }
+.upload-meta { font-size: 12px; }
+.upload-why { font-size: 12px; }
+.upload-link { font-size: 12px; color: var(--color-accent-800); word-break: break-word; }
+.upload-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+
+@media (max-width: 700px) {
+  .upload-row { flex-wrap: wrap; }
+  .upload-actions { width: 100%; }
+}
+
+/* The one action on an uploaded menu: hand it to the reader. Secondary
+   rather than primary -- typing the menu in is still the certain path,
+   and this button spends the restaurant's money. */
+.upload-read {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+.upload-read .setup-note { flex: 1; min-width: 240px; margin: 0; }
+
+/* ── the human gate (/dashboard/menu/imports/[batchId]) ───────────── */
+
+/* The screen between what a model read off a photograph and a price read
+   aloud to a caller. Two columns: the list to work through, and the
+   picture it has to be checked against, which stays put while the list
+   scrolls. */
+
+.review { display: flex; flex-direction: column; gap: var(--space-4); }
+.review .page-head .actions { margin-left: auto; }
+.review-lede { max-width: 70ch; margin: 0; }
+.review-note { font-size: 13px; margin: 0; max-width: 70ch; }
+
+/* The running count. Sticky, because it is the answer to "am I done?"
+   and the list is long enough to lose it off the top. */
+.review-tally {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg);
+  box-shadow: var(--shadow-sm);
+}
+.review-tally-count { display: flex; align-items: baseline; gap: var(--space-2); }
+.review-tally-number {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 30px;
+  line-height: 1;
+  color: var(--color-accent-800);
+}
+.review-tally-label { font-size: 13px; }
+.review-tally-tags { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.review-tally-go {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.review-tally-go .setup-note { margin: 0; max-width: 34ch; text-align: right; }
+
+.review-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
+  gap: var(--space-4);
+  align-items: start;
+}
+.review-list { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+
+.review-source { position: sticky; top: 96px; }
+.review-source-card { padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+.review-source-card h3 { margin: 0; }
+.review-source-card .setup-note { margin: 0; }
+.review-files { flex-wrap: wrap; }
+.review-image {
+  width: 100%;
+  max-height: 62vh;
+  min-height: 240px;
+  border: 1px solid var(--color-divider);
+  background: var(--color-neutral-100);
+}
+img.review-image { height: auto; object-fit: contain; }
+/* An iframe has no intrinsic height to grow into -- left on `auto` a PDF
+   collapses to the 240px floor, which is a menu nobody can read. */
+iframe.review-image { height: 62vh; }
+
+.review-section { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); background: var(--color-bg); }
+.review-section-head { display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap; }
+.review-section-head .field { flex: 1; min-width: 180px; }
+.review-section-count { font-size: 12px; padding-bottom: 8px; }
+.review-add { align-self: flex-start; }
+
+/* One item. The left edge carries the state, so a long list can be
+   scanned for what still needs a person without reading a word. */
+.review-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  border-left-width: 3px;
+}
+.review-item.is-open { border-left-color: var(--color-neutral-400); }
+.review-item.is-flagged { border-left-color: var(--color-accent-800); }
+.review-item.is-confirmed {
+  border-left-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+.review-item-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.review-item-name {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 17px;
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.review-item-price { font-size: 15px; }
+
+.review-flags {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--color-accent-900);
+}
+
+.review-fields { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-start; }
+.review-fields .field { min-width: 0; }
+.review-field-name { flex: 2 1 200px; }
+.review-field-price { flex: 1 1 130px; }
+.review-field-desc { flex: 3 1 260px; }
+.review-field-ing { flex: 3 1 260px; }
+.review-fields .price-preview { min-width: 0; display: block; margin-top: 4px; }
+.review-ing-note { font-size: 11px; }
+
+.review-said { font-size: 12px; margin: 0; max-width: 70ch; }
+.review-item-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+.review-item-actions .btn-primary { margin-left: auto; }
+
+.review-removed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.review-removed li { display: flex; align-items: center; gap: var(--space-2); }
+
+/* The last click. Wider than a plain confirm dialog because the choice it
+   asks for -- keep the old menu or delete it -- needs its consequence
+   spelled out in full, not summarised. */
+/* The system's dialog is a transparent blueprint frame, which is right
+   for the two-line "change this price?" confirm in the menu editor and
+   unreadable behind a paragraph of consequences. Opaque here, from the
+   same token .setup-card and .menu-edit-cat already use for it. Wider
+   too, because the choice this asks for has to be spelled out rather
+   than summarised -- .dialog sets `width`, so `max-width` alone does
+   nothing.
+
+   (The background is belt-and-braces now: `.dialog { background:
+   var(--color-bg) }` near .btn-danger says it once for every dialog,
+   after the same ground failed Cancel and the body copy in the plain
+   confirms too. Kept here because it belongs to the width change beside
+   it, and because this dialog would want it even if that rule went.) */
+.review-dialog {
+  width: min(560px, 100%);
+  background: var(--color-bg);
+  box-shadow: var(--shadow-lg);
+}
+.review-dialog .dialog-body p { margin: 0 0 var(--space-3); }
+.review-modes { margin-bottom: var(--space-3); flex-wrap: wrap; }
+.review-consequence {
+  border-left: 3px solid var(--color-divider);
+  padding-left: var(--space-3);
+  font-size: 13px;
+}
+.review-consequence-hard { border-left-color: var(--color-accent-900); }
+
+.review-done { gap: var(--space-3); }
+.review-done p { margin: 0; max-width: 70ch; }
+
+@media (max-width: 1000px) {
+  .review-split { grid-template-columns: 1fr; }
+  .review-source { position: static; order: -1; }
+  .review-image { max-height: 44vh; }
+  iframe.review-image { height: 44vh; }
+}
+@media (max-width: 700px) {
+  .review-tally { position: static; }
+  .review-tally-go { margin-left: 0; }
+  .review-tally-go .setup-note { text-align: left; }
+  .review-item-actions .btn-primary { margin-left: 0; }
+}
+
+/* ── console navigation ────────────────────────────────────────────── */
+
+/* The operator bar's own nav. The system's .nav IS the nav here, worn
+   directly (components/admin/AdminNav.tsx renders `nav admin-nav`), so
+   `display/align-items/gap` and every rule on `.nav a` -- plain text at
+   rest, accent on hover and for the current page -- come from
+   industry.css and stay in step with it. What is left below is only what
+   the operator bar genuinely needs on top: .nav carries its own bar
+   padding, and this one lives INSIDE .admin-bar, which supplies it. */
+.admin-nav { padding: 0; flex-wrap: wrap; }
+.admin-nav-item {
+  display: inline-flex;
+  align-items: center;
+  /* The mockup's links are bare text; a bare 14px line is a mean target
+     in a bar whose other children are 36px buttons. The box grows, the
+     ink does not. */
+  min-height: 34px;
+  padding: 0 var(--space-1);
+}
+/* .nav a[aria-current='page'] already turns this accent. Accent alone
+   would make "which page am I on" a colour-only signal, so the condensed
+   face carries it too -- the same way .side-nav-item marks the current
+   tab in the owner sidebar. */
+.admin-nav-item[aria-current="page"] {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+}
+.admin-nav-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* The way back to /admin from inside the owner shell, for staff only.
+   Appears in .sidebar-head and on the "No restaurant yet" screen, whose
+   .page is a flex column -- without align-self it would stretch into a
+   full-width click target spanning the whole page. */
+.operator-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+  font-size: 13px;
+  color: var(--color-accent-700);
+  text-decoration: none;
+}
+.operator-back:hover,
+.operator-back:focus-visible { color: var(--color-accent); text-decoration: underline; }
+.operator-back:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.sidebar-head .operator-back { margin-top: var(--space-2); }
+
+/* A table row's primary name, made a real link. Colour is inherited on
+   purpose: the whole first column turning accent would read as a wall of
+   links, and the name still has to hold its own against the
+   .table tbody tr:hover wash. The underline on hover is the affordance --
+   it appears exactly where the eye already is. */
+.row-title-link {
+  display: inline-block;
+  padding: 2px 0;
+  color: inherit;
+  text-decoration: none;
+}
+.row-title-link:hover,
+.row-title-link:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.row-title-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* ── go live (operator: /admin/[locationId], the Line tab) ─────────────
+
+   ONE CLASS LEFT, AND ITS NAME IS AN ARGUMENT. This block used to hold
+   ten: .golive, -state, -list, -item (and four state modifiers), -body,
+   -link (and three of its own states), -title, -note, -actions (and five
+   descendant rules and three media rules), -run. About 160 lines of
+   frame, list, row, hairline, left border and toolbar, invented for one
+   panel, on a page whose own owner called the console "not at all
+   consistant".
+
+   Every one of them had a system class already doing the same job:
+
+     .golive        -> .card .blueprint .setup-card + <Corners/>. The one
+                       console panel with a private frame now wears the
+                       frame every other panel wears, and its <h4> became
+                       an <h2>, so the page stops mixing h1/h2/h4.
+     .golive-state  -> <h3>. It hand-set --font-heading, the heading
+                       weight and 25px, which is exactly what h3 is.
+     .golive-list,
+     -item, -body,
+     -title, -note  -> <table class="table">. A list of subjects each
+                       with a state and an instruction is a table, and
+                       the four blues on .golive-item's left border are
+                       the four tags /admin already spends on the same
+                       four states.
+     .golive-link   -> .btn.btn-secondary in its own cell -- a RESTING
+                       affordance, which is what the iPad report asked
+                       for and what colour-only accent text never was.
+     .golive-actions-> <hr class="hr"> + .setup-row, which is already
+                       "a field and the buttons that act on it,
+                       bottom-aligned". Same intent, spelled once.
+     .golive-run    -> .card + .card-kicker. .card is already
+                       flex-direction: column with a --space-2 gap, which
+                       is the whole of what .golive-run declared. */
+
+/* THE ONE THAT STAYS, and it is a measurement. The only .btn-primary on
+   this panel, and the only control in the product whose label changes
+   while it is pressed -- so it is given a floor wide enough for the
+   longest of them ("The fallback number…", measured in the button's own
+   Barlow Condensed). A button that resizes under the cursor as it steps
+   from one leg of the run to the next is a button an operator stops
+   trusting mid-run, and no system class can express "do not reflow while
+   working". */
+.golive-go { min-width: 22ch; }
+
+@media (max-width: 700px) {
+  /* At this width .setup-row is a stretched column and the button is
+     already full width, so the floor would only be able to make it
+     wider than the screen. */
+  .golive-go { min-width: 0; }
+}
+
+/* ── the handover ─────────────────────────────────────────────────── */
+
+/* The z-index this panel's three dialogs used to need in their own
+   name is one rule on .dialog-backdrop now -- see the end of this file.
+   It was written out four separate times, here and in three other
+   blocks, each patching the identical fact about a fixed backdrop with
+   positioned siblings. */
+
+/* Wider and taller than a confirm, for the same reason as
+   .review-dialog: this is read, not answered, and it is the one screen
+   in the product an operator reads down a phone to somebody else. Opaque
+   from the same token, because the system's dialog is a transparent
+   blueprint frame -- right behind a two-line confirm, unreadable behind
+   two tables. .dialog sets `width`, so `max-width` alone does nothing.
+
+   (Belt-and-braces now, for the reason written at .review-dialog: the
+   system's dialog is not transparent any more. "Right behind a two-line
+   confirm" turned out to be wrong about the two-line confirm as well --
+   its Cancel measured 1.79:1 on that ground.) */
+.handover-dialog {
+  width: min(560px, 100%);
+  /* .dialog-backdrop is a grid with an implicit, auto-sized row, so a
+     `max-height: 100%` here would resolve against this box's OWN content
+     and clamp nothing -- the dialog would simply grow past the bottom of
+     the screen with the Done button off it. Bound to the viewport the
+     backdrop already covers, less that backdrop's own padding:
+     --space-8 is exactly twice --space-4. */
+  max-height: calc(100dvh - var(--space-8));
+  background: var(--color-bg);
+  box-shadow: var(--shadow-lg);
+}
+.handover-dialog .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.handover-dialog .dialog-body p { margin: 0 0 var(--space-3); }
+.handover-dialog .card-kicker { margin-bottom: var(--space-2); }
+.handover-dialog .table { margin-bottom: var(--space-3); }
+.handover-dialog .missing-list { margin-bottom: var(--space-3); }
+
+/* The number, and the two ways of taking it away with you. One object:
+   the figure is useless without something to copy it into.
+
+   It is shown exactly as it is stored -- app/api/twilio/voice/route.ts
+   matches an inbound call on that string, and the mobile forwarding
+   codes below carry the country code with them -- so it is set large and
+   in figures rather than reformatted into something friendlier that
+   would paste wrong. The grouped, say-it-out-loud version sits under it
+   as prose, where nobody will copy it by accident. */
+.handover-number {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  margin-bottom: var(--space-3);
+}
+.handover-number .card-kicker { flex: 1 1 100%; margin: 0; }
+.handover-number .num {
+  flex: 1 1 auto;
+  /* Family AND weight, together, the way .stat-value and
+     .review-tally-number both pair them. app/layout.tsx
+     loads Barlow Condensed at 500/600/700 only, so a family set on its
+     own leaves this inheriting body's 400 -- which matches no loaded
+     face and renders the largest, most-read figure in the product
+     lighter than the dialog title six lines above it. */
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  user-select: all;
+}
+.handover-say {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+}
+.handover-say .num { flex: none; font-size: inherit; letter-spacing: normal; }
+
+@media (max-width: 700px) {
+  .handover-number .num { font-size: 22px; }
+}
+
+/* ── the record editor (/admin/[locationId]/edit) ──────────────────── */
+
+/* How far a save reaches. Every section of the editor answers the same
+   question -- is this on the phone now, is it on the phone only after a
+   rebuild, or is the phone still saying the old thing -- and it answers
+   it in a box shaped like .review-item: a hairline with 3px of state on
+   the left edge.
+
+   THE GO-LIVE PANEL NO LONGER WEARS THIS SHAPE. Its six checks were a
+   column of the same hairline-with-a-left-border rows and are a .table
+   of .tag chips now -- the same four the portfolio spends on the same
+   four states. This block is not a leftover of that: a check is a ROW in
+   a list of six and reads as a table, while an .edit-note is one
+   sentence about the card it sits inside and has nothing to be a table
+   of. Two shapes, two jobs. What they share is the rule the whole
+   console keeps: the state is a WORD, never a colour on its own.
+
+   Normal flow, not a flex row, although it carries a button. .btn and
+   .tag are already inline-flex, so they ride the sentence and wrap with
+   it; and the drift copy quotes the value the phone is still using in a
+   <span class="num"> in the MIDDLE of a sentence. In a flex container
+   every one of those becomes its own flex item and one sentence is
+   served as three gapped fragments. In flow it stays a sentence with a
+   button on the end of it.
+
+   Colour is the quietest of the three marks here and never the only
+   one: the note opens with a .tag whose words are the state ("Rebuilds
+   the agent", "Phone not updated") and the sentence after it says the
+   same thing in full. Words, not a glyph chip, since they survive being
+   read down a phone, printed, and colour-blindness alike. */
+.edit-note {
+  /* No margin of its own: everywhere it is a direct child of a section it
+     is a child of .setup-card or .setup-form, and both are flex columns
+     that space their children with gap. It only pays for its own air in
+     the one place there is none -- see .field > .edit-note below. */
+  margin: 0;
+  padding: var(--space-3);
+  max-width: 70ch;
+  border: 1px solid var(--color-divider);
+  border-left-width: 3px;
+  font-size: 13px;
+  /* A step darker than .text-muted: on a drifted field this is the
+     instruction, not a caption. */
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+
+/* Saved here, live on the next call -- nothing to rebuild. The settled
+   state, tinted the way .review-item.is-confirmed is, because it is the
+   same "this one is fine" in the same vocabulary. */
+.edit-note.is-live {
+  border-left-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+/* Saving this also rebuilds the assistant -- the blue the console
+   spends on "worth fixing", the step short of blocked. */
+.edit-note.is-sync { border-left-color: var(--color-accent-800); }
+/* The screen and the phone disagree right now, which is the one state on
+   this page that is actively wrong, so it takes the blue .setup-error
+   spends on a refusal. */
+.edit-note.is-drift { border-left-color: var(--color-accent-900); }
+
+/* Beside a field rather than under a lede: a .field is a plain block, so
+   the note lands hard against the .setup-note above it. Same step the
+   .setup-note itself takes off the input. */
+.field > .edit-note { margin-top: var(--space-2); }
+
+/* The tag leads the sentence; the space between them should not depend
+   on JSX having preserved a newline. */
+.edit-note > .tag { margin-right: var(--space-1); }
+/* "Update the phone" sits inside the sentence that says why it is there.
+   Given .input's 36px floor: .btn's own padding leaves it a few pixels
+   short of that, and this is a control an operator reaches for with an
+   owner on the line. */
+.edit-note .btn { margin-left: var(--space-2); min-height: 36px; }
+
+/* The word-mark itself, on a field label or a card heading: "Rebuilds
+   the agent", "Unsaved", "Phone not updated". Inside the <label> it is
+   read out with the field name, which is the whole point -- an operator
+   who arrived at one input from a deep link is told that saving it moves
+   the phone, without having read the note above.
+
+   Family and weight are re-stated because a heading sets both: worn
+   beside an <h2> a bare .tag inherits Barlow Condensed and renders as
+   small compressed heading text instead of matching the identical flag
+   on a label six lines below. Same fix, same reason, as
+   `.setup-card > h3 .sub`. Never wrapped: "Rebuilds the / agent" broken across two lines
+   reads as prose, and the mark works by being obviously a chip. */
+.edit-flag {
+  margin-left: var(--space-2);
+  vertical-align: middle;
+  white-space: nowrap;
+  font-family: var(--font-body);
+  font-weight: 400;
+}
+
+/* The save's own account -- "Saving…", then "Saved. Updating the
+   phone…", then what happened -- beside the button that started it.
+   It takes the rest of the row instead of sitting at the far end of
+   .setup-actions' space-between: read left to right it is that button's
+   own sentence, and pinned to the right edge a two-clause result sets
+   ragged against the page. A refusal is not muted and does not come
+   here; it stays on .setup-error under the row. */
+.edit-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+}
+
+/* A one-off closure. Worn WITH .hours-row -- <div class="hours-row
+   holiday-row"> -- because it is that row with a date on the front and a
+   remove on the end; the alignment, the wrapping, the hairline and the
+   .hours-times/.hours-closed furniture inside it all come from there and
+   stay in step with the weekly grid above it.
+
+   The date is fixed rather than fluid: a date input sizes to its own
+   mm/dd/yyyy placeholder plus the browser's picker button, and under
+   about 150px it clips one or the other. */
+.holiday-row input[type="date"] { flex: none; width: 160px; }
+/* Remove leaves the row's edge -- and on a wrapped row, the edge of
+   whatever line it lands on. Given the same 36px as the inputs it sits
+   beside: a row of these is the densest thing on the page and the one
+   control in it that destroys something should not be the smallest
+   target. */
+.holiday-row > .btn:last-child { margin-left: auto; min-height: 36px; }
+/* The closed toggle is a 12px label wrapped round a checkbox. The box
+   grows to the row's target height; the text does not. */
+.holiday-row .hours-closed { min-height: 36px; }
+
+/* ── the console's tab strip (/admin/[locationId]) ─────────────────────
+
+   THERE IS ONE STRIP NOW, AND THAT IS THE POINT OF THIS BLOCK.
+
+   There used to be two, and the next reader has to be told so or they
+   will wonder what was deleted. .edit-index was a <nav class="nav
+   edit-index"> of eight links across the top of /admin/<id> -- the way
+   IN to the editor's eight tabs, on a different route. .edit-tabs was
+   the segmented control on /edit itself. Same eight subjects, two
+   shapes, two classes, ninety lines of stylesheet, and an operator who
+   said the console was "not at all consistant" while looking straight at
+   both of them.
+
+   The console is one page. The tab strip IS the section index, so the
+   bar of links is gone -- the class, its kicker, its link, and its four
+   state rules with it -- and this is what is left. It is renamed from
+   .edit-tabs for the same reason the module behind it is renamed from
+   EditTabs: the strip covers nine subjects of which only seven are the
+   editor's, and a name that says "edit" over a tab reading "Line" is a
+   name that lies.
+
+   THE DELTA ON .seg, AND NOTHING ELSE. The strip is
+   <div class="seg console-tabs"> holding nine <label class="seg-opt">
+   radios, verbatim: the layout, the padding, the divider between
+   options, the checked and hover states and the focus ring all come
+   from industry.css and `:has(input:checked)` supplies the selection.
+   The radio group's shared `name` supplies the roving tabindex, so the
+   nine tabs are one tab stop; ConsoleTabs.tsx handles the arrow keys and
+   Home/End itself on top of that, and its comment says why. Two things
+   industry.css cannot get right for this strip -- the focus ring, and
+   what a WRAPPED .seg looks like -- are the two overrides below.
+
+   .seg is the right class rather than .nav because these are not
+   routes. One of nine, chosen in place, with the panel swapping under
+   it and nothing below it, is what a segmented control MEANS, and the
+   house already wears .seg for exactly that twice: .auth-seg swaps the
+   sign-in form under it, .filter-seg the calls log. This is the third
+   modifier on it, not a third vocabulary. */
+
+/* THE PAGE HEAD, OBEYING THE COLUMN THE PAGE IS. Measured at 1280px:
+   .page-head took the whole 1224px content box of .page while
+   .console-tabs, .console-tabs-head and every .setup-stack took 760 --
+   a 464px overhang, so the restaurant's name and the way out sat on a
+   rule of their own, wider than the strip that names the sections and
+   wider than any section under it, with the right of the screen empty
+   beneath them.
+
+   760 IS THE ONE THAT IS RIGHT AND THE HEAD IS THE OUTLIER. It is a
+   reading measure the whole route is already built on: .setup-stack's
+   own ceiling, the cap .console-tabs takes so the strip cannot disagree
+   with what it names, and the width .setup-card > .card-body's 70ch and
+   .menu-grid's two ~370px columns resolve inside. Widening the console
+   to fill 1280 would widen all of that AND leave ~466px of empty box
+   inside .seg, whose nine labels measure ~654px and whose options do not
+   grow -- a head that is too wide traded for a strip that is too wide.
+
+   Its own class rather than a declaration on .page-head, because
+   /admin's Accounts table and /dashboard's head are full-width on
+   purpose. It sits here rather than beside .page-head so the three
+   elements that share the measure share a block: change one number and
+   the other two are on screen. */
+.console-head { max-width: 760px; }
+
+.console-tabs-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* The panel column's ceiling. The strip and the sentence under it name
+     the panels, and a header wider than what it names reads as a
+     different page element. */
+  max-width: 760px;
+}
+.console-tabs {
+  /* .seg is inline-flex, i.e. shrink-to-fit, and the options would then
+     bunch at the left of a 760px column. It takes the column, and
+     .setup-stack's own ceiling with it, because a strip wider than the
+     panels it names would make the page look like it changes width on
+     every press. */
+  display: flex;
+  max-width: 760px;
+  /* It wraps, where the old sticky index could not. Nothing in it may
+     be past an edge: this is the control the operator presses to move,
+     not a shortcut past a scroll, and a tab discovered only by finding
+     that a bar scrolls sideways is the same defect as a heading 5346px
+     down. Measured in the house's 13px Barlow, the eight editor labels
+     and their padding came to about 630px; dropping "Recording" (-80px)
+     and adding "Line" (+49px) and "Calls" (+55px) puts the nine at about
+     654px -- still one row on the 712px an iPad leaves, three on a 375px
+     phone, and one more only while a chip is showing. A wrapped row
+     costs a row, and the panel below it is one section tall, so it is
+     not a tax on anything. */
+  flex-wrap: wrap;
+}
+/* AND IT DOES NOT STICK. It was `position: sticky; top: 0; z-index: 2`
+   over an opaque `background`, and all four went together: a bar pinned
+   to the top of the viewport can cover a control that has just taken
+   focus, and the browser will not scroll it clear -- it considers a
+   field inside the layout viewport already visible, so Shift+Tab
+   upwards through a panel lands on an .input sitting entirely
+   underneath the strip with no scroll of any kind. That is WCAG 2.2
+   2.4.11 Focus Not Obscured, at AA, on the ordinary keyboard path
+   through an eight-field card. Neither scroll-margin-top below nor
+   scroll-padding-top reaches it, because nothing scrolls. The
+   background went with the rest: a strip in the flow paints on the same
+   --color-bg the page already is, which is what .seg's own transparent
+   box expects.
+
+   Giving it up costs almost nothing: choosing a tab already returns the
+   panel to the top of the document (ConsoleTabs.tsx's choose()), which
+   is the one moment the strip is wanted, and it is the first thing on
+   the page when it gets there. */
+
+/* WHAT A WRAPPED .seg NEEDS AND industry.css DOES NOT HAVE. .seg is a
+   single-row control taken verbatim from the mockup: one rounded box,
+   `overflow: hidden`, and `.seg-opt + .seg-opt { border-left }` for the
+   divider. That selector is DOM adjacency, not row adjacency, so on a
+   wrapped strip the first option of every row below the first drew a
+   stray hairline one pixel inside the container's own left border -- a
+   doubled left edge -- and there was no rule at all between the rows,
+   which butted together with their vertical dividers out of line.
+
+   So the divider stops depending on which sibling comes first: every
+   option carries it on its own top and left edges, and a one-pixel
+   negative margin pulls those edges onto the neighbour they divide
+   from. At the start of a row and along the top of the strip that
+   neighbour is the container's own border, and .seg's `overflow:
+   hidden` clips to the padding box -- so exactly the hairlines that
+   would have doubled an edge are the ones that disappear, and the ones
+   between two options and between two rows are the ones that stay. */
+.console-tabs .seg-opt {
+  /* The same 34px box .admin-nav-item takes, for the same reason: the
+     ink is a 13px word and the device this was reported from is a
+     tablet. .seg-opt's own padding already lands within a pixel of it --
+     this is the floor, so the tabs stay level with each other whatever
+     they are wearing. */
+  min-height: 34px;
+  border-left: 1px solid var(--color-divider);
+  border-top: 1px solid var(--color-divider);
+  margin-left: -1px;
+  margin-top: -1px;
+}
+/* "Unsaved", "Replaced" and "Phone not updated" ride inside the label,
+   so the state is read out with the tab it belongs to. Never wrapped:
+   broken across two lines a chip stops reading as a chip and starts
+   reading as prose -- the same reason .edit-flag sets this. */
+.console-tabs .tag { white-space: nowrap; }
+
+/* The sentence under the strip -- which sections are unsaved and what
+   happens to them -- is a plain .setup-note now. It wore .edit-tabs-note
+   on top, whose entire content was `margin: 0` overriding .setup-note's
+   own 4px top margin; .console-tabs-head is a flex column with a
+   var(--space-2) gap, which already supplies that space, so the class
+   was a name for a declaration that was doing nothing. */
+
+/* One panel is on screen. The other eight are still rendered, still
+   hydrated and still holding every half-typed price in them -- they are
+   only hidden, which is the whole reason switching tabs is safe.
+
+   THIS LINE IS THE MECHANISM, NOT A GUARD -- delete it and all nine
+   sections paint at once, which is the exact defect the tabs were built
+   to end. `[hidden] { display: none }` is the user agent's own rule and
+   it is class-less, at specificity 0,0,1; `.setup-stack { display:
+   flex }` is 0,1,0 and outranks it. So ConsolePanel's `hidden` attribute
+   does nothing on its own. ConsoleTabs.tsx renders every panel as
+   <div class="setup-stack" hidden> and its comment says the same thing
+   from the other side: the element has to keep wearing .setup-stack for
+   this rule to bite. Neither half is tidyable without the other. */
+.setup-stack[hidden] { display: none; }
+
+/* The hash is still the contract -- #menu, #hours, #holidays,
+   #sold-out, #recording and #managed are pasted into tickets, and
+   /admin/<id>/edit#menu still arrives here through the redirect with its
+   fragment re-applied -- and a hash naming a section of the panel on
+   screen still scrolls to it. Air over the heading it lands on, and
+   nothing more: this used to be 68px of clearance for a sticky strip,
+   and the strip is not sticky any more, so a jump that stopped 68px
+   short of the top was 68px of nothing.
+
+   No scroll-behavior rule accompanies it any more. The 5275px slide the
+   old one existed to soften cannot happen now -- the longest jump on
+   this page is the length of one panel -- and nothing in this block
+   transitions or animates, so there is no motion left here for
+   prefers-reduced-motion to be asked about. */
+.setup-stack > section[id] { scroll-margin-top: var(--space-3); }
+
+/* ── industry-system corrections ───────────────────────────────────────
+   AGENTS.md: design/Dialtone.html is the approved mockup, app/industry.css
+   is "its design system, extracted verbatim", and the way to extend it is
+   "adding a class to app/app.css". Read together that draws a line:
+   industry.css may carry a corrected VALUE for a declaration the mockup
+   already has -- --color-accent's #496887 and .card-kicker's 12px are
+   both exactly that, and both are sanctioned -- and may not carry a
+   declaration or a rule the mockup does not have, because then the file
+   stops being re-derivable from design/Dialtone.html and the word
+   "verbatim" stops being checkable.
+
+   Everything below was first written into industry.css and belongs here.
+   Each keeps the declaration it had, character for character, and each
+   outranks the industry.css rule it corrects on SPECIFICITY rather than
+   on file order, so the rendered cascade is identical either way and
+   nothing here depends on globals.css importing app.css second. Nothing
+   in industry.css references anything declared here, so the dependency
+   only ever points app.css -> industry.css. ── */
+
+/* industry.css's blueprint block gives .btn-primary
+   `border-color: var(--color-accent)`, and its :hover and :active fills
+   now rest one and two ramp steps below the accent. Without these the
+   darker button would wear a lighter 1px rim. (0,2,0) each, against the
+   blueprint rule's (0,1,0). */
+.btn-primary:hover { border-color: var(--color-accent-700); }
+.btn-primary:active { border-color: var(--color-accent-800); }
+
+/* industry.css draws the seg's focus ring INSET and in --color-accent, so
+   on the CHECKED option it was --color-accent on a --color-accent fill:
+   1.00:1, an invisible focus ring on the one option in the group that is
+   selected. --color-bg on that fill is 5.19:1, and it is already the
+   token the checked label wears for its text. It matters most on
+   .console-tabs, where the radio group's roving tabindex lands Tab on the
+   CHECKED tab every time, so the whole of the keyboard's position
+   indicator was going missing; .auth-seg, .filter-seg and .review-modes
+   had the same blemish. One rule on the system class answers every .seg
+   in the product. (0,3,2) against the ring rule's (0,2,1). */
+.seg-opt:has(input:checked):has(input:focus-visible) { outline-color: var(--color-bg); }
+
+/* ONE RULE THAT USED TO BE FOUR, AND IT CLOSES THE BUG CLASS RATHER THAN
+   PATCHING ITS FOURTH INSTANCE.
+
+   .dialog-backdrop is `position: fixed` with no z-index of its own, so
+   it paints at z-index auto -- and a fixed box at auto is painted UNDER
+   any positioned sibling that has a value, and under any positioned
+   later sibling at auto. Every dialog in the console is opened from
+   inside or beside a .card.blueprint, which industry.css makes
+   `position: relative` so the four registration marks can hang off it.
+   So the backdrop went behind somebody else's card and the dialog was
+   read through a table.
+
+   That was fixed four separate times, in four blocks, in four names:
+   `.review .dialog-backdrop`, `.golive .dialog-backdrop`,
+   `.setup-stack .dialog-backdrop` and `.edit-leave-backdrop` -- the last
+   of which existed ONLY to carry this declaration, and was a class name
+   spent on a z-index. All four are gone. The fact is about
+   .dialog-backdrop and about nothing else, so it is stated once, on
+   .dialog-backdrop, and the fifth dialog somebody adds is correct
+   without anyone remembering this.
+
+   5, the value all four used. Nothing in the product sits above 2. */
+.dialog-backdrop { z-index: 5; }
+
+/* ── state transitions ─────────────────────────────────────────────────
+   Colour, opacity and border only, so a hover or a press costs the
+   compositor and never a reflow. Never width, height, top or left. One
+   duration and one curve for the whole product, both tokens. Every rule
+   reached from here is a state change; none of them is an entrance. The
+   single prefers-reduced-motion guard at the foot of this file turns all
+   of it off.
+
+   Two rules, because they have two different jobs. The first reaches the
+   SYSTEM classes and is the block that used to sit in industry.css; the
+   mockup has no transition of any kind, so it is an addition and lives
+   here. The second is everything THIS file gives a hover, press or
+   current-page state to that the first does not already cover. ── */
+
+:root {
+  /* The tokens the two rules below share. Declared here, next to their
+     only consumers, for the same reason the rules are here: the mockup
+     has no motion, so it has no motion tokens. */
+  --motion-state: 180ms;
+  --motion-ease-out: cubic-bezier(0, 0, 0.2, 1);
+}
+
+.btn,
+.input,
+.radio .dot,
+.seg-opt,
+.nav a,
+.table tbody tr,
+a {
+  transition-property: color, background-color, border-color, opacity;
+  transition-duration: var(--motion-state);
+  transition-timing-function: var(--motion-ease-out);
+}
+
+/* Listed here is everything THIS file gives a hover, press or
+   current-page state to that the rule above does not already cover.
+
+   Same four properties for the same reason: colour, opacity and border
+   are composited, so a state change costs no layout work. Never width,
+   height, top or left -- and none of them changes on any state in this
+   product in any case. .lv-toggle:active keeps its 1px transform
+   untransitioned on purpose: a press should land on the frame the finger
+   lands on, and only the colour behind it should catch up.
+
+   Two of the classes the audit named are absent here because they need no
+   entry of their own. .console-tabs is a .seg of .seg-opt labels, and the
+   menu card controls in .menu-edit-cat-controls and
+   .menu-edit-row-actions are .btn elements; the rule above has both.
+
+   Three entries left this list with the classes they named:
+   .edit-index-link went with the strip of links the tab strip replaced,
+   and .golive-link and .golive-link .golive-title went with the
+   checklist's colour-only row link, which is a .btn in a table cell now
+   -- and .btn is in the rule above. Nothing lost a transition; three
+   selectors stopped pointing at nothing. */
+.side-nav-item,
+.admin-nav-item,
+.operator-back,
+.row-title-link,
+.row-link,
+.lv-row,
+.lv-toggle,
+.lv-until-opt,
+.transcript .line button {
+  transition-property: color, background-color, border-color, opacity;
+  transition-duration: var(--motion-state);
+  transition-timing-function: var(--motion-ease-out);
+}
+
+/* ── touch targets — coarse pointers only ──────────────────────────────
+   Every rule below lives inside `@media (pointer: coarse)`, so on a mouse
+   or trackpad — the pointer design/Dialtone.html was drawn for — NOTHING
+   here applies and the product renders exactly as the mockup does. Only
+   the two custom properties at :root are declared outside the query, and
+   a custom property that nothing references paints nothing.
+
+   Why it has to exist: the approved mockup is a dense desktop design and
+   its 26–39px controls are correct at arm's length with a mouse. The
+   operator works on an iPad, where a 26px restaurant-name link is a miss.
+   Measured at 375px against the running server: 64 of 64 interactive
+   elements on /admin/<id>/edit were under 44px tall (28, 32, 33, 34, 36,
+   39px), and 7 of 7 on /admin, the smallest at 26px. Apple HIG asks 44pt,
+   Material 48dp, WCAG 2.5.5 44 CSS px.
+
+   Two shapes are used, and which one a control gets is a design decision,
+   not a convenience:
+
+     GROW THE BOX  — where the control is already its own object on its own
+                     line (a button, a field, a tab, a nav row). A taller
+                     button on a tablet is what the tablet expects.
+
+     GROW THE HIT  — where the design depends on the smaller box. An
+                     inline link in the middle of a sentence gets hit area,
+                     never height: 44px of line-height in a paragraph is a
+                     broken paragraph. Two mechanisms, both invisible to
+                     layout — a ::after overlay sized `height:
+                     var(--touch-target)` with `min-height: 100%`, so it
+                     can only enlarge a target and never clip one that is
+                     already big enough; and, on a run of inline text,
+                     vertical padding, which enlarges the press of EVERY
+                     wrapped line without moving one of them.
+
+   Ordering: this section is the foot of app.css, which globals.css
+   imports after industry.css — so it comes after every other rule in the
+   system and equal-specificity rules here win on order. Where a rule
+   earlier in THIS file sets a floor from a more specific selector
+   (.menu-item-row .btn, .console-tabs .seg-opt, .admin-facts .fact-row
+   .row-link …) that exact selector is restated below, because specificity
+   beats order. Controls that already clear 44px on their own — .lv-toggle
+   at 56, .lv-until-opt at 48, .phone-search .input at 48, textarea.input
+   at 90 — are deliberately absent: a 44px floor written over them would
+   be a ceiling. ── */
+
+:root {
+  /* Not a design value and not a spacing step: the platform minimum, the
+     same number in Apple's HIG (44pt) and WCAG 2.5.5. Named so the
+     threshold is stated once and every rule below reads as the same
+     rule. */
+  --touch-target: 44px;
+
+  /* The floor on the space between two adjacent targets, so a target that
+     just grew does not start collecting its neighbour's taps. 8px is the
+     ask; --space-2 is 6.8 and misses it, --space-3 is 10.2 and is the
+     next step on the system's own scale. No new number. */
+  --touch-gap: var(--space-3);
+}
+
+@media (pointer: coarse) {
+  /* ── buttons ──────────────────────────────────────────────────────
+     .btn and every variant. Height for all of them; width only for the
+     two that can be narrower than they are tall — .btn-ghost carries
+     --space-1 of inline padding, so a "Edit"/"Up" label lands near 31px,
+     and .btn-icon is a fixed 36px square. .btn-primary/.btn-secondary
+     carry --space-3 * 1.2 each side and clear 44 on any real label, so
+     they are left alone rather than given a min-width that would fight
+     .golive-go's deliberate 22ch floor. */
+  .btn { min-height: var(--touch-target); }
+  .btn-ghost { min-width: var(--touch-target); }
+  .btn-icon {
+    width: var(--touch-target);
+    height: var(--touch-target);
+    min-width: var(--touch-target);
+  }
+
+  /* The three places this file pins a button to 36px from a more specific
+     selector — the menu row's Edit/Remove, the drift note's "Update the
+     phone", and a holiday's Remove. Each was raised from 14px FOR touch
+     in the first place; this is the same intent measured properly. */
+  .menu-item-row .btn,
+  .edit-note .btn,
+  .holiday-row > .btn:last-child { min-height: var(--touch-target); }
+
+  /* ── fields ───────────────────────────────────────────────────────
+     .input covers every text, number, tel, time, date and file field and
+     every <select> that wears the class; the bare `select` is there for
+     one that does not. textarea.input keeps its own 90px floor (more
+     specific), .phone-search .input its 48. */
+  .input,
+  select { min-height: var(--touch-target); }
+
+  /* A range input's thumb is the target, and it is as tall as the box.
+     The scrub bar is the only one in the product. */
+  .player-scrub { min-height: var(--touch-target); }
+
+  /* A checkbox is 13px of chrome the browser draws and CSS may not
+     resize without distorting it — so the LABEL wrapped round it is the
+     target, which is what a label is for. Same for the radio's dot. */
+  .radio,
+  .hours-closed,
+  .holiday-row .hours-closed { min-height: var(--touch-target); }
+
+  /* ── segmented controls ───────────────────────────────────────────
+     .seg-opt everywhere it is worn: .auth-seg, .filter-seg, .review-files,
+     .review-modes, and the console's nine tabs, which pin 34px from a
+     more specific selector and so are restated. Segments share an edge by
+     design — that is what a segmented control IS, in the mockup and on
+     every platform — so the 8px separation below is not applied between
+     them; the 44px box is what stops the mis-tap.
+
+     min-width with it: the recording section's segments read "On" and
+     "Off", measured 39.1px and 42.3px wide against their 44px height, so
+     width was the failing dimension once height was fixed. It binds on
+     those two and on nothing else — "Trial", "Text", "Email", "Both" and
+     the nine tab labels are all already wider. */
+  .seg-opt {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+  .console-tabs .seg-opt { min-height: var(--touch-target); }
+
+  /* ── navigation ───────────────────────────────────────────────────
+     Every one of these is a bare word in the mockup that this file
+     already gave a box to (34px, 28px) for exactly this reason, on a
+     guess. The guess is now the measurement. Nav rows in a list butt
+     together on purpose, like .seg-opt: a 44px row against the next 44px
+     row is the platform's own list, not two targets 0px apart. */
+  .side-nav-item,
+  .admin-nav-item,
+  .operator-back { min-height: var(--touch-target); }
+
+  /* Both are inline text at rest, so they need the box before the box can
+     have a height. min-width with it, because a restaurant can be called
+     "Marty's": measured at 42.2px wide on /admin, which would leave the
+     width as the failing dimension after the height was fixed. */
+  .admin-brand,
+  .row-title-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  /* The way out of a detail page, a call row's own name, and a message
+     card's "Listen to the call". All three are .row-link on their own
+     line, so they take height; the in-sentence .row-link further down
+     takes hit area instead.
+
+     The third selector is restated rather than left to the .row-link
+     rule above it because app.css sets a 34px floor on it from a more
+     specific selector (0,3,0), and specificity beats order. Its
+     consumer is /dashboard/messages -- the /admin/<id> Account card
+     these were written for is gone, but that screen was never it. */
+  .page-head .row-link,
+  .table td .row-link,
+  .admin-facts .fact-row .row-link { min-height: var(--touch-target); }
+
+  /* The row that holds one has to grow with it, or a 44px link overflows
+     a 48.6px row and starts collecting presses aimed at the row above.
+     Same sum as the rule further up the file, computed from the new
+     floor: the target, plus the row's own padding, plus its hairline. */
+  .admin-facts .fact-row:has(.row-link) {
+    min-height: calc(var(--touch-target) + var(--space-2) * 2 + 1px);
+  }
+
+  /* A transcript line that seeks the audio. Already a block; given the
+     floor so a one-line one cannot fall under it.
+
+     .golive-link stood beside it and is gone: a checklist row's way into
+     the editor is a .btn in its own table cell now, which the .btn rule
+     at the top of this block already covers -- and which is a RESTING
+     affordance, where the old one was accent text with no box on a
+     device that has no hover to reveal one. */
+  .transcript .line button { min-height: var(--touch-target); }
+
+  /* An uploaded file's expiring link. Its own line in a flex column, not
+     a fragment of a sentence, so it takes the box — centred, because it
+     wraps to two lines on a phone. */
+  .upload-link {
+    display: flex;
+    align-items: center;
+    min-height: var(--touch-target);
+  }
+
+  /* ── hit area, not height ─────────────────────────────────────────
+     .row-link is worn two ways: on its own line (handled above) and in
+     the MIDDLE OF A SENTENCE — "…nothing here can be checked against the
+     phone. Repair it on the go-live panel →" in EditSections.tsx, twice —
+     and the empty state on /admin has a bare anchor in the same shape.
+     Those may not become 44px blocks: it would open the line box, break
+     the paragraph's rhythm and make one sentence look like two.
+
+     So the ink stays exactly where the mockup puts it and only the press
+     gets bigger. The overlay is centred on the link and sized
+     max(44px, the link itself) in both axes: `height` + `min-height: 100%`
+     and `width: 100%` + `min-width`, all resolved against the link's own
+     box. It is a child of the anchor, so a press anywhere in it is a press
+     on the anchor; it paints nothing; and it cannot widen the page,
+     because a link narrower than 44px only ever grows by the few pixels
+     that make up the difference. */
+  .row-link,
+  .empty-note a { position: relative; }
+  .row-link::after,
+  .empty-note a::after {
+    /* NOTE: on the block and flex .row-links this resolves to the link's
+       own width by 44px — measured 183.6x44 on an /admin/<id> account row
+       whose value is a single em dash, and 313.8x44 on "Edit these →",
+       whose ink box stays 20.1px. On a link that is a run of inline text
+       the percentages have no block box to resolve against and it settles
+       at 44x44 in the middle of the run, which is why the rule below
+       exists as well. */
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    min-width: var(--touch-target);
+    height: var(--touch-target);
+    min-height: 100%;
+  }
+
+  /* — and OFF again wherever the padding-block rule below is the
+     mechanism instead. The two are mutually exclusive by design; this
+     line is what makes that true rather than merely intended, and its
+     selector list is the padding rule's list exactly.
+
+     Without it the overlay does not enlarge those links, it MISPLACES a
+     tap target into the prose beside them. An inline box that wraps is
+     SPLIT into fragments, and an absolutely positioned child of a split
+     inline resolves its containing block against the UNION of the
+     fragments -- so `width: 100%` has no single box to take a percentage
+     of, degenerates to the 44px min-width, and the overlay parks itself
+     centred on that union: in the middle of the paragraph, ~10px clear of
+     the ink it was meant to cover. Measured at 375px on a real coarse
+     pointer, both in-sentence notes in EditSections.tsx reproduce it --
+     the .setup-note at x 204-244, y 29-92 (146 probe points where
+     elementFromPoint returns the anchor and no fragment of the anchor is
+     under the finger) and the .edit-note.is-drift at x 16-280, y 83-230
+     (249 points). Tapping the words "Vapi does not have" navigated to
+     /admin/<id>, and text selection over them was swallowed. The third
+     one, in app/admin/<id>/edit/page.tsx's .setup-note, is the same
+     shape.
+
+     The padding-block rule already delivers the target on all of them --
+     46.5px per fragment, hit-testing as the anchor across its full
+     height, paragraph unchanged at 58.9px -- so nothing is lost by
+     switching the overlay off here. It stays on for the block and flex
+     .row-links, which are single boxes and where it measures correctly:
+     183.6x44 and 313.8x44 on /admin/<id>. — */
+  p .row-link::after,
+  .empty-note a::after { content: none; }
+
+  /* And the run of inline text itself. Vertical padding on an INLINE box
+     is the one thing in CSS that enlarges a press without touching
+     layout: the line box is sized from line-height, not from the inline
+     box's padding, so the paragraph keeps the height, the leading and the
+     wrap points it has in the mockup — verified by measuring the same
+     sentence with and without this rule — while every line of the link
+     accepts a press well above and below its ink. Per FRAGMENT, too, so a
+     link that wraps across two lines gets it on both, which the single
+     overlay above cannot do — and, worse, would land in the prose beside
+     them if it tried, which is why the rule above switches it off for
+     exactly this selector list.
+
+     Scoped to a link inside a <p>, which is exactly where the sentence
+     case lives (EditSections.tsx's two "Repair it on the go-live panel →"
+     notes, /admin's "use Create a new restaurant to make the first one")
+     and nowhere the same class is a block: those sit in a <div>, a <dd>
+     or a <td>. .empty-note is always a <p>, so it is inline by the same
+     token. The amount is not a spacing step and must not be one: it is
+     half of whatever the threshold has left over after the text's own em
+     box, so a 13px line and a 12px line both land above 44 and neither is
+     given a pixel more than it needs. Measured: the fragment goes from
+     15.5px to 46.5px, and the paragraph around it from 58.9px to 58.9px. */
+  p .row-link,
+  .empty-note a { padding-block: calc((var(--touch-target) - 1em) / 2); }
+
+  /* ── separation ───────────────────────────────────────────────────
+     A bigger target that touches its neighbour is a bigger mis-tap. Every
+     row below is a container whose children are ADJACENT CONTROLS spaced
+     under 8px — 4px, or --space-2's 6.8 — raised to --touch-gap. Nothing
+     here is a new number, and nothing here is a container whose gap the
+     mockup uses as a visual rhythm between blocks: these are toolbars.
+
+     Destructive neighbours are the reason. In .menu-edit-row-actions,
+     Remove — which destroys a dish with no undo — sat 4px from the Edit
+     an operator aims at while a restaurant owner talks, on a device with
+     no hover to warn them first.
+
+     .menu-item-row is here BECAUSE THE PICK CONTROL LEFT THAT BLOCK.
+     Every control on a dish used to live inside .menu-edit-row-actions,
+     so the row's own gap was never a gap between two targets and this
+     rule never had to reach it. It is now: four controls do not fit one
+     line of a 328.6px card row, so both selects are children of the row
+     and three adjacencies — select to select, select to the actions
+     block, and the wrapped line's select to the Remove below it — sat at
+     --space-2's 6.8, under the floor, on the coarse pointer this whole
+     block was measured for, and against controls .input and .btn had
+     just raised to 44px.
+
+     Raising the ROW's gap also widens name → price → sort from 6.8 to
+     10.2, and that is meant rather than tolerated: on a coarse pointer
+     the row is one 44px bar, those three are read while the selects and
+     buttons are aimed at, and a rhythm is not what a mis-tap costs.
+     Nothing moves off the card: measured at the 328.6px row, the pair of
+     selects grows by exactly one gap step — 266.8px to 270.2px, which
+     the comment beside .menu-item-row .input rounds to 268 — the row
+     keeps its three lines, and the overflow past the row's right edge is
+     0 both before and after. What it costs is 6.8px of row height.
+
+     .order-moves IS THE SHARPEST CASE ON THIS LIST, and it is the one
+     device this rule was written for: a tablet at a pass is the whole
+     reason the kitchen board exists. Its two children are adjacent
+     controls at --space-1's 3.4 — under even the 6.8 the rule calls a
+     miss — while .btn's own min-height grows both of them to 44px here,
+     so the targets get bigger and the lane between them does not. In the
+     Ready column the pair is "Picked up" above "Back in the kitchen",
+     and 'completed' has no column on this board: a thumb that lands 3.4px
+     high takes the ticket off the screen and there is no press left to
+     bring it back. The refusal <p> below the buttons is a flex child
+     too, so it moves out by the same step on touch, which is air under a
+     sentence that only ever renders when something was refused.
+     .order-moves' own comment keeps --space-1 for the mouse rendering,
+     which is what the mockup draws. */
+  .menu-edit-cat-controls,
+  .menu-edit-row-actions,
+  .menu-item-row,
+  .upload-actions,
+  .dialog-actions,
+  .cred-actions,
+  .review-item-actions,
+  .player-controls,
+  .add-item-form,
+  .menu-category-head,
+  .hours-times,
+  .order-moves { gap: var(--touch-gap); }
+  /* Three entries left this list with the classes they named.
+     .golive-actions and .golive-list are a .setup-row and a .table now,
+     and .setup-row's own gap is already var(--space-3), which IS
+     --touch-gap; .edit-index went with the strip of links the tab strip
+     replaced. Nothing lost its separation. */
+}
+
+/* ── the motion guard ──────────────────────────────────────────────────
+   ONE block, deliberately global and deliberately last: app.css is
+   imported after industry.css in globals.css, so this outranks every
+   transition either file sets, and the universal selector means a class
+   added later cannot forget to opt in. It also stops the three `pulse`
+   loops above -- .status-dot.live, .kill-banner .blip and
+   .live-strip .blip -- and stops them on their last keyframe, which is
+   `opacity: 1`, so the dot a reduced-motion reader sees is the lit one
+   rather than a half-faded one.
+
+   The note further up this file that says "nothing in this block
+   transitions or animates, so there is no motion left here for
+   prefers-reduced-motion to be asked about" is about .setup-stack and is
+   still true of it. It was never a guard. Before this block the product
+   had none at all. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
 }

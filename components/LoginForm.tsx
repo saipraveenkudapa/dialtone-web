@@ -118,6 +118,9 @@ export function LoginForm({
       )}
 
       {state.error ? <p className="auth-error">{state.error}</p> : null}
+
+      <p className="text-muted auth-note">
+        </p>
     </div>
   );
 }

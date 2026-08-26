@@ -7,6 +7,14 @@
 
 export type SoldOutUntil = "reopen" | "close";
 
+/** Which kind of pick a nominated dish is. The stored value is a code,
+ *  never the words the agent says: lib/agent/menu.ts holds the one map
+ *  from these to the spoken phrase, and the agent says that phrase in the
+ *  caller's own language. Null is "not a pick" -- there is no third
+ *  member for it, so the column is nullable rather than carrying a
+ *  'none'. */
+export type PickLabel = "best_seller" | "chefs_special";
+
 export type CallStatus =
   | "ringing"
   | "in_progress"
@@ -51,6 +59,16 @@ export type LocationRow = {
   order_email_to: string | null;
   carrier_name: string | null;
   forwarding_verified_at: string | null;
+  agent_secret_hash: string | null;
+  tax_rate_bps: number;
+  seats: number;
+  reservation_slot_minutes: number;
+  max_party_size: number;
+  order_types: "pickup" | "delivery" | "both";
+  pickup_promise_minutes: number;
+  delivery_promise_minutes: number;
+  onboarding_step: "business" | "hours" | "money" | "menu";
+  vapi_assistant_id: string | null;
 };
 
 export type MenuCategoryRow = {
@@ -58,6 +76,7 @@ export type MenuCategoryRow = {
   location_id: string;
   name: string;
   sort_order: number;
+  created_at: string;
 };
 
 export type MenuItemRow = {
@@ -68,15 +87,54 @@ export type MenuItemRow = {
   description: string | null;
   price_cents: number;
   sold_out_until: SoldOutUntil | null;
+  /** The restaurant nominated this dish, and which kind of pick it is.
+   *  Null is not a pick. Capped at three non-null per location by a
+   *  database trigger, not by the form. */
+  pick_label: PickLabel | null;
   allergen_note: string | null;
   sort_order: number;
   updated_at: string;
 };
 
+export type MenuImportSourceType = "pdf" | "image" | "url";
+
+export type MenuImportStatus =
+  | "pending"
+  | "needs_review"
+  | "confirmed"
+  | "discarded";
+
+/** One uploaded file waiting to become a menu. Never the menu itself:
+ *  nothing a model extracts into raw_extraction reaches menu_items until
+ *  a human confirms it, which is what status and confirmed_at are for. */
+export type MenuImportRow = {
+  id: string;
+  location_id: string;
+  /** The files uploaded together as one menu -- three photos of the same
+   *  card share this. */
+  batch_id: string;
+  source_type: MenuImportSourceType;
+  /** Path inside the PRIVATE menu-uploads bucket, `<location_id>/<uuid>`.
+   *  Never a public URL. */
+  source_path: string | null;
+  original_filename: string | null;
+  byte_size: number | null;
+  raw_extraction: Record<string, unknown>;
+  status: MenuImportStatus;
+  uploaded_by: string | null;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+};
+
 export type CallRow = {
   id: string;
   location_id: string;
-  twilio_call_sid: string;
+  /** NULL for a call that did not come through Twilio, which is every
+   *  call on a Vapi-provisioned number -- see
+   *  supabase/migrations/20260814000100_vapi_calls.sql. Vapi's own id
+   *  for the call lives in `provider_call_id`; the two are never mixed. */
+  twilio_call_sid: string | null;
   from_number: string | null;
   from_city: string | null;
   from_state: string | null;
@@ -104,6 +162,19 @@ export type OrderRow = {
   status: OrderStatus;
   total_cents: number;
   placed_at: string;
+  /** When the caller was told the food would be ready. `place_order`
+   *  writes `now() + the location's pickup or delivery promise minutes`
+   *  on every order it places, so this is null only for a row written by
+   *  something else. It is the whole of "by when" for a kitchen. */
+  promised_at: string | null;
+  /** THE DELIVERY ADDRESS. Not a free note, despite the column name:
+   *  `place_order` writes `btrim(p_address)` here for a delivery and
+   *  NULL for a pickup, and refuses a delivery that has no address at
+   *  all (20260812000400_place_order.sql). Anything that renders it is
+   *  rendering a street address, and 20260812000650's own comment says
+   *  as much -- an item note had to go somewhere else precisely because
+   *  this field was already spoken for. */
+  notes: string | null;
 };
 
 export type BookingRow = {
@@ -114,6 +185,25 @@ export type BookingRow = {
   party_size: number;
   requested_at: string;
   status: string;
+};
+
+/** A message taken for the restaurant during a call, because transfers
+ *  are now only for catering and allergy questions
+ *  (supabase/migrations/20260812000900_messages.sql). `body` is already
+ *  redacted and length-bounded by the time it is written -- see
+ *  lib/agent/messages.ts -- so nothing that reads this row has to scrub
+ *  it again. `handled_at` is non-null exactly when `handled` is true; the
+ *  table has a check constraint saying so. */
+export type MessageRow = {
+  id: string;
+  location_id: string;
+  call_id: string | null;
+  caller_name: string | null;
+  callback_phone: string | null;
+  body: string;
+  taken_at: string;
+  handled: boolean;
+  handled_at: string | null;
 };
 
 export type OrderItemRow = {
